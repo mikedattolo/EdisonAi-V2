@@ -1,0 +1,17 @@
+[Unit]
+Description=Edison V2 Core API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@EDISON_HOME@
+Environment=EDISON_CONFIG_PATH=@EDISON_HOME@/config/edison.local.toml
+Environment=EDISON_MODEL_REGISTRY_PATH=@EDISON_HOME@/config/model-registry.local.json
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@EDISON_HOME@/.venv/bin/uvicorn edison_core.main:create_app --factory --app-dir @EDISON_HOME@/apps/api --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=edison.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=Edison V2 local workstation services
+Wants=edison-api.service edison-web.service
+After=edison-api.service edison-web.service
+
+[Install]
+WantedBy=default.target

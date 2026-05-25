@@ -96,6 +96,37 @@ npm run dev
 
 Open `http://localhost:5173`. The API runs at `http://127.0.0.1:8000`.
 
+## Run As Services
+
+After the first install and build, install systemd user services from the repository root:
+
+```bash
+bash scripts/install-systemd-user-services.sh
+systemctl --user enable --now edison.target
+```
+
+This activates:
+
+- `edison-api.service`: FastAPI core API on `http://127.0.0.1:8000`.
+- `edison-web.service`: built web workbench preview on `http://127.0.0.1:5173`.
+- `edison.target`: starts and stops both services together.
+
+Useful service commands:
+
+```bash
+systemctl --user status edison-api.service
+systemctl --user status edison-web.service
+journalctl --user -u edison-api.service -u edison-web.service -f
+systemctl --user restart edison.target
+systemctl --user stop edison.target
+```
+
+To allow the user services to start at boot even before an interactive login session:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
 ## Updating An Existing Install
 
 ```bash
@@ -106,6 +137,9 @@ python -m pip install -e ".[dev]"
 cd apps/web
 npm install
 npm run build
+cd ../..
+bash scripts/install-systemd-user-services.sh
+systemctl --user restart edison.target
 ```
 
 Use `git status --short` before pulling if you have local edits you want to keep.

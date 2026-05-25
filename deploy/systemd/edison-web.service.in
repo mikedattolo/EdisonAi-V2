@@ -1,0 +1,14 @@
+[Unit]
+Description=Edison V2 Web Workbench
+After=edison-api.service
+Wants=edison-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=@EDISON_HOME@/apps/web
+ExecStart=/usr/bin/env npm run preview -- --host 127.0.0.1 --port 5173
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=edison.target

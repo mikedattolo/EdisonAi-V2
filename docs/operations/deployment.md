@@ -65,6 +65,53 @@ cd ../..
 
 At this point the repository has everything needed to run the local API and web workbench. Model servers and media backends are separate processes; configure them after the base app starts.
 
+## Install User Services
+
+Edison ships systemd user-service templates and an installer that renders them with your checkout path. Run this after the backend virtualenv exists and the web dependencies are installed:
+
+```bash
+bash scripts/install-systemd-user-services.sh
+```
+
+The installer creates or refreshes these files under `~/.config/systemd/user`:
+
+- `edison-api.service`: runs `uvicorn` from `.venv` for the FastAPI core API.
+- `edison-web.service`: runs `npm run preview` for the built React workbench.
+- `edison.target`: starts both services as one Edison unit.
+
+It also creates `config/edison.local.toml` and `config/model-registry.local.json` from the examples if they do not already exist.
+
+Activate Edison:
+
+```bash
+systemctl --user enable --now edison.target
+```
+
+Open the workbench at `http://127.0.0.1:5173`. The API is available at `http://127.0.0.1:8000`.
+
+Check service health and logs:
+
+```bash
+systemctl --user status edison-api.service
+systemctl --user status edison-web.service
+journalctl --user -u edison-api.service -u edison-web.service -f
+```
+
+Restart or stop Edison:
+
+```bash
+systemctl --user restart edison.target
+systemctl --user stop edison.target
+```
+
+Optional boot persistence for a workstation account:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Use `loginctl disable-linger "$USER"` later if you no longer want user services to run outside active login sessions.
+
 ## Updating An Existing Checkout
 
 From an existing Edison checkout:
@@ -79,6 +126,8 @@ cd apps/web
 npm install
 npm run build
 cd ../..
+bash scripts/install-systemd-user-services.sh
+systemctl --user restart edison.target
 ```
 
 If `git status --short` shows local changes, commit or stash them before pulling.
@@ -138,6 +187,8 @@ npm run dev
 ```
 
 Then open `http://localhost:5173` in a browser.
+
+When running through `edison-web.service`, the service uses `npm run preview` on `http://127.0.0.1:5173` and proxies `/api` and `/health` to the local API service.
 
 For deployment, serve `apps/web/dist` from a reverse proxy and proxy `/api` to `http://127.0.0.1:8000`. Keep the API bound to localhost unless you are intentionally exposing it on a private interface.
 
