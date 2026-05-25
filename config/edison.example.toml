@@ -1,0 +1,38 @@
+[app]
+name = "EDISON V2"
+environment = "local"
+debug = true
+api_host = "127.0.0.1"
+api_port = 8000
+cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[storage]
+database_path = "data/edison.sqlite3"
+artifact_root = "artifacts"
+log_root = "logs"
+
+[models]
+registry_path = "config/model-registry.example.json"
+default_chat_model = "local-general-chat"
+default_coding_model = "local-coding"
+default_reasoning_model = "local-reasoning"
+
+[media]
+comfyui_base_url = "http://127.0.0.1:8188"
+comfyui_timeout_seconds = 2.0
+invokeai_base_url = "http://127.0.0.1:9090"
+invokeai_timeout_seconds = 2.0
+wan22_base_url = "http://127.0.0.1:8088"
+wan22_timeout_seconds = 2.0
+modly_base_url = "http://127.0.0.1:7070"
+modly_timeout_seconds = 2.0
+workflow_root = "workflows"
+
+[hardware]
+gpu_fan_control_enabled = false
+gpu_fan_control_backend = "monitor"
+
+[security]
+workspace_roots = ["."]
+require_approval_for_destructive_tools = true
+require_approval_for_external_side_effects = true

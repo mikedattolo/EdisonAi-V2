@@ -1,0 +1,139 @@
+# Edison V2 Deployment Guide
+
+This guide covers a practical local deployment for Edison V2: one primary AI workstation running the FastAPI core, React workbench, local storage, model backends, and optional private network access.
+
+## What Edison V2 Is
+
+Edison V2 is a local-first AI workstation. It combines chat, model routing, memory, coding workspace tools, media generation pipelines, artifacts, and system controls behind one operator workbench. The current repository is the foundation layer: it is runnable now, keeps unsafe actions behind approval gates, and exposes clear service boundaries for adding real local model servers, media backends, and remote nodes.
+
+## Production Shape
+
+- FastAPI core API serves `/health`, `/api/v1/status`, chat, workspace, media, knowledge, and system-control endpoints.
+- React/Vite workbench is built as static files and can be served by Caddy, Nginx, or another local reverse proxy.
+- SQLite stores conversations, session state, media jobs, artifacts metadata, and knowledge indexes.
+- Model servers stay local and are registered through `config/model-registry.example.json` or a copied production registry file.
+- Remote access should use Tailscale or another private VPN first; avoid public port forwarding by default.
+
+## Host Prerequisites
+
+- Python 3.11 or newer.
+- Node.js 20 or newer.
+- NVIDIA driver and `nvidia-smi` for GPU telemetry.
+- Optional: `nvidia-settings` plus a configured Coolbits/Xorg environment for hardware fan writes.
+- Optional media backends: ComfyUI, InvokeAI, WAN 2.2, or Modly.
+
+## Install
+
+```bash
+git clone https://github.com/mikedattolo/EdisonAi-V2.git
+cd EdisonAi-V2
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+cd apps/web
+npm install
+npm run build
+```
+
+## Configure
+
+Copy the example config and model registry before editing local deployment values:
+
+```bash
+cp config/edison.example.toml config/edison.local.toml
+cp config/model-registry.example.json config/model-registry.local.json
+```
+
+Set environment variables for the API process:
+
+```bash
+export EDISON_CONFIG_PATH="$PWD/config/edison.local.toml"
+export EDISON_MODEL_REGISTRY_PATH="$PWD/config/model-registry.local.json"
+```
+
+In `config/model-registry.local.json`, set real model profiles to `ready` and point `endpoint_url` at OpenAI-compatible local model servers such as vLLM, llama.cpp server, LM Studio, Ollama-compatible gateways, or another private backend.
+
+## Run The API
+
+Development mode:
+
+```bash
+uvicorn edison_core.main:create_app --factory --reload --app-dir apps/api --host 127.0.0.1 --port 8000
+```
+
+Deployment mode:
+
+```bash
+uvicorn edison_core.main:create_app --factory --app-dir apps/api --host 127.0.0.1 --port 8000
+```
+
+Health checks:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/api/v1/status
+```
+
+## Serve The Web Workbench
+
+During development:
+
+```bash
+cd apps/web
+npm run dev
+```
+
+For deployment, serve `apps/web/dist` from a reverse proxy and proxy `/api` to `http://127.0.0.1:8000`. Keep the API bound to localhost unless you are intentionally exposing it on a private interface.
+
+Example Caddy shape:
+
+```caddyfile
+edison-v2.localhost {
+  root * /absolute/path/to/EdisonAi-V2/apps/web/dist
+  file_server
+
+  handle /api/* {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /health {
+    reverse_proxy 127.0.0.1:8000
+  }
+}
+```
+
+## GPU Fan Control
+
+The System page includes an MSI Afterburner-style multi-GPU fan panel. By default it runs in monitor mode: it reads `nvidia-smi` telemetry, accepts policies through the API, and reports that hardware writes are disabled.
+
+To allow hardware fan writes, the host must support `nvidia-settings` fan control. This usually requires desktop/Xorg access and NVIDIA Coolbits configuration. After validating that manual fan writes work outside Edison, opt in:
+
+```toml
+[hardware]
+gpu_fan_control_enabled = true
+gpu_fan_control_backend = "nvidia-settings"
+```
+
+or use environment variables:
+
+```bash
+export EDISON_GPU_FAN_CONTROL_ENABLED=true
+export EDISON_GPU_FAN_CONTROL_BACKEND=nvidia-settings
+```
+
+Fan writes are intentionally disabled by default because bad fan policies can damage hardware. Start with conservative manual speeds, watch temperatures, and leave remote access private.
+
+## Validation
+
+Run the backend and frontend checks before deploying changes:
+
+```bash
+python -m pytest
+cd apps/web
+npm run build
+```
+
+## Private Remote Access
+
+Use Tailscale for remote access instead of public port forwarding. See `docs/operations/tailscale-access.md` for the recommended tailnet shape.
