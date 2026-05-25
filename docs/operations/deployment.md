@@ -18,23 +18,70 @@ Edison V2 is a local-first AI workstation. It combines chat, model routing, memo
 
 - Python 3.11 or newer.
 - Node.js 20 or newer.
+- npm.
+- git.
 - NVIDIA driver and `nvidia-smi` for GPU telemetry.
 - Optional: `nvidia-settings` plus a configured Coolbits/Xorg environment for hardware fan writes.
 - Optional media backends: ComfyUI, InvokeAI, WAN 2.2, or Modly.
 
-## Install
+On Ubuntu 24.04, install the base tools with:
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip curl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node --version
+npm --version
+python3 --version
+```
+
+## First-Time Install
+
+Clone the repo onto the machine that will run Edison:
 
 ```bash
 git clone https://github.com/mikedattolo/EdisonAi-V2.git
 cd EdisonAi-V2
-python -m venv .venv
+```
+
+Install the FastAPI backend and test dependencies:
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+Install and build the React workbench:
+
+```bash
+cd apps/web
+npm install
+npm run build
+cd ../..
+```
+
+At this point the repository has everything needed to run the local API and web workbench. Model servers and media backends are separate processes; configure them after the base app starts.
+
+## Updating An Existing Checkout
+
+From an existing Edison checkout:
+
+```bash
+cd EdisonAi-V2
+git status --short
+git pull origin main
+source .venv/bin/activate
 python -m pip install -e ".[dev]"
 cd apps/web
 npm install
 npm run build
+cd ../..
 ```
+
+If `git status --short` shows local changes, commit or stash them before pulling.
 
 ## Configure
 
@@ -59,12 +106,18 @@ In `config/model-registry.local.json`, set real model profiles to `ready` and po
 Development mode:
 
 ```bash
+source .venv/bin/activate
+export EDISON_CONFIG_PATH="$PWD/config/edison.local.toml"
+export EDISON_MODEL_REGISTRY_PATH="$PWD/config/model-registry.local.json"
 uvicorn edison_core.main:create_app --factory --reload --app-dir apps/api --host 127.0.0.1 --port 8000
 ```
 
 Deployment mode:
 
 ```bash
+source .venv/bin/activate
+export EDISON_CONFIG_PATH="$PWD/config/edison.local.toml"
+export EDISON_MODEL_REGISTRY_PATH="$PWD/config/model-registry.local.json"
 uvicorn edison_core.main:create_app --factory --app-dir apps/api --host 127.0.0.1 --port 8000
 ```
 
@@ -83,6 +136,8 @@ During development:
 cd apps/web
 npm run dev
 ```
+
+Then open `http://localhost:5173` in a browser.
 
 For deployment, serve `apps/web/dist` from a reverse proxy and proxy `/api` to `http://127.0.0.1:8000`. Keep the API bound to localhost unless you are intentionally exposing it on a private interface.
 

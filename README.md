@@ -29,25 +29,93 @@ This repository is the foundation layer: a runnable monorepo with honest local d
 - Collapsible right-side Core inspector.
 - Architecture audit and roadmap in `docs`.
 
-## Quick Install
+## Quick Start From A Fresh Machine
 
-Prerequisites: Python 3.11+, Node.js 20+, and NVIDIA drivers for GPU telemetry.
+These commands assume Ubuntu 24.04 or another Debian-based Linux host. Edison also works on other systems with Python 3.11+, Node.js 20+, npm, and git installed.
+
+1. Install system prerequisites:
 
 ```bash
-python -m venv .venv
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip curl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node --version
+python3 --version
+```
+
+2. Pull the repository:
+
+```bash
+git clone https://github.com/mikedattolo/EdisonAi-V2.git
+cd EdisonAi-V2
+```
+
+3. Install the Python API:
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+```
 
+4. Install and build the web workbench:
+
+```bash
+cd apps/web
+npm install
+npm run build
+cd ../..
+```
+
+5. Create local config files:
+
+```bash
+cp config/edison.example.toml config/edison.local.toml
+cp config/model-registry.example.json config/model-registry.local.json
+export EDISON_CONFIG_PATH="$PWD/config/edison.local.toml"
+export EDISON_MODEL_REGISTRY_PATH="$PWD/config/model-registry.local.json"
+```
+
+6. Run the API and web app in two terminals:
+
+```bash
+# Terminal 1, from the repository root
+source .venv/bin/activate
+export EDISON_CONFIG_PATH="$PWD/config/edison.local.toml"
+export EDISON_MODEL_REGISTRY_PATH="$PWD/config/model-registry.local.json"
+uvicorn edison_core.main:create_app --factory --reload --app-dir apps/api
+```
+
+```bash
+# Terminal 2, from the repository root
+cd apps/web
+npm run dev
+```
+
+Open `http://localhost:5173`. The API runs at `http://127.0.0.1:8000`.
+
+## Updating An Existing Install
+
+```bash
+cd EdisonAi-V2
+git pull origin main
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 cd apps/web
 npm install
 npm run build
 ```
 
+Use `git status --short` before pulling if you have local edits you want to keep.
+
 ## Backend
 
 ```bash
 source .venv/bin/activate
+export EDISON_CONFIG_PATH="$PWD/config/edison.local.toml"
+export EDISON_MODEL_REGISTRY_PATH="$PWD/config/model-registry.local.json"
 uvicorn edison_core.main:create_app --factory --reload --app-dir apps/api
 ```
 
@@ -79,7 +147,6 @@ Model profiles start as `not_configured`. To connect a real local model server, 
 
 ```bash
 cd apps/web
-npm install
 npm run dev
 ```
 
