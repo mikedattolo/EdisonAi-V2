@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+config/edison.local.toml
+config/model-registry.local.json
 
 __pycache__/
 *.py[cod]

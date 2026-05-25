@@ -96,9 +96,21 @@ npm run dev
 
 Open `http://localhost:5173`. The API runs at `http://127.0.0.1:8000`.
 
+If Edison is running inside Codespaces, a dev container, SSH remote, or another remote Linux environment, `127.0.0.1` is inside that remote machine. Open the forwarded port `5173` URL from VS Code's Ports view instead of typing the loopback URL into your local browser.
+
+## Run In A Dev Container Or Codespace
+
+Systemd is usually not available inside dev containers. After installing the Python and web dependencies, start both Edison processes in the foreground with:
+
+```bash
+bash scripts/start-edison-dev.sh
+```
+
+This starts the API on port `8000` and the web workbench on port `5173`, both bound to `0.0.0.0` so VS Code can forward them. Use the forwarded `5173` URL for the workbench.
+
 ## Run As Services
 
-After the first install and build, install systemd user services from the repository root:
+On a real Linux workstation with systemd, after the first install and build, install systemd user services from the repository root:
 
 ```bash
 bash scripts/install-systemd-user-services.sh
@@ -127,6 +139,12 @@ To allow the user services to start at boot even before an interactive login ses
 loginctl enable-linger "$USER"
 ```
 
+If the installer says systemd user services are unavailable, use the foreground launcher instead:
+
+```bash
+bash scripts/start-edison-dev.sh
+```
+
 ## Updating An Existing Install
 
 ```bash
@@ -140,6 +158,12 @@ npm run build
 cd ../..
 bash scripts/install-systemd-user-services.sh
 systemctl --user restart edison.target
+```
+
+In a dev container, replace the last two lines with:
+
+```bash
+bash scripts/start-edison-dev.sh
 ```
 
 Use `git status --short` before pulling if you have local edits you want to keep.

@@ -28,6 +28,14 @@ if [[ ! -d "$EDISON_HOME/apps/web/node_modules" ]]; then
   exit 1
 fi
 
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+  echo "systemd user services are not available in this environment." >&2
+  echo "This is common inside Codespaces and dev containers." >&2
+  echo "Use the foreground launcher instead:" >&2
+  echo "  bash scripts/start-edison-dev.sh" >&2
+  exit 1
+fi
+
 mkdir -p "$SYSTEMD_USER_DIR" "$EDISON_HOME/data" "$EDISON_HOME/artifacts" "$EDISON_HOME/logs"
 
 if [[ ! -f "$EDISON_HOME/config/edison.local.toml" ]]; then

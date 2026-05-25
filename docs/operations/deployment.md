@@ -65,9 +65,19 @@ cd ../..
 
 At this point the repository has everything needed to run the local API and web workbench. Model servers and media backends are separate processes; configure them after the base app starts.
 
+## Dev Container Or Codespace Start
+
+Systemd is usually unavailable inside Codespaces, dev containers, and some hosted terminals. In those environments, start Edison with the foreground launcher:
+
+```bash
+bash scripts/start-edison-dev.sh
+```
+
+The launcher starts the API on port `8000` and the web workbench on port `5173`, both bound to `0.0.0.0` so VS Code can forward them. Open the forwarded port `5173` URL from the VS Code Ports view. If you type `127.0.0.1:5173` into your local browser while Edison is running remotely, it will point at your laptop, not the remote container.
+
 ## Install User Services
 
-Edison ships systemd user-service templates and an installer that renders them with your checkout path. Run this after the backend virtualenv exists and the web dependencies are installed:
+Edison ships systemd user-service templates and an installer that renders them with your checkout path. Use these on a real Linux workstation with systemd. Run this after the backend virtualenv exists and the web dependencies are installed:
 
 ```bash
 bash scripts/install-systemd-user-services.sh
@@ -88,6 +98,14 @@ systemctl --user enable --now edison.target
 ```
 
 Open the workbench at `http://127.0.0.1:5173`. The API is available at `http://127.0.0.1:8000`.
+
+If the workstation is remote, open the forwarded `5173` URL or route it through your private reverse proxy/Tailscale URL.
+
+If the installer says systemd user services are unavailable, use:
+
+```bash
+bash scripts/start-edison-dev.sh
+```
 
 Check service health and logs:
 
@@ -128,6 +146,12 @@ npm run build
 cd ../..
 bash scripts/install-systemd-user-services.sh
 systemctl --user restart edison.target
+```
+
+In a dev container, replace the last two lines with:
+
+```bash
+bash scripts/start-edison-dev.sh
 ```
 
 If `git status --short` shows local changes, commit or stash them before pulling.
@@ -187,6 +211,8 @@ npm run dev
 ```
 
 Then open `http://localhost:5173` in a browser.
+
+For remote environments, use the forwarded port `5173` URL from VS Code instead.
 
 When running through `edison-web.service`, the service uses `npm run preview` on `http://127.0.0.1:5173` and proxies `/api` and `/health` to the local API service.
 
