@@ -40,11 +40,11 @@ Expected directories:
 ## GPU Cooling
 
 The local GPU fan controller uses the NVIDIA Xorg path so `nvidia-settings` can
-hold manual fan targets. Keep these services active:
+hold manual fan targets. Keep these system services active:
 
 ```bash
-systemctl --user status edison-gpu-xorg.service --no-pager
-systemctl --user status edison-gpu-fans.timer --no-pager
+systemctl status edison-gpu-xorg.service --no-pager
+systemctl status edison-gpu-fans.timer --no-pager
 ```
 
 Verify all GPU fans after driver or hardware changes:
