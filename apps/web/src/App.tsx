@@ -6,7 +6,6 @@ import {
   ChevronUp,
   Code2,
   Cpu,
-  Database,
   Fan,
   FileCode2,
   Folder,
@@ -71,14 +70,14 @@ const CHAT_CONTEXT_MATCHES_STORAGE_KEY = 'edison-chat-context-matches';
 const CHAT_AUTO_PREVIEW_STORAGE_KEY = 'edison-chat-auto-preview';
 const CHAT_CONTEXT_PATHS_STORAGE_KEY = 'edison-chat-context-paths';
 
-const modes: Array<{ value: ChatMode; label: string }> = [
-  { value: 'instant', label: 'Instant' },
-  { value: 'chat', label: 'Chat' },
-  { value: 'reasoning', label: 'Reasoning' },
-  { value: 'coding', label: 'Coding' },
-  { value: 'agent', label: 'Agent' },
-  { value: 'swarm', label: 'Swarm' },
-  { value: 'creative', label: 'Creative' },
+const modes: Array<{ value: ChatMode; label: string; description: string }> = [
+  { value: 'instant', label: 'Quick', description: 'Fast replies' },
+  { value: 'chat', label: 'Chat', description: 'Everyday help' },
+  { value: 'reasoning', label: 'Think', description: 'Harder problems' },
+  { value: 'coding', label: 'Code', description: 'Repo-aware edits' },
+  { value: 'agent', label: 'Agent', description: 'Multi-step work' },
+  { value: 'swarm', label: 'Swarm', description: 'Parallel lanes' },
+  { value: 'creative', label: 'Create', description: 'Images and ideas' },
 ];
 
 const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
@@ -128,6 +127,33 @@ const modelPlan = [
   ['Reasoning Lane', 'Qwen2.5 72B Instruct or another large reasoning profile when installed.'],
   ['Primary VLM', 'Qwen2.5-VL 7B Instruct first for screenshots, images, OCR-like work, and UI inspection.'],
   ['Media Stack', 'FLUX for image generation, LTX/Wan/CogVideoX/SVD for video, InstantMesh and Stable Fast 3D for mesh workflows.'],
+];
+
+const promptSuggestions: Array<{ title: string; subtitle: string; prompt: string; icon: IconType }> = [
+  {
+    title: 'Check GPUs and fans',
+    subtitle: 'System status',
+    prompt: 'Check the GPU, temperature, and fan status on this Edison AI PC and tell me what needs attention.',
+    icon: Fan,
+  },
+  {
+    title: 'Work on this repo',
+    subtitle: 'Coding session',
+    prompt: 'Look through the current repo and suggest the next highest-impact UI improvement, then help me implement it.',
+    icon: Code2,
+  },
+  {
+    title: 'Find a file or setting',
+    subtitle: 'Workspace search',
+    prompt: 'Help me find the file or setting that controls this behavior in the Edison repo.',
+    icon: Search,
+  },
+  {
+    title: 'Plan a media job',
+    subtitle: 'Image/video workflow',
+    prompt: 'Help me plan a local image or video generation workflow for this Edison machine.',
+    icon: Image,
+  },
 ];
 
 export default function App() {
@@ -320,6 +346,12 @@ export default function App() {
     const loaded = await edisonApi.getConversation(conversationId);
     setActiveConversation(loaded);
     setActiveMode(loaded.mode);
+    setActiveView('chat');
+  }
+
+  function startNewConversation() {
+    setActiveConversation(null);
+    setComposer('');
     setActiveView('chat');
   }
 
@@ -638,9 +670,14 @@ export default function App() {
           <div className="brand-mark"><Sparkles size={20} /></div>
           <div>
             <h1>EDISON V2</h1>
-            <p>Local Core</p>
+            <p>Local AI PC</p>
           </div>
         </div>
+
+        <button className="new-chat-button" onClick={startNewConversation} type="button">
+          <MessageSquare size={17} />
+          <span>New chat</span>
+        </button>
 
         <nav className="nav-stack">
           {navigation.map((item) => {
@@ -680,20 +717,22 @@ export default function App() {
 
         <section className="sidebar-footer">
           <ShieldCheck size={17} />
-          <span>Approval gates enabled</span>
+          <span>{status?.gpu_devices.length ?? 0} GPUs available</span>
         </section>
       </aside>
 
       <main className={activeView === 'chat' ? 'workspace chat-workspace' : 'workspace section-workspace'}>
         <header className="topbar">
           <div>
-            <p className="eyebrow">{activeView === 'chat' ? 'Workbench' : 'Workspace'}</p>
+            <p className="eyebrow">{activeView === 'chat' ? 'Conversation' : 'Workspace'}</p>
             <h2>{viewTitle(activeView, activeConversation)}</h2>
           </div>
           <div className="status-row">
-            <span className="status-pill ok"><Activity size={15} /> API {status?.status ?? 'offline'}</span>
-            <span className="status-pill"><Database size={15} /> SQLite</span>
-            <span className="status-pill"><Cpu size={15} /> GPUs {status?.gpu_devices.length ?? 0}</span>
+            <span className={status?.status === 'ok' ? 'status-pill ok' : 'status-pill'}>
+              <Activity size={15} /> {status?.status === 'ok' ? 'Connected' : status?.status ?? 'Offline'}
+            </span>
+            <span className="status-pill"><Cpu size={15} /> {status?.gpu_devices.length ?? 0} GPUs</span>
+            <span className="status-pill"><Fan size={15} /> {fanControls?.controllers.length ?? 0} fan controls</span>
             <button
               className="icon-button"
               onClick={() => setInspectorCollapsed((current) => !current)}
@@ -714,7 +753,8 @@ export default function App() {
                 onClick={() => setActiveMode(mode.value)}
                 type="button"
               >
-                {mode.label}
+                <span>{mode.label}</span>
+                <small>{mode.description}</small>
               </button>
             ))}
           </section>
@@ -823,7 +863,7 @@ export default function App() {
         <section className="inspector-section inspector-header">
           <div className="section-heading">
             <Server size={18} />
-            <h3>Core</h3>
+            <h3>Edison</h3>
           </div>
           <button className="icon-button" onClick={() => setInspectorCollapsed(true)} title="Collapse panel" type="button">
             <PanelRightClose size={18} />
@@ -833,19 +873,19 @@ export default function App() {
         <section className="inspector-section">
           <dl className="metric-grid">
             <div>
-              <dt>Environment</dt>
-              <dd>{status?.environment ?? 'local'}</dd>
+              <dt>Core</dt>
+              <dd>{status?.status === 'ok' ? 'Online' : status?.status ?? 'Offline'}</dd>
             </div>
             <div>
               <dt>Models</dt>
               <dd>{status?.model_count ?? models.length}</dd>
             </div>
             <div>
-              <dt>Ready</dt>
-              <dd>{status?.configured_model_count ?? groupedModels.ready.length}</dd>
+              <dt>GPUs</dt>
+              <dd>{status?.gpu_devices.length ?? 0}</dd>
             </div>
             <div>
-              <dt>Session</dt>
+              <dt>Mode</dt>
               <dd>{sessionState?.selected_mode ?? activeMode}</dd>
             </div>
           </dl>
@@ -854,7 +894,7 @@ export default function App() {
         <section className="inspector-section">
           <div className="section-heading">
             <Brain size={18} />
-            <h3>Selected Lane</h3>
+            <h3>Selected Model</h3>
           </div>
           {modelSelection ? (
             <div className="lane-card">
@@ -870,7 +910,7 @@ export default function App() {
         <section className="inspector-section">
           <div className="section-heading">
             <Network size={18} />
-            <h3>Model Registry</h3>
+            <h3>Model Lanes</h3>
           </div>
           <div className="model-list">
             {models.map((model) => (
@@ -952,8 +992,25 @@ function ChatView({
   recentArtifacts: ArtifactRecord[];
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
 }) {
+  const selectedModelName = modelSelection?.model.display_name ?? 'Model lane';
+  const contextSummary = chatContextPaths.length > 0
+    ? `${chatContextPaths.length} focus file${chatContextPaths.length === 1 ? '' : 's'}`
+    : chatWorkspacePath.trim()
+      ? 'Target file set'
+      : 'Add repo context';
+
+  function useSuggestion(prompt: string) {
+    setComposer(composer.trim() ? `${composer.trim()}\n\n${prompt}` : prompt);
+  }
+
   return (
     <>
+      <details className="context-drawer">
+        <summary>
+          <span><Folder size={16} /> Repo context</span>
+          <small>{contextSummary}</small>
+        </summary>
+        <div className="context-drawer-content">
       <section className="chat-context-controls" aria-label="Workspace context controls">
         <button
           className={showWorkspaceContext ? 'mode-button active' : 'mode-button'}
@@ -1123,6 +1180,8 @@ function ChatView({
           )}
         </section>
       )}
+        </div>
+      </details>
       <section className="chat-surface" aria-label="Conversation messages">
         {activeConversation?.messages.map((message) => {
           const parsedContext =
@@ -1170,8 +1229,25 @@ function ChatView({
         })}
         {!activeConversation?.messages.length && (
           <div className="empty-chat">
-            <Bot size={34} />
-            <h3>Ready</h3>
+            <div className="empty-chat-mark"><Bot size={28} /></div>
+            <h3>What should Edison help with?</h3>
+            <div className="prompt-grid">
+              {promptSuggestions.map((suggestion) => {
+                const Icon = suggestion.icon;
+                return (
+                  <button
+                    className="prompt-card"
+                    key={suggestion.title}
+                    onClick={() => useSuggestion(suggestion.prompt)}
+                    type="button"
+                  >
+                    <Icon size={18} />
+                    <span>{suggestion.title}</span>
+                    <small>{suggestion.subtitle}</small>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
@@ -1200,19 +1276,31 @@ function ChatView({
         </section>
       )}
 
-      <form className="composer" onSubmit={(event) => void handleSend(event)}>
-        <textarea
-          aria-label="Message Edison"
-          onChange={(event) => setComposer(event.target.value)}
-          placeholder="Message Edison"
-          rows={3}
-          value={composer}
-        />
-        <button disabled={!composer.trim() || isSending} title="Send message" type="submit">
-          <Send size={18} />
-          <span>{isSending ? 'Thinking' : modelSelection?.model.status === 'ready' ? 'Send' : 'Save'}</span>
-        </button>
-      </form>
+      <section className="composer-panel" aria-label="Message composer">
+        <div className="composer-meta">
+          <span>{selectedModelName}</span>
+          <span>{modelSelection?.model.status.replace('_', ' ') ?? 'Select a lane'}</span>
+        </div>
+        <form className="composer" onSubmit={(event) => void handleSend(event)}>
+          <textarea
+            aria-label="Message Edison"
+            onChange={(event) => setComposer(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Message Edison"
+            rows={3}
+            value={composer}
+          />
+          <button disabled={!composer.trim() || isSending} title="Send message" type="submit">
+            <Send size={18} />
+            <span>{isSending ? 'Thinking' : 'Send'}</span>
+          </button>
+        </form>
+      </section>
     </>
   );
 }
