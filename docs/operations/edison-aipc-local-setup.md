@@ -51,6 +51,8 @@ Verify all GPU fans after driver or hardware changes:
 
 ```bash
 nvidia-smi --query-gpu=index,name,temperature.gpu,fan.speed,power.draw,utilization.gpu --format=csv
+DISPLAY=:99 nvidia-settings -q fans
+for i in 0 1 2 3 4; do DISPLAY=:99 nvidia-settings -q "[fan:$i]/GPUCurrentFanSpeedRPM"; done
 ```
 
 ## ComfyUI Media Backend
