@@ -74,6 +74,21 @@
       "endpoint_url": "http://127.0.0.1:8005/v1",
       "preferred_gpu": "RTX 5060 Ti",
       "notes": "Image, screenshot, and document-page understanding lane."
+    },
+    {
+      "id": "local-embeddings",
+      "display_name": "Local Embeddings",
+      "provider": "ollama-embeddings",
+      "status": "not_configured",
+      "capabilities": ["embeddings"],
+      "license": "See model card",
+      "tags": ["embeddings", "rag", "knowledge", "local"],
+      "safety_notes": "Embedding retrieval improves recall but does not replace source verification.",
+      "context_window": 8192,
+      "max_output_tokens": 0,
+      "endpoint_url": "http://127.0.0.1:11434/v1",
+      "preferred_gpu": "RTX 4060 Ti",
+      "notes": "Placeholder profile for a local embedding model such as bge-m3 or nomic-embed-text."
     }
   ]
 }
