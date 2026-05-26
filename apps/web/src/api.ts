@@ -33,6 +33,28 @@ import type {
 const configuredApiBase = import.meta.env.VITE_EDISON_API_URL?.trim();
 const API_BASE = configuredApiBase ?? '';
 
+export interface ChatTurnPayload {
+  message: string;
+  conversation_id?: string | null;
+  mode: ChatMode;
+  preferred_model?: string | null;
+  memory_enabled?: boolean;
+  workspace_path?: string;
+  workspace_context_paths?: string[];
+  include_workspace_context?: boolean;
+  max_workspace_context_matches?: number;
+  include_knowledge_context?: boolean;
+  knowledge_query?: string;
+  max_knowledge_context_matches?: number;
+}
+
+interface ChatStreamHandlers {
+  onStart?: (event: { conversation_id: string; user_message: MessageRecord; model_selection: ModelSelection }) => void;
+  onToken?: (delta: string) => void;
+  onDone?: (response: ChatTurnResponse) => void;
+  onError?: (detail: string) => void;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -82,30 +104,83 @@ export const edisonApi = {
     request<ConversationWithMessages>(`/api/v1/conversations/${conversationId}`),
   addMessage: (
     conversationId: string,
-    payload: { role: 'user' | 'assistant' | 'system' | 'tool'; content: string; model?: string | null },
+    payload: {
+      role: 'user' | 'assistant' | 'system' | 'tool';
+      content: string;
+      model?: string | null;
+      metadata?: Record<string, unknown>;
+    },
   ) =>
     request<MessageRecord>(`/api/v1/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  sendChatTurn: (payload: {
-    message: string;
-    conversation_id?: string | null;
-    mode: ChatMode;
-    preferred_model?: string | null;
-    memory_enabled?: boolean;
-    workspace_path?: string;
-    workspace_context_paths?: string[];
-    include_workspace_context?: boolean;
-    max_workspace_context_matches?: number;
-    include_knowledge_context?: boolean;
-    knowledge_query?: string;
-    max_knowledge_context_matches?: number;
-  }) =>
+  sendChatTurn: (payload: ChatTurnPayload) =>
     request<ChatTurnResponse>('/api/v1/chat', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  streamChatTurn: async (payload: ChatTurnPayload, handlers: ChatStreamHandlers = {}): Promise<ChatTurnResponse> => {
+    const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok || !response.body) {
+      const detail = await response.text();
+      throw new Error(detail || `Stream failed with ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const finalResponse: { current?: ChatTurnResponse } = {};
+
+    const consumeBlock = (block: string) => {
+      const lines = block.split(/\r?\n/);
+      const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
+      const dataLines = lines
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trim());
+      if (dataLines.length === 0) {
+        return;
+      }
+      const raw = dataLines.join('\n');
+      const data = JSON.parse(raw);
+      if (eventName === 'start') {
+        handlers.onStart?.(data);
+      } else if (eventName === 'token') {
+        handlers.onToken?.(String(data.delta ?? ''));
+      } else if (eventName === 'done') {
+        finalResponse.current = data as ChatTurnResponse;
+        handlers.onDone?.(finalResponse.current);
+      } else if (eventName === 'error') {
+        handlers.onError?.(String(data.detail ?? 'Chat stream failed'));
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\n\n/);
+      buffer = blocks.pop() ?? '';
+      blocks.forEach((block) => {
+        if (block.trim()) {
+          consumeBlock(block);
+        }
+      });
+    }
+    if (buffer.trim()) {
+      consumeBlock(buffer);
+    }
+    if (!finalResponse.current) {
+      throw new Error('Chat stream ended before Edison sent a final response.');
+    }
+    return finalResponse.current;
+  },
   getSession: (sessionId: string) => request<SessionStateRecord>(`/api/v1/sessions/${sessionId}`),
   updateSession: (sessionId: string, payload: Partial<SessionStateRecord>) =>
     request<SessionStateRecord>(`/api/v1/sessions/${sessionId}`, {
@@ -116,7 +191,7 @@ export const edisonApi = {
   listArtifacts: (limit = 24) => request<ArtifactRecord[]>(`/api/v1/artifacts?limit=${limit}`),
   listJobs: (jobType?: JobType) =>
     request<JobRecord[]>(jobType ? `/api/v1/jobs?job_type=${jobType}` : '/api/v1/jobs'),
-  createMediaJob: (payload: { job_type: JobType; title: string; prompt?: string; metadata?: Record<string, unknown> }) =>
+  createMediaJob: (payload: { job_type: JobType; title: string; prompt?: string; source_artifact_id?: string | null; metadata?: Record<string, unknown> }) =>
     request<JobRecord>('/api/v1/media/jobs', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -124,6 +199,11 @@ export const edisonApi = {
   syncMediaJob: (jobId: string) =>
     request<JobRecord>(`/api/v1/media/jobs/${jobId}/sync`, {
       method: 'POST',
+    }),
+  deliverMediaJob: (jobId: string, conversationId?: string | null) =>
+    request<MessageRecord>(`/api/v1/media/jobs/${jobId}/deliver`, {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId ?? null }),
     }),
   cancelMediaJob: (jobId: string) =>
     request<JobRecord>(`/api/v1/media/jobs/${jobId}/cancel`, {

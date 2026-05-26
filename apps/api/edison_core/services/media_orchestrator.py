@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import mimetypes
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,7 +51,7 @@ class MediaOrchestrator:
     def submit_job(self, payload: JobCreate, store: GenerationStore) -> JobRecord:
         job = store.create_job(payload, status=JobStatus.LOADING)
         try:
-            submission = self._submit(payload.backend, payload)
+            submission = self._submit(payload.backend, payload, store)
         except Exception as error:
             return store.update_job_status(job.id, JobStatus.ERROR, f"Media submit failed: {error}", {"backend": payload.backend})
 
@@ -91,7 +93,7 @@ class MediaOrchestrator:
                 return store.update_job_status(job.id, JobStatus.ERROR, f"Media cancel failed: {error}", {"backend": job.backend})
         return store.update_job_status(job.id, JobStatus.CANCELLED, "Media job cancelled", {"backend": job.backend})
 
-    def _submit(self, backend: str, payload: JobCreate) -> BackendSubmission:
+    def _submit(self, backend: str, payload: JobCreate, store: GenerationStore) -> BackendSubmission:
         if backend == "comfyui":
             return self._submit_comfyui(payload)
         if backend == "invokeai":
@@ -99,12 +101,14 @@ class MediaOrchestrator:
         if backend == "wan22":
             return self._submit_generic(self.wan22.base_url, payload, default_submit_path="/generate")
         if backend == "modly":
-            return self._submit_generic(self.modly.base_url, payload, default_submit_path="/generate")
+            return self._submit_modly(payload, store)
         raise MediaExecutionError(f"Unsupported media backend: {backend}")
 
     def _poll(self, backend: str, remote_job_id: str, metadata: dict[str, Any]) -> BackendSubmission:
         if backend == "comfyui":
             return self._poll_comfyui(remote_job_id)
+        if backend == "modly":
+            return self._poll_modly(remote_job_id)
         base_url = self._base_url_for(backend)
         return self._poll_generic(base_url, remote_job_id, metadata)
 
@@ -119,13 +123,66 @@ class MediaOrchestrator:
             raise MediaExecutionError("ComfyUI base URL is not configured")
         workflow = payload.metadata.get("workflow")
         if not isinstance(workflow, dict) or not workflow:
-            raise MediaExecutionError("ComfyUI submissions require metadata.workflow with an API prompt graph")
+            if payload.job_type.value not in {"image", "image_edit"}:
+                raise MediaExecutionError("ComfyUI submissions require metadata.workflow with an API prompt graph")
+            workflow = _default_sdxl_workflow(payload)
         body = {"prompt": workflow}
         response = self._post_json(self.comfyui.base_url, "/prompt", body)
         prompt_id = str(response.get("prompt_id") or response.get("prompt_id", ""))
         if not prompt_id:
             raise MediaExecutionError("ComfyUI did not return a prompt_id")
         return BackendSubmission(remote_job_id=prompt_id, status="queued", detail="ComfyUI prompt submitted", metadata={"prompt_id": prompt_id})
+
+    def _submit_modly(self, payload: JobCreate, store: GenerationStore) -> BackendSubmission:
+        if not self.modly.base_url:
+            raise MediaExecutionError("Modly base URL is not configured")
+        source_artifact_id = payload.source_artifact_id or _string_metadata(payload.metadata, "source_artifact_id")
+        if not source_artifact_id:
+            raise MediaExecutionError("Modly mesh jobs require source_artifact_id for an image artifact")
+        source_artifact = store.get_artifact(source_artifact_id)
+        if source_artifact.kind != ArtifactKind.IMAGE:
+            raise MediaExecutionError("Modly mesh jobs require an image artifact as input")
+        source_path = _artifact_file_path(self.settings.artifact_root.parent, source_artifact.path)
+        if not source_path.exists():
+            raise MediaExecutionError(f"Source artifact file was not found: {source_artifact.path}")
+
+        metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+        model_params = metadata.get("params") if isinstance(metadata.get("params"), dict) else {}
+        model_params = dict(model_params)
+        for key in ("num_inference_steps", "octree_resolution", "guidance_scale", "seed"):
+            if key in metadata:
+                model_params[key] = metadata[key]
+
+        fields = {
+            "model_id": str(metadata.get("model_id") or "hunyuan3d-mini-fast/generate"),
+            "collection": str(metadata.get("collection") or "Edison Chat"),
+            "remesh": str(metadata.get("remesh") or "quad"),
+            "enable_texture": str(bool(metadata.get("enable_texture", False))).lower(),
+            "texture_resolution": str(_int_metadata(metadata, "texture_resolution", 1024, minimum=256, maximum=4096)),
+            "params": json.dumps(model_params),
+        }
+        response = self._post_multipart(
+            self.modly.base_url,
+            "/generate/from-image",
+            fields,
+            source_path,
+            source_artifact.mime_type or _mime_from_suffix(source_path.suffix),
+        )
+        remote_job_id = _string_from_response(response, ["job_id", "id"])
+        if not remote_job_id:
+            raise MediaExecutionError("Modly did not return a job_id")
+        return BackendSubmission(
+            remote_job_id=remote_job_id,
+            status="queued",
+            detail="Modly image-to-3D job submitted",
+            metadata={
+                "remote_job_id": remote_job_id,
+                "status_path_template": "/generate/status/{job_id}",
+                "cancel_path_template": "/generate/cancel/{job_id}",
+                "source_artifact_id": source_artifact_id,
+                "model_id": fields["model_id"],
+            },
+        )
 
     def _poll_comfyui(self, remote_job_id: str) -> BackendSubmission:
         if not self.comfyui.base_url:
@@ -153,6 +210,39 @@ class MediaOrchestrator:
         if status_info.get("status_str") == "error":
             return BackendSubmission(remote_job_id=remote_job_id, status="error", detail="ComfyUI job failed", metadata=status_info)
         return BackendSubmission(remote_job_id=remote_job_id, status="generating", detail="ComfyUI job has no outputs yet")
+
+    def _poll_modly(self, remote_job_id: str) -> BackendSubmission:
+        if not self.modly.base_url:
+            raise MediaExecutionError("Modly base URL is not configured")
+        response = self._get_json(self.modly.base_url, f"/generate/status/{remote_job_id}")
+        status_value = str(response.get("status") or "running").lower()
+        if status_value == "done" and response.get("output_url"):
+            output_url = str(response["output_url"])
+            if output_url.startswith("/"):
+                output_url = f"{self.modly.base_url}{output_url}"
+            return BackendSubmission(
+                remote_job_id=remote_job_id,
+                outputs=[{"download_url": output_url, "kind": "mesh"}],
+                status="complete",
+                detail="Modly mesh job completed",
+                metadata=response,
+            )
+        if status_value == "error":
+            return BackendSubmission(
+                remote_job_id=remote_job_id,
+                status="error",
+                detail=str(response.get("error") or "Modly mesh job failed"),
+                metadata=response,
+            )
+        if status_value == "cancelled":
+            return BackendSubmission(
+                remote_job_id=remote_job_id,
+                status="error",
+                detail="Modly mesh job was cancelled",
+                metadata=response,
+            )
+        detail = str(response.get("step") or f"Modly mesh job {status_value}")
+        return BackendSubmission(remote_job_id=remote_job_id, status="generating", detail=detail, metadata=response)
 
     def _submit_generic(self, base_url: str | None, payload: JobCreate, default_submit_path: str) -> BackendSubmission:
         if not base_url:
@@ -283,6 +373,22 @@ class MediaOrchestrator:
         data = response.json()
         return data if isinstance(data, dict) else {}
 
+    def _post_multipart(
+        self,
+        base_url: str,
+        path: str,
+        fields: dict[str, str],
+        file_path: Path,
+        mime_type: str,
+    ) -> dict[str, Any]:
+        with file_path.open("rb") as file_handle:
+            files = {"image": (file_path.name, file_handle, mime_type)}
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(f"{base_url.rstrip('/')}{path}", data=fields, files=files)
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+
     def _get_json(self, base_url: str, path: str) -> dict[str, Any]:
         with httpx.Client(timeout=60.0) as client:
             response = client.get(f"{base_url.rstrip('/')}{path}")
@@ -349,6 +455,12 @@ def _string_metadata(payload: dict[str, Any], key: str) -> str | None:
 
 
 
+def _artifact_file_path(storage_root: Path, artifact_path: str) -> Path:
+    path = Path(artifact_path)
+    return path if path.is_absolute() else storage_root / path
+
+
+
 def _suffix_from_mime(content_type: str | None) -> str:
     if not content_type:
         return ".bin"
@@ -359,3 +471,91 @@ def _suffix_from_mime(content_type: str | None) -> str:
 
 def _mime_from_suffix(suffix: str) -> str:
     return mimetypes.guess_type(f"file{suffix}")[0] or "application/octet-stream"
+
+
+def _default_sdxl_workflow(payload: JobCreate) -> dict[str, Any]:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    checkpoint = str(metadata.get("checkpoint") or "sd_xl_base_1.0.safetensors")
+    prompt = (payload.prompt or payload.title or "A clean Edison image generation").strip()
+    negative_prompt = str(
+        metadata.get("negative_prompt")
+        or "low quality, blurry, distorted, watermark, text artifacts"
+    )
+    width = _int_metadata(metadata, "width", 768, minimum=256, maximum=1536)
+    height = _int_metadata(metadata, "height", 768, minimum=256, maximum=1536)
+    steps = _int_metadata(metadata, "steps", 12, minimum=1, maximum=60)
+    cfg = _float_metadata(metadata, "cfg", 6.0, minimum=1.0, maximum=20.0)
+    seed = _int_metadata(metadata, "seed", random.randint(1, 2**31 - 1), minimum=0, maximum=2**63 - 1)
+    filename_prefix = str(metadata.get("filename_prefix") or "edison_chat_image")
+
+    return {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1.0,
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0],
+            },
+        },
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": checkpoint},
+        },
+        "5": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": prompt, "clip": ["4", 1]},
+        },
+        "7": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": negative_prompt, "clip": ["4", 1]},
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+
+def _int_metadata(
+    metadata: dict[str, Any],
+    key: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(metadata.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _float_metadata(
+    metadata: dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        value = float(metadata.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))

@@ -40,6 +40,7 @@ import type {
   JobRecord,
   JobType,
   MediaSystemStatus,
+  MessageRecord,
   ModelProfile,
   ModelSelection,
   SessionStateRecord,
@@ -365,7 +366,12 @@ export default function App() {
     setIsSending(true);
     setError(null);
     try {
-      const response = await edisonApi.sendChatTurn({
+      if (activeMode === 'media') {
+        await handleMediaChatSend(content);
+        return;
+      }
+
+      const payload = {
         conversation_id: activeConversation?.id ?? null,
         message: content,
         mode: activeMode,
@@ -375,16 +381,132 @@ export default function App() {
         workspace_context_paths: chatContextPaths,
         include_workspace_context: ['coding', 'agent', 'swarm'].includes(activeMode),
         max_workspace_context_matches: chatContextMatches,
+      };
+      const draftUserId = `draft-user-${Date.now()}`;
+      const draftAssistantId = `draft-assistant-${Date.now()}`;
+      let streamedContent = '';
+      setActiveConversation((current) =>
+        appendDraftChatTurn(current, activeMode, content, draftUserId, draftAssistantId),
+      );
+      setComposer('');
+
+      const response = await edisonApi.streamChatTurn(payload, {
+        onStart: (start) => {
+          setModelSelection(start.model_selection);
+          setActiveConversation((current) =>
+            replaceDraftMessage(current, draftUserId, start.user_message, start.conversation_id),
+          );
+        },
+        onToken: (delta) => {
+          streamedContent += delta;
+          setActiveConversation((current) =>
+            updateDraftAssistantMessage(current, draftAssistantId, streamedContent),
+          );
+        },
+        onError: (detail) => {
+          setError(detail);
+        },
       });
       setActiveConversation(response.conversation);
       setModelSelection(response.model_selection);
-      setComposer('');
       setConversations(await edisonApi.listConversations());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Message failed');
     } finally {
       setIsSending(false);
     }
+  }
+
+  async function handleMediaChatSend(content: string) {
+    const jobType = inferMediaJobType(content);
+    const sourceArtifact = jobType === 'mesh' ? latestImageArtifactFromConversation(activeConversation) : null;
+    const conversation = await ensureChatConversation(content, 'media');
+    await edisonApi.addMessage(conversation.id, {
+      role: 'user',
+      content,
+      metadata: { mode: 'media', source: 'chat-media-request' },
+    });
+    if (jobType === 'mesh' && !sourceArtifact) {
+      await edisonApi.addMessage(conversation.id, {
+        role: 'assistant',
+        content: 'Modly is ready for image-to-3D. Add or generate an image in this chat first, then ask me to turn it into a 3D mesh.',
+        model: 'modly',
+        metadata: { delivery_type: 'media_job_guidance', backend: 'modly' },
+      });
+      setComposer('');
+      setActiveConversation(await edisonApi.getConversation(conversation.id));
+      setConversations(await edisonApi.listConversations());
+      return;
+    }
+    const job = await edisonApi.createMediaJob({
+      job_type: jobType,
+      title: mediaJobTitle(content, jobType),
+      prompt: content,
+      source_artifact_id: sourceArtifact?.id ?? null,
+      metadata: {
+        source: 'chat',
+        conversation_id: conversation.id,
+        deliver_to_chat: true,
+        source_artifact_id: sourceArtifact?.id ?? null,
+        model_id: jobType === 'mesh' ? 'hunyuan3d-mini-fast/generate' : undefined,
+        width: 768,
+        height: 768,
+        steps: 12,
+      },
+    });
+    const statusLine = mediaJobStatusLine(job);
+    await edisonApi.addMessage(conversation.id, {
+      role: 'assistant',
+      content: statusLine,
+      model: job.backend,
+      metadata: {
+        delivery_type: 'media_job_status',
+        media_job: job,
+      },
+    });
+    setComposer('');
+    setActiveConversation(await edisonApi.getConversation(conversation.id));
+    setConversations(await edisonApi.listConversations());
+    await refreshMediaSurface();
+    if (['queued', 'loading', 'generating', 'encoding'].includes(job.status)) {
+      void pollMediaJobForChat(job.id, conversation.id);
+    }
+  }
+
+  async function ensureChatConversation(firstMessage: string, mode: ChatMode): Promise<ConversationRecord> {
+    if (activeConversation) {
+      return activeConversation;
+    }
+    const created = await edisonApi.createConversation({
+      title: conversationTitle(firstMessage),
+      mode,
+      memory_enabled: true,
+    });
+    setActiveConversation({ ...created, messages: [] });
+    return created;
+  }
+
+  async function pollMediaJobForChat(jobId: string, conversationId: string) {
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      await sleep(2500);
+      try {
+        const synced = await edisonApi.syncMediaJob(jobId);
+        if (synced.status === 'complete' && synced.result_artifact_id) {
+          await edisonApi.deliverMediaJob(synced.id, conversationId);
+          setActiveConversation(await edisonApi.getConversation(conversationId));
+          await refreshMediaSurface();
+          return;
+        }
+        if (['error', 'cancelled', 'setup_required'].includes(synced.status)) {
+          await refreshMediaSurface();
+          return;
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Media delivery failed');
+        return;
+      }
+    }
+    await refreshMediaSurface();
   }
 
   async function refreshMediaSurface() {
@@ -407,8 +529,31 @@ export default function App() {
       setMediaStatus(nextMediaStatus);
       setMediaJobs(nextMediaJobs.filter((job) => ['image', 'image_edit', 'video', 'mesh', 'audio'].includes(job.job_type)));
       setMediaArtifacts(nextArtifacts.filter((artifact) => ['image', 'video', 'mesh', 'audio'].includes(artifact.kind)));
+      await deliverCompletedChatJobs(nextMediaJobs);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Media status failed');
+    }
+  }
+
+  async function deliverCompletedChatJobs(jobs: JobRecord[]) {
+    const deliverableJobs = jobs.filter((job) =>
+      job.status === 'complete'
+      && typeof job.result_artifact_id === 'string'
+      && job.metadata.deliver_to_chat === true
+      && typeof job.metadata.conversation_id === 'string'
+      && typeof job.metadata.delivered_message_id !== 'string',
+    );
+    if (deliverableJobs.length === 0) {
+      return;
+    }
+    const deliveredConversationIds = new Set<string>();
+    for (const job of deliverableJobs) {
+      const conversationId = String(job.metadata.conversation_id);
+      await edisonApi.deliverMediaJob(job.id, conversationId);
+      deliveredConversationIds.add(conversationId);
+    }
+    if (activeConversation?.id && deliveredConversationIds.has(activeConversation.id)) {
+      setActiveConversation(await edisonApi.getConversation(activeConversation.id));
     }
   }
 
@@ -450,11 +595,25 @@ export default function App() {
     }
   }
 
-  function useArtifactInChat(artifact: ArtifactRecord) {
-    const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
-    const line = `Use artifact ${artifact.title} (${artifact.kind}, id ${artifact.id}) from ${downloadUrl}`;
-    setActiveView('chat');
-    setComposer((current) => (current.trim() ? `${current.trim()}\n\n${line}` : line));
+  async function useArtifactInChat(artifact: ArtifactRecord) {
+    setError(null);
+    try {
+      const conversation = await ensureChatConversation(`Generated ${artifact.title}`, 'media');
+      await edisonApi.addMessage(conversation.id, {
+        role: 'assistant',
+        content: `Here is ${artifact.title}.`,
+        model: artifact.metadata.backend as string | undefined,
+        metadata: {
+          delivery_type: 'artifact_reference',
+          artifacts: [artifact],
+        },
+      });
+      setActiveConversation(await edisonApi.getConversation(conversation.id));
+      setActiveView('chat');
+      setConversations(await edisonApi.listConversations());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to add artifact to chat');
+    }
   }
 
   async function createMediaReadinessJob(jobType: JobType, title: string, prompt: string) {
@@ -1208,7 +1367,7 @@ function ChatView({
                     </span>
                   )}
                 </div>
-                <p>{message.content}</p>
+                <MessageContent content={message.content} metadata={message.metadata} />
                 {message.role === 'assistant' && (
                   <WorkspaceContextView
                     metadata={message.metadata}
@@ -1302,6 +1461,60 @@ function ChatView({
         </form>
       </section>
     </>
+  );
+}
+
+function MessageContent({ content, metadata }: { content: string; metadata: Record<string, unknown> }) {
+  const blocks = parseMessageBlocks(content);
+  const artifacts = artifactsFromMetadata(metadata);
+  return (
+    <div className="message-content">
+      {blocks.map((block, index) => {
+        if (block.kind === 'code') {
+          return (
+            <pre className="message-code-block" key={`${block.kind}-${index}`}>
+              {block.language && <span>{block.language}</span>}
+              <code>{block.text}</code>
+            </pre>
+          );
+        }
+        if (block.kind === 'ul' || block.kind === 'ol') {
+          const ListTag = block.kind;
+          return (
+            <ListTag className="message-list" key={`${block.kind}-${index}`}>
+              {block.items.map((item, itemIndex) => (
+                <li key={`${item}-${itemIndex}`}>{renderInlineMessageText(item)}</li>
+              ))}
+            </ListTag>
+          );
+        }
+        if (block.kind === 'paragraph') {
+          return <p key={`${block.kind}-${index}`}>{renderInlineMessageText(block.text)}</p>;
+        }
+        return null;
+      })}
+      {artifacts.length > 0 && (
+        <div className="message-artifacts">
+          {artifacts.map((artifact) => {
+            const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
+            return (
+              <article className="message-artifact-card" key={artifact.id}>
+                {artifact.kind === 'image' && <img alt={artifact.title} src={downloadUrl} />}
+                {artifact.kind === 'video' && <video controls src={downloadUrl} />}
+                {artifact.kind === 'audio' && <audio controls src={downloadUrl} />}
+                <div>
+                  <strong>{artifact.title}</strong>
+                  <span>{artifact.kind} / {artifact.mime_type ?? 'file'}</span>
+                </div>
+                <a className="secondary-button" href={downloadUrl} target="_blank" rel="noreferrer">
+                  Open
+                </a>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2251,6 +2464,204 @@ function memoryItems(): Array<[string, string]> {
     ['Semantic Recall', 'Embeddings-backed retrieval for chats, docs, project notes, and artifacts.'],
     ['Controls', 'Inspect, edit, disable, expire, or delete memories with source visibility.'],
   ];
+}
+
+type MessageBlock =
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'code'; text: string; language: string }
+  | { kind: 'ul' | 'ol'; items: string[] };
+
+function appendDraftChatTurn(
+  current: ConversationWithMessages | null,
+  mode: ChatMode,
+  userContent: string,
+  userId: string,
+  assistantId: string,
+): ConversationWithMessages {
+  const now = new Date().toISOString();
+  const userMessage: MessageRecord = {
+    id: userId,
+    conversation_id: current?.id ?? 'draft-conversation',
+    role: 'user',
+    content: userContent,
+    metadata: { streamed: true, draft: true },
+    created_at: now,
+  };
+  const assistantMessage: MessageRecord = {
+    id: assistantId,
+    conversation_id: current?.id ?? 'draft-conversation',
+    role: 'assistant',
+    content: '',
+    metadata: { streamed: true, draft: true },
+    created_at: now,
+  };
+  if (current) {
+    return { ...current, messages: [...current.messages, userMessage, assistantMessage], updated_at: now };
+  }
+  return {
+    id: 'draft-conversation',
+    title: conversationTitle(userContent),
+    mode,
+    memory_enabled: true,
+    created_at: now,
+    updated_at: now,
+    messages: [userMessage, assistantMessage],
+  };
+}
+
+function replaceDraftMessage(
+  current: ConversationWithMessages | null,
+  draftId: string,
+  realMessage: MessageRecord,
+  conversationId: string,
+) {
+  if (!current) {
+    return current;
+  }
+  return {
+    ...current,
+    id: conversationId,
+    messages: current.messages.map((message) => (
+      message.id === draftId ? realMessage : { ...message, conversation_id: conversationId }
+    )),
+  };
+}
+
+function updateDraftAssistantMessage(
+  current: ConversationWithMessages | null,
+  assistantId: string,
+  content: string,
+) {
+  if (!current) {
+    return current;
+  }
+  return {
+    ...current,
+    messages: current.messages.map((message) => (
+      message.id === assistantId ? { ...message, content } : message
+    )),
+  };
+}
+
+function parseMessageBlocks(content: string): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  const codeFencePattern = /```([a-zA-Z0-9_-]*)?\n?([\s\S]*?)```/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = codeFencePattern.exec(content)) !== null) {
+    pushTextBlocks(content.slice(cursor, match.index), blocks);
+    blocks.push({ kind: 'code', language: match[1] ?? '', text: match[2] ?? '' });
+    cursor = match.index + match[0].length;
+  }
+  pushTextBlocks(content.slice(cursor), blocks);
+  if (blocks.length === 0 && content.trim()) {
+    blocks.push({ kind: 'paragraph', text: content.trim() });
+  }
+  return blocks;
+}
+
+function pushTextBlocks(text: string, blocks: MessageBlock[]) {
+  text.split(/\n{2,}/).forEach((part) => {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      return;
+    }
+    const lines = trimmed.split(/\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.every((line) => /^[-*]\s+/.test(line))) {
+      blocks.push({ kind: 'ul', items: lines.map((line) => line.replace(/^[-*]\s+/, '')) });
+      return;
+    }
+    if (lines.every((line) => /^\d+[.)]\s+/.test(line))) {
+      blocks.push({ kind: 'ol', items: lines.map((line) => line.replace(/^\d+[.)]\s+/, '')) });
+      return;
+    }
+    blocks.push({ kind: 'paragraph', text: trimmed });
+  });
+}
+
+function renderInlineMessageText(text: string) {
+  return text.split(/(`[^`]+`)/g).map((part, index) => {
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={`${part}-${index}`}>{part.slice(1, -1)}</code>;
+    }
+    return <span key={`${part}-${index}`}>{part}</span>;
+  });
+}
+
+function artifactsFromMetadata(metadata: Record<string, unknown>): ArtifactRecord[] {
+  const rawArtifacts = metadata.artifacts;
+  if (!Array.isArray(rawArtifacts)) {
+    return [];
+  }
+  return rawArtifacts.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+    const candidate = item as Partial<ArtifactRecord>;
+    if (!candidate.id || !candidate.title || !candidate.kind) {
+      return [];
+    }
+    return [{
+      id: String(candidate.id),
+      title: String(candidate.title),
+      kind: candidate.kind,
+      path: String(candidate.path ?? ''),
+      mime_type: candidate.mime_type ?? null,
+      source_job_id: candidate.source_job_id ?? null,
+      metadata: candidate.metadata ?? {},
+      created_at: String(candidate.created_at ?? ''),
+    } as ArtifactRecord];
+  });
+}
+
+function latestImageArtifactFromConversation(conversation: ConversationWithMessages | null): ArtifactRecord | null {
+  const messages = conversation?.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const image = artifactsFromMetadata(messages[index].metadata).find((artifact) => artifact.kind === 'image');
+    if (image) {
+      return image;
+    }
+  }
+  return null;
+}
+
+function inferMediaJobType(content: string): JobType {
+  const lowered = content.toLowerCase();
+  if (/\b(video|animation|movie|clip|timelapse|wan)\b/.test(lowered)) {
+    return 'video';
+  }
+  if (/\b(3d|mesh|model|glb|obj|stl|sculpt)\b/.test(lowered)) {
+    return 'mesh';
+  }
+  if (/\b(audio|music|song|voice|sound)\b/.test(lowered)) {
+    return 'audio';
+  }
+  return 'image';
+}
+
+function mediaJobTitle(content: string, jobType: JobType) {
+  return `${jobType.replace('_', ' ')}: ${conversationTitle(content)}`;
+}
+
+function mediaJobStatusLine(job: JobRecord) {
+  if (job.status === 'setup_required') {
+    return `${job.backend} needs setup before I can generate that ${job.job_type} result. I created the job and kept it visible in Media Studio.`;
+  }
+  if (job.status === 'complete') {
+    return `Done. I generated the ${job.job_type} result.`;
+  }
+  return `I started a ${job.job_type} job with ${job.backend}. I will add the result here when it finishes.`;
+}
+
+function conversationTitle(message: string) {
+  const title = message.trim().replace(/\s+/g, ' ');
+  return title.length > 56 ? `${title.slice(0, 53)}...` : title || 'New conversation';
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function viewTitle(view: ViewId, activeConversation: ConversationWithMessages | null) {

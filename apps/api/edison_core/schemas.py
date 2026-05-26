@@ -285,6 +285,10 @@ class MediaSystemStatus(BaseModel):
     job_counts: dict[str, int] = Field(default_factory=dict)
 
 
+class MediaJobDeliveryRequest(BaseModel):
+    conversation_id: str | None = None
+
+
 class WorkspaceEntry(BaseModel):
     path: str
     name: str

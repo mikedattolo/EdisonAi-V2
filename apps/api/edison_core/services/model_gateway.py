@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -20,32 +22,12 @@ class ModelGateway:
         self.http_client = http_client
 
     def complete(self, request: InferenceRequest) -> tuple[ModelSelection, InferenceResponse]:
-        try:
-            selection = self.router.select_model(
-                mode=request.mode,
-                preferred_model=request.preferred_model,
-            )
-        except ModelSelectionError:
-            fallback_profile = _fallback_profile(self.router)
-            selection = ModelSelection(
-                mode=request.mode,
-                required_capabilities=capabilities_for_mode(request.mode),
-                model=fallback_profile,
-                reason="fallback profile used because no model matches required capabilities",
-            )
+        selection = self._select_model(request)
         profile = selection.model
 
-        if profile.status != ModelStatus.READY or not profile.endpoint_url:
-            return selection, InferenceResponse(
-                model_id=profile.id,
-                content=_not_configured_message(profile.display_name),
-                finish_reason="not_configured",
-                metadata={
-                    "provider": profile.provider,
-                    "status": profile.status.value,
-                    "reason": "selected model is not marked ready or has no endpoint URL",
-                },
-            )
+        unavailable = _unavailable_response(profile)
+        if unavailable is not None:
+            return selection, unavailable
 
         if profile.provider != "local-openai-compatible":
             return selection, InferenceResponse(
@@ -77,11 +59,150 @@ class ModelGateway:
 
         return selection, _parse_openai_compatible_response(profile.id, body)
 
+    def stream_complete(self, request: InferenceRequest) -> tuple[ModelSelection, "InferenceStream"]:
+        selection = self._select_model(request)
+        profile = selection.model
+        return selection, InferenceStream(self, profile, request)
+
+    def _select_model(self, request: InferenceRequest) -> ModelSelection:
+        try:
+            return self.router.select_model(
+                mode=request.mode,
+                preferred_model=request.preferred_model,
+            )
+        except ModelSelectionError:
+            fallback_profile = _fallback_profile(self.router)
+            return ModelSelection(
+                mode=request.mode,
+                required_capabilities=capabilities_for_mode(request.mode),
+                model=fallback_profile,
+                reason="fallback profile used because no model matches required capabilities",
+            )
+
     def _post(self, url: str, payload: dict[str, Any]) -> httpx.Response:
         if self.http_client is not None:
             return self.http_client.post(url, json=payload, timeout=self.timeout_seconds)
         with httpx.Client(timeout=self.timeout_seconds) as client:
             return client.post(url, json=payload)
+
+
+@dataclass
+class InferenceStreamEvent:
+    event: str
+    token: str = ""
+    inference: InferenceResponse | None = None
+
+
+class InferenceStream:
+    def __init__(self, gateway: ModelGateway, profile: ModelProfile, request: InferenceRequest) -> None:
+        self.gateway = gateway
+        self.profile = profile
+        self.request = request
+
+    def __iter__(self):
+        unavailable = _unavailable_response(self.profile)
+        if unavailable is not None:
+            yield InferenceStreamEvent(event="token", token=unavailable.content)
+            yield InferenceStreamEvent(event="done", inference=unavailable)
+            return
+
+        if self.profile.provider != "local-openai-compatible":
+            response = InferenceResponse(
+                model_id=self.profile.id,
+                content=f"The selected model provider '{self.profile.provider}' is not connected yet.",
+                finish_reason="not_configured",
+                metadata={"provider": self.profile.provider, "status": self.profile.status.value},
+            )
+            yield InferenceStreamEvent(event="token", token=response.content)
+            yield InferenceStreamEvent(event="done", inference=response)
+            return
+
+        messages = _messages_from_request(self.request)
+        payload = {
+            "model": self.profile.id,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": self.profile.max_output_tokens,
+        }
+        content_parts: list[str] = []
+        finish_reason = "stop"
+        response_id: str | None = None
+
+        try:
+            for chunk in self._stream_openai_chunks(_chat_completions_url(self.profile.endpoint_url or ""), payload):
+                response_id = response_id or str(chunk.get("id") or "")
+                choices = chunk.get("choices") or []
+                first_choice = choices[0] if choices else {}
+                delta = first_choice.get("delta") or {}
+                token = delta.get("content") or first_choice.get("text") or ""
+                if token:
+                    content_parts.append(str(token))
+                    yield InferenceStreamEvent(event="token", token=str(token))
+                finish_reason = first_choice.get("finish_reason") or finish_reason
+        except httpx.HTTPError as error:
+            response = InferenceResponse(
+                model_id=self.profile.id,
+                content=f"The selected local model endpoint could not complete the request: {error}",
+                finish_reason="error",
+                metadata={"provider": self.profile.provider, "status": self.profile.status.value},
+            )
+            yield InferenceStreamEvent(event="done", inference=response)
+            return
+
+        normalized_finish_reason = finish_reason if finish_reason in {"stop", "length"} else "stop"
+        response = InferenceResponse(
+            model_id=self.profile.id,
+            content="".join(content_parts).strip() or "The model returned an empty response.",
+            finish_reason=normalized_finish_reason,
+            metadata={
+                "provider_response_id": response_id or None,
+                "usage": {},
+                "raw_finish_reason": finish_reason,
+                "streamed": True,
+            },
+        )
+        yield InferenceStreamEvent(event="done", inference=response)
+
+    def _stream_openai_chunks(self, url: str, payload: dict[str, Any]):
+        if self.gateway.http_client is not None:
+            with self.gateway.http_client.stream("POST", url, json=payload, timeout=self.gateway.timeout_seconds) as response:
+                response.raise_for_status()
+                yield from _iter_sse_json(response)
+            return
+        with httpx.Client(timeout=self.gateway.timeout_seconds) as client:
+            with client.stream("POST", url, json=payload) as response:
+                response.raise_for_status()
+                yield from _iter_sse_json(response)
+
+
+def _iter_sse_json(response: httpx.Response):
+    for line in response.iter_lines():
+        if not line:
+            continue
+        data = line[6:].strip() if line.startswith("data: ") else line.strip()
+        if data == "[DONE]":
+            break
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            yield payload
+
+
+def _unavailable_response(profile: ModelProfile) -> InferenceResponse | None:
+    if profile.status != ModelStatus.READY or not profile.endpoint_url:
+        return InferenceResponse(
+            model_id=profile.id,
+            content=_not_configured_message(profile.display_name),
+            finish_reason="not_configured",
+            metadata={
+                "provider": profile.provider,
+                "status": profile.status.value,
+                "reason": "selected model is not marked ready or has no endpoint URL",
+            },
+        )
+    return None
 
 
 def _messages_from_request(request: InferenceRequest) -> list[dict[str, str]]:

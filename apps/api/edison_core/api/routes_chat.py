@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from edison_core.api.dependencies import (
     get_conversation_store,
@@ -93,6 +96,107 @@ def create_chat_turn(
         assistant_message=assistant_message,
         inference=inference,
         model_selection=model_selection,
+    )
+
+
+@router.post("/stream")
+def stream_chat_turn(
+    payload: ChatRequest,
+    conversations: ConversationStore = Depends(get_conversation_store),
+    gateway: ModelGateway = Depends(get_model_gateway),
+    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    knowledge: KnowledgeStore = Depends(get_knowledge_store),
+) -> StreamingResponse:
+    try:
+        conversation_id = _ensure_conversation(payload, conversations)
+        workspace_messages, workspace_metadata = _build_workspace_context(payload, workspace)
+        knowledge_messages, knowledge_metadata = _build_knowledge_context(payload, knowledge)
+        context_messages = workspace_messages + knowledge_messages
+        user_message = conversations.add_message(
+            conversation_id,
+            MessageCreate(
+                role=MessageRole.USER,
+                content=payload.message,
+                model=payload.preferred_model,
+                metadata={
+                    "mode": payload.mode.value,
+                    "workspace_path": payload.workspace_path,
+                    "workspace_context_paths": payload.workspace_context_paths,
+                    "context_warnings": workspace_metadata["warnings"] + knowledge_metadata["warnings"],
+                    "streamed": True,
+                },
+            ),
+        )
+        conversation = conversations.get_conversation(conversation_id)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found") from error
+
+    model_messages = context_messages + _openai_messages(conversation.messages)
+    selection, stream = gateway.stream_complete(
+        InferenceRequest(
+            prompt=payload.message,
+            mode=payload.mode,
+            preferred_model=payload.preferred_model,
+            metadata={
+                "conversation_id": conversation_id,
+                "messages": model_messages,
+                "workspace_context": workspace_metadata,
+                "knowledge_context": knowledge_metadata,
+            },
+        )
+    )
+
+    def event_source():
+        yield _sse(
+            "start",
+            {
+                "conversation_id": conversation_id,
+                "user_message": user_message.model_dump(mode="json"),
+                "model_selection": selection.model_dump(mode="json"),
+            },
+        )
+        final_inference = None
+        for event in stream:
+            if event.event == "token":
+                yield _sse("token", {"delta": event.token})
+                continue
+            if event.event == "done" and event.inference is not None:
+                final_inference = event.inference
+                break
+
+        if final_inference is None:
+            yield _sse("error", {"detail": "Chat stream ended without a final response."})
+            return
+
+        assistant_message = conversations.add_message(
+            conversation_id,
+            MessageCreate(
+                role=MessageRole.ASSISTANT,
+                content=final_inference.content,
+                model=final_inference.model_id,
+                metadata={
+                    "finish_reason": final_inference.finish_reason,
+                    "gateway": final_inference.metadata,
+                    "model_selection_reason": selection.reason,
+                    "workspace_context": workspace_metadata,
+                    "knowledge_context": knowledge_metadata,
+                    "streamed": True,
+                },
+            ),
+        )
+        response = ChatResponse(
+            conversation=conversations.get_conversation(conversation_id),
+            user_message=user_message,
+            assistant_message=assistant_message,
+            inference=final_inference,
+            model_selection=selection,
+        )
+        yield _sse("done", response.model_dump(mode="json"))
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -279,3 +383,7 @@ def _dedupe_paths(paths: list[str]) -> list[str]:
 def _title_from_message(message: str) -> str:
     title = " ".join(message.split())
     return f"{title[:53]}..." if len(title) > 56 else title or "New conversation"
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"

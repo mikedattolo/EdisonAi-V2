@@ -91,6 +91,31 @@ def test_chat_route_creates_conversation_and_assistant_message(tmp_path):
     assert messages[1]["model"] == "local-general-chat"
 
 
+def test_chat_stream_route_persists_streamed_turn(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+    )
+    client = TestClient(create_app(settings))
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={"message": "Hello stream", "mode": "chat", "memory_enabled": True},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "event: start" in body
+    assert "event: token" in body
+    assert "event: done" in body
+
+    conversations = client.get("/api/v1/conversations").json()
+    loaded = client.get(f"/api/v1/conversations/{conversations[0]['id']}").json()
+    assert [message["role"] for message in loaded["messages"]] == ["user", "assistant"]
+    assert loaded["messages"][1]["metadata"]["streamed"] is True
+
+
 def test_coding_chat_includes_workspace_context_metadata(tmp_path):
     (tmp_path / "main.py").write_text("print('hello')\n", encoding="utf-8")
     settings = EdisonSettings(

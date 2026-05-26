@@ -30,7 +30,9 @@ Expected directories:
 /srv/edison-data/comfyui
 /srv/edison-data/datasets
 /srv/edison-data/huggingface
+/srv/edison-data/invokeai
 /srv/edison-data/logs
+/srv/edison-data/modly
 /srv/edison-data/models
 /srv/edison-data/ollama
 /srv/edison-data/tmp
@@ -86,6 +88,84 @@ generation is:
 /srv/edison-data/comfyui/ComfyUI/models/checkpoints/sd_xl_base_1.0.safetensors
 ```
 
+WAN 2.2 video support is installed through ComfyUI's native workflow templates.
+The WAN model set is stored under ComfyUI's model directories:
+
+```text
+/srv/edison-data/comfyui/ComfyUI/models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors
+/srv/edison-data/comfyui/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+/srv/edison-data/comfyui/ComfyUI/models/vae/wan2.2_vae.safetensors
+```
+
+Because WAN is hosted by ComfyUI on this workstation, Edison should use the same
+base URL for `wan22_base_url`:
+
+```toml
+wan22_base_url = "http://127.0.0.1:8188"
+```
+
+## InvokeAI Media Backend
+
+InvokeAI is installed at:
+
+```text
+/srv/edison-data/invokeai
+```
+
+It listens locally on:
+
+```text
+http://127.0.0.1:9090
+```
+
+Keep the user service enabled:
+
+```bash
+systemctl --user status edison-invokeai.service --no-pager
+```
+
+The SDXL checkpoint is registered in-place from ComfyUI so both tools share the
+same model file:
+
+```text
+/srv/edison-data/comfyui/ComfyUI/models/checkpoints/sd_xl_base_1.0.safetensors
+```
+
+## Modly 3D Backend
+
+Modly is installed at:
+
+```text
+/srv/edison-data/modly/modly
+```
+
+It listens locally on:
+
+```text
+http://127.0.0.1:7070
+```
+
+Keep the user service enabled:
+
+```bash
+systemctl --user status edison-modly.service --no-pager
+```
+
+The Hunyuan3D Mini Fast extension is installed at:
+
+```text
+/srv/edison-data/modly/extensions/modly-hunyuan3d-mini-fast-extension
+```
+
+Its downloaded model weights live under:
+
+```text
+/srv/edison-data/modly/models/hunyuan3d-mini-fast
+```
+
+Modly generation is image-to-3D. It expects an image input and returns a mesh
+artifact through `/generate/from-image`.
+
 ## Ollama Runtime
 
 Ollama is the local OpenAI-compatible runtime for Edison chat and model lanes.
@@ -133,7 +213,19 @@ registry_path = "config/model-registry.local.json"
 
 [media]
 workflow_root = "/srv/edison-data/workflows"
+comfyui_base_url = "http://127.0.0.1:8188"
+invokeai_base_url = "http://127.0.0.1:9090"
+wan22_base_url = "http://127.0.0.1:8188"
+modly_base_url = "http://127.0.0.1:7070"
 ```
+
+## Chat Delivery
+
+Chat uses server-sent events at `/api/v1/chat/stream` so assistant responses
+render progressively instead of waiting for the full response body. Completed
+media jobs can be delivered back into a conversation with
+`/api/v1/media/jobs/{job_id}/deliver`; the web UI renders attached artifacts as
+preview cards inside the assistant message.
 
 ## Starter Knowledge
 

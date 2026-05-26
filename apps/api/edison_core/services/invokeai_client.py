@@ -24,22 +24,29 @@ class InvokeAIClient:
                 detail="InvokeAI base URL is not configured.",
             )
 
-        try:
-            payload = self._get_json("/api/v1/app/version")
-        except httpx.HTTPError as error:
+        errors: list[str] = []
+        for path in ("/api/v1/app/version", "/api/v1/app/config", "/openapi.json"):
+            try:
+                payload = self._get_json(path)
+                break
+            except (httpx.HTTPError, ValueError) as error:
+                errors.append(f"{path}: {error}")
+        else:
             return MediaBackendStatus(
                 status="offline",
                 base_url=self.base_url,
                 reachable=False,
-                detail=f"InvokeAI is not reachable: {error}",
+                detail=f"InvokeAI is not reachable: {'; '.join(errors)}",
             )
 
+        metadata = payload if isinstance(payload, dict) else {}
+        metadata = {**metadata, "health_endpoint": path}
         return MediaBackendStatus(
             status="ready",
             base_url=self.base_url,
             reachable=True,
             detail="InvokeAI responded to health checks.",
-            metadata=payload if isinstance(payload, dict) else {},
+            metadata=metadata,
         )
 
     def _get_json(self, path: str):

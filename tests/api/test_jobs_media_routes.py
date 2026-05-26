@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from edison_core.config import EdisonSettings
 from edison_core.main import create_app
+from edison_core.schemas import ArtifactCreate, ArtifactKind, JobCreate, JobStatus, JobType
 
 
 def test_job_routes_create_list_cancel_and_events(tmp_path):
@@ -102,3 +103,46 @@ def test_media_job_can_target_invokeai_backend_explicitly(tmp_path):
     assert created.status_code == 201
     assert created.json()["backend"] == "invokeai"
     assert created.json()["status"] == "setup_required"
+
+
+def test_completed_media_job_can_deliver_artifact_to_chat(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        artifact_root=tmp_path / "artifacts",
+        comfyui_base_url="",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    conversation = client.post(
+        "/api/v1/conversations",
+        json={"title": "Media delivery", "mode": "media", "memory_enabled": True},
+    ).json()
+    store = app.state.generation_store
+    job = store.create_job(
+        JobCreate(
+            job_type=JobType.IMAGE,
+            title="Chat image",
+            prompt="A glass Edison logo",
+            backend="comfyui",
+            metadata={"conversation_id": conversation["id"], "deliver_to_chat": True},
+        ),
+        status=JobStatus.GENERATING,
+    )
+    artifact = store.create_artifact(
+        ArtifactCreate(
+            kind=ArtifactKind.IMAGE,
+            title="Chat image #1",
+            path="artifacts/comfyui/job/output.png",
+            mime_type="image/png",
+            source_job_id=job.id,
+        )
+    )
+    store.finalize_job_result(job.id, artifact.id, JobStatus.COMPLETE, "Image complete")
+
+    delivered = client.post(f"/api/v1/media/jobs/{job.id}/deliver", json={})
+    loaded = client.get(f"/api/v1/conversations/{conversation['id']}").json()
+
+    assert delivered.status_code == 201
+    assert delivered.json()["metadata"]["artifacts"][0]["id"] == artifact.id
+    assert loaded["messages"][0]["metadata"]["delivery_type"] == "media_result"

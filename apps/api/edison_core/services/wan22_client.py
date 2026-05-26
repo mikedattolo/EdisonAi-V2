@@ -25,22 +25,41 @@ class Wan22Client:
             )
 
         # WAN 2.2 deployments vary by wrapper; /health is a pragmatic default.
+        # Edison also supports the native ComfyUI WAN templates, which expose
+        # ComfyUI's /system_stats endpoint instead of a WAN-specific health API.
         try:
             payload = self._get_json("/health")
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, ValueError) as error:
+            health_error = error
+            try:
+                payload = self._get_json("/system_stats")
+            except (httpx.HTTPError, ValueError) as system_error:
+                return MediaBackendStatus(
+                    status="offline",
+                    base_url=self.base_url,
+                    reachable=False,
+                    detail=f"WAN 2.2 service is not reachable: {health_error}; ComfyUI fallback also failed: {system_error}",
+                )
             return MediaBackendStatus(
-                status="offline",
+                status="ready",
                 base_url=self.base_url,
-                reachable=False,
-                detail=f"WAN 2.2 service is not reachable: {error}",
+                reachable=True,
+                detail="WAN 2.2 is available through ComfyUI workflow templates.",
+                metadata={
+                    "adapter": "comfyui",
+                    "health_endpoint": "/system_stats",
+                    "system": payload if isinstance(payload, dict) else {},
+                },
             )
 
+        metadata = payload if isinstance(payload, dict) else {}
+        metadata = {**metadata, "health_endpoint": "/health"}
         return MediaBackendStatus(
             status="ready",
             base_url=self.base_url,
             reachable=True,
             detail="WAN 2.2 service responded to health checks.",
-            metadata=payload if isinstance(payload, dict) else {},
+            metadata=metadata,
         )
 
     def _get_json(self, path: str):
