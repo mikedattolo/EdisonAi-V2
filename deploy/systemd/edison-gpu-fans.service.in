@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply Edison GPU fan speeds
+After=edison-gpu-xorg.service
+Requires=edison-gpu-xorg.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/edison-gpu-fans
+ExecStart=/usr/local/sbin/edison-set-gpu-fans

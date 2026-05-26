@@ -71,6 +71,9 @@ Follow logs:
 Start at boot after login sessions end, if desired:
   loginctl enable-linger "$USER"
 
-Open the workbench:
+Open the workbench on this workstation:
   http://127.0.0.1:5173
+
+Open from another trusted LAN device using this machine's IP, for example:
+  http://$(hostname -I | awk '{print $1}'):5173
 EOF

@@ -120,7 +120,7 @@ systemctl --user enable --now edison.target
 This activates:
 
 - `edison-api.service`: FastAPI core API on `http://127.0.0.1:8000`.
-- `edison-web.service`: built web workbench preview on `http://127.0.0.1:5173`.
+- `edison-web.service`: built web workbench preview on port `5173`, bound to the workstation LAN interface.
 - `edison.target`: starts and stops both services together.
 
 Useful service commands:
@@ -132,6 +132,14 @@ journalctl --user -u edison-api.service -u edison-web.service -f
 systemctl --user restart edison.target
 systemctl --user stop edison.target
 ```
+
+For a workstation with NVIDIA GPUs, install optional root-level fan services after the NVIDIA driver, `nvidia-smi`, `nvidia-settings`, and Xorg are available:
+
+```bash
+sudo bash scripts/install-gpu-fan-services.sh
+```
+
+This creates a headless NVIDIA control display on `:99`, enables Coolbits, and reapplies conservative fan targets at boot. Edit `/etc/default/edison-gpu-fans` for machine-specific fan target percentages.
 
 To allow the user services to start at boot even before an interactive login session:
 

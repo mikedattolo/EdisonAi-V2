@@ -97,7 +97,7 @@ Activate Edison:
 systemctl --user enable --now edison.target
 ```
 
-Open the workbench at `http://127.0.0.1:5173`. The API is available at `http://127.0.0.1:8000`.
+Open the workbench at `http://127.0.0.1:5173` on the workstation, or `http://<workstation-lan-ip>:5173` from another trusted LAN device. The API remains available locally at `http://127.0.0.1:8000`.
 
 If the workstation is remote, open the forwarded `5173` URL or route it through your private reverse proxy/Tailscale URL.
 
@@ -214,7 +214,7 @@ Then open `http://localhost:5173` in a browser.
 
 For remote environments, use the forwarded port `5173` URL from VS Code instead.
 
-When running through `edison-web.service`, the service uses `npm run preview` on `http://127.0.0.1:5173` and proxies `/api` and `/health` to the local API service.
+When running through `edison-web.service`, the service uses `npm run preview` bound to `0.0.0.0:5173` and proxies `/api` and `/health` to the local API service.
 
 For deployment, serve `apps/web/dist` from a reverse proxy and proxy `/api` to `http://127.0.0.1:8000`. Keep the API bound to localhost unless you are intentionally exposing it on a private interface.
 
@@ -239,7 +239,15 @@ edison-v2.localhost {
 
 The System page includes an MSI Afterburner-style multi-GPU fan panel. By default it runs in monitor mode: it reads `nvidia-smi` telemetry, accepts policies through the API, and reports that hardware writes are disabled.
 
-To allow hardware fan writes, the host must support `nvidia-settings` fan control. This usually requires desktop/Xorg access and NVIDIA Coolbits configuration. After validating that manual fan writes work outside Edison, opt in:
+To allow hardware fan writes, the host must support `nvidia-settings` fan control. On a headless NVIDIA workstation, install the optional root-level fan services after the NVIDIA driver stack is installed:
+
+```bash
+sudo bash scripts/install-gpu-fan-services.sh
+```
+
+The installer creates a headless Xorg control display on `:99`, generates `/etc/X11/xorg.conf` with Coolbits enabled, installs `edison-gpu-xorg.service`, `edison-gpu-fans.service`, and `edison-gpu-fans.timer`, and writes default fan targets to `/etc/default/edison-gpu-fans`. The reference three-GPU Edison workstation exposes five NVIDIA fan targets and uses `35 35 35 50 50` so the RTX 3090 fans reliably spin from cold idle.
+
+After validating that manual fan writes work outside Edison, opt in:
 
 ```toml
 [hardware]

@@ -6,7 +6,7 @@ Wants=edison-api.service
 [Service]
 Type=simple
 WorkingDirectory=@EDISON_HOME@/apps/web
-ExecStart=/usr/bin/env npm run preview -- --host 127.0.0.1 --port 5173
+ExecStart=/usr/bin/env npm run preview -- --host 0.0.0.0 --port 5173
 Restart=on-failure
 RestartSec=5
 

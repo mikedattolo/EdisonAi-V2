@@ -1,0 +1,17 @@
+[Unit]
+Description=Edison GPU headless NVIDIA control Xorg
+After=multi-user.target nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+ConditionPathExists=/etc/X11/xorg.conf
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/edison-gpu-fans
+ExecStartPre=/usr/bin/rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+ExecStart=/usr/bin/Xorg :99 -config /etc/X11/xorg.conf -noreset -nolisten tcp -logfile /var/log/Xorg.99.log vt8
+ExecStartPost=/usr/local/sbin/edison-set-gpu-fans
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

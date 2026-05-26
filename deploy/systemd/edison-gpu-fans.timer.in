@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically reapply Edison GPU fan speeds
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=5min
+Unit=edison-gpu-fans.service
+
+[Install]
+WantedBy=timers.target
