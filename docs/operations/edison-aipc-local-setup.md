@@ -53,6 +53,37 @@ Verify all GPU fans after driver or hardware changes:
 nvidia-smi --query-gpu=index,name,temperature.gpu,fan.speed,power.draw,utilization.gpu --format=csv
 ```
 
+## ComfyUI Media Backend
+
+ComfyUI is installed outside the repository at:
+
+```text
+/srv/edison-data/comfyui/ComfyUI
+```
+
+It runs in its own Python virtual environment and listens on Edison's configured
+media adapter URL:
+
+```text
+http://127.0.0.1:8188
+```
+
+Keep the user service enabled:
+
+```bash
+systemctl --user status edison-comfyui.service --no-pager
+```
+
+Generated images are written to `/srv/edison-data/artifacts/comfyui`, and ComfyUI
+temporary files are written to `/srv/edison-data/tmp/comfyui`.
+
+The first local checkpoint installed for smoke testing and basic image
+generation is:
+
+```text
+/srv/edison-data/comfyui/ComfyUI/models/checkpoints/sd_xl_base_1.0.safetensors
+```
+
 ## Ollama Runtime
 
 Ollama is the local OpenAI-compatible runtime for Edison chat and model lanes.
