@@ -166,6 +166,17 @@ Its downloaded model weights live under:
 Modly generation is image-to-3D. It expects an image input and returns a mesh
 artifact through `/generate/from-image`.
 
+The first Modly generation may look stuck while the background-removal model is
+downloaded and cached. After that one-time setup, progress should move through
+background removal and shape generation.
+
+## Image Quality Defaults
+
+Edison chat image jobs use the ComfyUI SDXL path by default with 1024x1024
+output, 30 steps, `dpmpp_2m`, `karras`, CFG `6.5`, prompt enhancement, and a
+stronger negative prompt. Lower these values in job metadata when speed matters
+more than quality.
+
 ## Ollama Runtime
 
 Ollama is the local OpenAI-compatible runtime for Edison chat and model lanes.
@@ -186,16 +197,16 @@ The runtime model aliases used on this workstation are:
 
 ```text
 local-fast-chat       -> qwen2.5:7b
-local-general-chat    -> qwen2.5-coder:32b
+local-general-chat    -> qwen3:30b
 local-coding          -> qwen2.5-coder:32b
-local-reasoning       -> qwen2.5-coder:32b
+local-reasoning       -> qwen3:30b
 local-vision          -> qwen2.5vl:7b
 local-embeddings      -> bge-m3
 ```
 
-The 32B lane is the practical heavy model for the 24 GB RTX 3090 plus two 16 GB
-GPUs. Larger 70B-class models should be treated as optional experiments rather
-than the default workstation lane.
+Qwen3 30B is the default general/reasoning lane for stronger everyday answers.
+Qwen 2.5 Coder 32B remains the coding lane. Larger 70B-class models should be
+treated as optional experiments rather than the default workstation lane.
 
 ## Edison Local Config
 
@@ -226,6 +237,9 @@ render progressively instead of waiting for the full response body. Completed
 media jobs can be delivered back into a conversation with
 `/api/v1/media/jobs/{job_id}/deliver`; the web UI renders attached artifacts as
 preview cards inside the assistant message.
+
+The model gateway prepends an Edison system prompt for more polished answers and
+filters private `<think>` traces before responses reach the chat UI.
 
 ## Starter Knowledge
 

@@ -1,7 +1,7 @@
 import httpx
 
 from edison_core.schemas import ChatMode, InferenceRequest, ModelCapability, ModelProfile, ModelStatus
-from edison_core.services.model_gateway import ModelGateway
+from edison_core.services.model_gateway import ModelGateway, ReasoningTraceFilter
 from edison_core.services.model_registry import ModelRegistry, ModelRouter
 
 
@@ -73,3 +73,48 @@ def test_gateway_calls_openai_compatible_chat_endpoint():
     assert response.model_id == "ready-chat"
     assert response.content == "Local response online."
     assert response.metadata["usage"] == {"prompt_tokens": 4, "completion_tokens": 3}
+
+
+def test_gateway_strips_reasoning_tags_from_chat_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "ready-chat",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "<think>private scratch</think>\n\nVisible answer."},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    registry = ModelRegistry(
+        [
+            ModelProfile(
+                id="ready-chat",
+                display_name="Ready Chat",
+                provider="local-openai-compatible",
+                status=ModelStatus.READY,
+                capabilities=[ModelCapability.CHAT],
+                endpoint_url="http://model.test/v1",
+            )
+        ]
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    _selection, response = ModelGateway(ModelRouter(registry), http_client=client).complete(
+        InferenceRequest(prompt="Answer cleanly", mode=ChatMode.CHAT)
+    )
+
+    assert response.content == "Visible answer."
+
+
+def test_reasoning_trace_filter_handles_split_stream_tags():
+    filter_ = ReasoningTraceFilter()
+
+    chunks = ["<thi", "nk>hidden", " text</think>\nFinal", " answer."]
+    visible = "".join(filter_.feed(chunk) for chunk in chunks) + filter_.flush()
+
+    assert visible.strip() == "Final answer."

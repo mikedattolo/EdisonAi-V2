@@ -26,8 +26,9 @@ import {
   Sparkles,
   Video,
   Waypoints,
+  X,
 } from 'lucide-react';
-import { CSSProperties, FormEvent, useEffect, useMemo, useState } from 'react';
+import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { edisonApi } from './api';
 import type {
@@ -449,13 +450,17 @@ export default function App() {
         deliver_to_chat: true,
         source_artifact_id: sourceArtifact?.id ?? null,
         model_id: jobType === 'mesh' ? 'hunyuan3d-mini-fast/generate' : undefined,
-        width: 768,
-        height: 768,
-        steps: 12,
+        width: 1024,
+        height: 1024,
+        steps: 30,
+        cfg: 6.5,
+        sampler_name: 'dpmpp_2m',
+        scheduler: 'karras',
+        enhance_prompt: true,
       },
     });
     const statusLine = mediaJobStatusLine(job);
-    await edisonApi.addMessage(conversation.id, {
+    const statusMessage = await edisonApi.addMessage(conversation.id, {
       role: 'assistant',
       content: statusLine,
       model: job.backend,
@@ -469,7 +474,7 @@ export default function App() {
     setConversations(await edisonApi.listConversations());
     await refreshMediaSurface();
     if (['queued', 'loading', 'generating', 'encoding'].includes(job.status)) {
-      void pollMediaJobForChat(job.id, conversation.id);
+      void pollMediaJobForChat(job.id, conversation.id, statusMessage.id);
     }
   }
 
@@ -486,11 +491,14 @@ export default function App() {
     return created;
   }
 
-  async function pollMediaJobForChat(jobId: string, conversationId: string) {
-    for (let attempt = 0; attempt < 24; attempt += 1) {
+  async function pollMediaJobForChat(jobId: string, conversationId: string, statusMessageId?: string) {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
       await sleep(2500);
       try {
         const synced = await edisonApi.syncMediaJob(jobId);
+        if (statusMessageId) {
+          setActiveConversation((current) => updateMediaStatusMessage(current, statusMessageId, synced));
+        }
         if (synced.status === 'complete' && synced.result_artifact_id) {
           await edisonApi.deliverMediaJob(synced.id, conversationId);
           setActiveConversation(await edisonApi.getConversation(conversationId));
@@ -498,6 +506,16 @@ export default function App() {
           return;
         }
         if (['error', 'cancelled', 'setup_required'].includes(synced.status)) {
+          await edisonApi.addMessage(conversationId, {
+            role: 'assistant',
+            content: mediaJobFailureLine(synced),
+            model: synced.backend,
+            metadata: {
+              delivery_type: 'media_job_error',
+              media_job: synced,
+            },
+          });
+          setActiveConversation(await edisonApi.getConversation(conversationId));
           await refreshMediaSurface();
           return;
         }
@@ -624,7 +642,16 @@ export default function App() {
         job_type: jobType,
         title,
         prompt,
-        metadata: { source: 'media-studio-readiness-check' },
+        metadata: {
+          source: 'media-studio-readiness-check',
+          width: 1024,
+          height: 1024,
+          steps: jobType === 'image' ? 30 : undefined,
+          cfg: jobType === 'image' ? 6.5 : undefined,
+          sampler_name: jobType === 'image' ? 'dpmpp_2m' : undefined,
+          scheduler: jobType === 'image' ? 'karras' : undefined,
+          enhance_prompt: jobType === 'image',
+        },
       });
       await refreshMediaSurface();
     } catch (caught) {
@@ -1152,11 +1179,17 @@ function ChatView({
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
 }) {
   const selectedModelName = modelSelection?.model.display_name ?? 'Model lane';
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const lastMessage = activeConversation?.messages[activeConversation.messages.length - 1];
   const contextSummary = chatContextPaths.length > 0
     ? `${chatContextPaths.length} focus file${chatContextPaths.length === 1 ? '' : 's'}`
     : chatWorkspacePath.trim()
       ? 'Target file set'
       : 'Add repo context';
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [activeConversation?.id, activeConversation?.messages.length, lastMessage?.content, isSending]);
 
   function useSuggestion(prompt: string) {
     setComposer(composer.trim() ? `${composer.trim()}\n\n${prompt}` : prompt);
@@ -1275,7 +1308,7 @@ function ChatView({
                     removeChatContextPath(path);
                   }}
                 >
-                  ×
+                  <X size={13} />
                 </strong>
               </button>
             ))}
@@ -1409,6 +1442,7 @@ function ChatView({
             </div>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </section>
 
       {recentArtifacts.length > 0 && (
@@ -1467,8 +1501,16 @@ function ChatView({
 function MessageContent({ content, metadata }: { content: string; metadata: Record<string, unknown> }) {
   const blocks = parseMessageBlocks(content);
   const artifacts = artifactsFromMetadata(metadata);
+  const mediaJob = mediaJobFromMetadata(metadata);
   return (
     <div className="message-content">
+      {blocks.length === 0 && artifacts.length === 0 && !mediaJob && (
+        <div className="typing-indicator" aria-label="Edison is responding">
+          <span />
+          <span />
+          <span />
+        </div>
+      )}
       {blocks.map((block, index) => {
         if (block.kind === 'code') {
           return (
@@ -1493,6 +1535,7 @@ function MessageContent({ content, metadata }: { content: string; metadata: Reco
         }
         return null;
       })}
+      {mediaJob && <MediaJobInlineCard job={mediaJob} />}
       {artifacts.length > 0 && (
         <div className="message-artifacts">
           {artifacts.map((artifact) => {
@@ -1512,6 +1555,26 @@ function MessageContent({ content, metadata }: { content: string; metadata: Reco
               </article>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MediaJobInlineCard({ job }: { job: JobRecord }) {
+  const progress = jobProgress(job);
+  const step = typeof job.metadata.step === 'string' ? job.metadata.step : null;
+  return (
+    <div className="message-job-card">
+      <div>
+        <strong>{job.title}</strong>
+        <span>{job.backend} / {job.job_type.replace('_', ' ')}</span>
+      </div>
+      <span className={`job-status ${job.status}`}>{job.status.replace('_', ' ')}</span>
+      {(progress !== null || step) && (
+        <div className="message-job-progress">
+          {progress !== null && <progress max={100} value={progress} />}
+          <span>{step ?? `${progress}% complete`}</span>
         </div>
       )}
     </div>
@@ -2614,6 +2677,55 @@ function artifactsFromMetadata(metadata: Record<string, unknown>): ArtifactRecor
   });
 }
 
+function mediaJobFromMetadata(metadata: Record<string, unknown>): JobRecord | null {
+  const rawJob = metadata.media_job;
+  if (!rawJob || typeof rawJob !== 'object') {
+    return null;
+  }
+  const candidate = rawJob as Partial<JobRecord>;
+  if (!candidate.id || !candidate.title || !candidate.job_type || !candidate.status) {
+    return null;
+  }
+  return {
+    id: String(candidate.id),
+    job_type: candidate.job_type,
+    status: candidate.status,
+    title: String(candidate.title),
+    prompt: candidate.prompt ?? null,
+    backend: String(candidate.backend ?? 'media'),
+    source_artifact_id: candidate.source_artifact_id ?? null,
+    result_artifact_id: candidate.result_artifact_id ?? null,
+    metadata: candidate.metadata ?? {},
+    created_at: String(candidate.created_at ?? ''),
+    updated_at: String(candidate.updated_at ?? ''),
+  } as JobRecord;
+}
+
+function updateMediaStatusMessage(
+  current: ConversationWithMessages | null,
+  messageId: string,
+  job: JobRecord,
+): ConversationWithMessages | null {
+  if (!current) {
+    return current;
+  }
+  return {
+    ...current,
+    messages: current.messages.map((message) => (
+      message.id === messageId
+        ? {
+            ...message,
+            content: mediaJobStatusLine(job),
+            metadata: {
+              ...message.metadata,
+              media_job: job,
+            },
+          }
+        : message
+    )),
+  };
+}
+
 function latestImageArtifactFromConversation(conversation: ConversationWithMessages | null): ArtifactRecord | null {
   const messages = conversation?.messages ?? [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -2644,13 +2756,35 @@ function mediaJobTitle(content: string, jobType: JobType) {
 }
 
 function mediaJobStatusLine(job: JobRecord) {
+  const progress = jobProgress(job);
+  const step = typeof job.metadata.step === 'string' ? job.metadata.step : null;
   if (job.status === 'setup_required') {
     return `${job.backend} needs setup before I can generate that ${job.job_type} result. I created the job and kept it visible in Media Studio.`;
   }
   if (job.status === 'complete') {
     return `Done. I generated the ${job.job_type} result.`;
   }
-  return `I started a ${job.job_type} job with ${job.backend}. I will add the result here when it finishes.`;
+  if (job.status === 'error') {
+    return mediaJobFailureLine(job);
+  }
+  const progressText = progress !== null ? ` (${progress}%)` : '';
+  const stepText = step ? ` ${step}` : '';
+  return `Working on a ${job.job_type.replace('_', ' ')} job with ${job.backend}.${progressText}${stepText} I will add the result here when it finishes.`;
+}
+
+function mediaJobFailureLine(job: JobRecord) {
+  const detail = typeof job.metadata.error === 'string'
+    ? job.metadata.error.split('\n')[0]
+    : 'The backend returned an error before producing an artifact.';
+  return `${job.backend} could not finish that ${job.job_type.replace('_', ' ')} job. ${detail}`;
+}
+
+function jobProgress(job: JobRecord): number | null {
+  const value = job.metadata.progress;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+  return null;
 }
 
 function conversationTitle(message: string) {

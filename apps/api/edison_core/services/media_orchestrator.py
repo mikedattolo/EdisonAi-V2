@@ -477,14 +477,17 @@ def _default_sdxl_workflow(payload: JobCreate) -> dict[str, Any]:
     metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
     checkpoint = str(metadata.get("checkpoint") or "sd_xl_base_1.0.safetensors")
     prompt = (payload.prompt or payload.title or "A clean Edison image generation").strip()
+    positive_prompt = _enhanced_image_prompt(prompt, metadata)
     negative_prompt = str(
         metadata.get("negative_prompt")
-        or "low quality, blurry, distorted, watermark, text artifacts"
+        or "low quality, blurry, distorted, deformed, extra fingers, bad hands, bad anatomy, duplicate subject, cropped subject, watermark, signature, text artifacts"
     )
-    width = _int_metadata(metadata, "width", 768, minimum=256, maximum=1536)
-    height = _int_metadata(metadata, "height", 768, minimum=256, maximum=1536)
-    steps = _int_metadata(metadata, "steps", 12, minimum=1, maximum=60)
-    cfg = _float_metadata(metadata, "cfg", 6.0, minimum=1.0, maximum=20.0)
+    width = _int_metadata(metadata, "width", 1024, minimum=256, maximum=1536)
+    height = _int_metadata(metadata, "height", 1024, minimum=256, maximum=1536)
+    steps = _int_metadata(metadata, "steps", 30, minimum=1, maximum=60)
+    cfg = _float_metadata(metadata, "cfg", 6.5, minimum=1.0, maximum=20.0)
+    sampler_name = str(metadata.get("sampler_name") or "dpmpp_2m")
+    scheduler = str(metadata.get("scheduler") or "karras")
     seed = _int_metadata(metadata, "seed", random.randint(1, 2**31 - 1), minimum=0, maximum=2**63 - 1)
     filename_prefix = str(metadata.get("filename_prefix") or "edison_chat_image")
 
@@ -495,8 +498,8 @@ def _default_sdxl_workflow(payload: JobCreate) -> dict[str, Any]:
                 "seed": seed,
                 "steps": steps,
                 "cfg": cfg,
-                "sampler_name": "euler",
-                "scheduler": "normal",
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
                 "denoise": 1.0,
                 "model": ["4", 0],
                 "positive": ["6", 0],
@@ -514,7 +517,7 @@ def _default_sdxl_workflow(payload: JobCreate) -> dict[str, Any]:
         },
         "6": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"text": prompt, "clip": ["4", 1]},
+            "inputs": {"text": positive_prompt, "clip": ["4", 1]},
         },
         "7": {
             "class_type": "CLIPTextEncode",
@@ -529,6 +532,21 @@ def _default_sdxl_workflow(payload: JobCreate) -> dict[str, Any]:
             "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
         },
     }
+
+
+def _enhanced_image_prompt(prompt: str, metadata: dict[str, Any]) -> str:
+    if metadata.get("enhance_prompt") is False:
+        return prompt
+    clean = " ".join(prompt.split())
+    if len(clean) > 260:
+        return clean
+    quality_suffix = (
+        "high quality, coherent composition, clear subject, detailed but natural, "
+        "balanced lighting, crisp focus, professional color grading"
+    )
+    if any(token in clean.lower() for token in ("photoreal", "cinematic", "illustration", "3d render", "logo")):
+        return f"{clean}, {quality_suffix}"
+    return f"{clean}, polished concept art, {quality_suffix}"
 
 
 def _int_metadata(
