@@ -941,6 +941,18 @@ button {
   margin-left: auto;
 }
 
+.view-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.view-heading .view-actions .secondary-button {
+  margin-left: 0;
+}
+
 .view-heading h3 {
   margin: 0;
   font-size: 1.22rem;
@@ -1092,6 +1104,216 @@ button {
 
 .source-library {
   margin-bottom: 8px;
+}
+
+.compare-view {
+  gap: 16px;
+}
+
+.compare-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.compare-control-panel,
+.compare-results-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.compare-control-panel {
+  align-content: start;
+}
+
+.compare-control-panel label {
+  color: #566276;
+  font-size: 0.82rem;
+  font-weight: 780;
+}
+
+.compare-control-panel textarea {
+  width: 100%;
+  min-height: 150px;
+  max-height: 320px;
+  resize: vertical;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  padding: 10px;
+  color: #202a38;
+}
+
+.compare-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.compare-toggle-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #d7dfe8;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #344255;
+}
+
+.compare-model-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.compare-model-row {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-height: 56px;
+  padding: 9px 10px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  background: #fbfcfd;
+  color: #26313f;
+  text-align: left;
+}
+
+.compare-model-row.active {
+  border-color: #80cbb9;
+  background: #effaf6;
+}
+
+.compare-model-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.compare-model-row span {
+  font-weight: 760;
+}
+
+.compare-model-row small {
+  color: #667386;
+  font-size: 0.78rem;
+}
+
+.compare-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 360px;
+  color: #687386;
+  text-align: center;
+}
+
+.compare-empty strong {
+  color: #1f2937;
+}
+
+.compare-result-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.compare-result-card {
+  display: grid;
+  grid-template-rows: auto minmax(180px, 1fr) auto;
+  min-width: 0;
+  min-height: 340px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.compare-synthesis-card {
+  display: grid;
+  grid-template-rows: auto minmax(160px, auto) auto;
+  min-width: 0;
+  border: 1px solid #b7d6ca;
+  border-radius: 8px;
+  background: #f8fffc;
+}
+
+.compare-result-header,
+.compare-result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+}
+
+.compare-result-header {
+  border-bottom: 1px solid #e1e6ed;
+}
+
+.compare-result-header div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.compare-result-header strong,
+.compare-result-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-result-header span,
+.compare-result-footer span {
+  color: #687386;
+  font-size: 0.8rem;
+}
+
+.compare-result-body {
+  min-width: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.compare-status {
+  min-width: 76px;
+  padding: 4px 7px;
+  border-radius: 8px;
+  background: #eef1f5;
+  color: #586274;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.compare-status.streaming {
+  background: #e7f2ff;
+  color: #24568f;
+}
+
+.compare-status.done {
+  background: #dcf6ee;
+  color: #176a58;
+}
+
+.compare-status.error,
+.compare-run-error {
+  background: #fff0df;
+  color: #8f4b13;
+}
+
+.compare-run-error {
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 0.84rem;
 }
 
 .fan-control-panel,
@@ -2838,7 +3060,9 @@ button {
   }
 
   .memory-metric-row,
-  .memory-grid {
+  .memory-grid,
+  .compare-shell,
+  .compare-result-grid {
     grid-template-columns: 1fr;
   }
 }

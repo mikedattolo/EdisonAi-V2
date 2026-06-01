@@ -33,13 +33,14 @@ Added in this integration pass:
 - Assistant message source rendering so knowledge matches show as collapsible, reload-safe source panels instead of invisible metadata.
 - Richer knowledge metadata in chat responses, including source URI, path, score, and snippet.
 - Better local keyword ranking with phrase/title bonuses and stored chunk paths.
+- A Compare workspace that sends one prompt to multiple ready chat model lanes in parallel, streams answers side-by-side, supports blind labels, optional RAG, synthesizes winners/misses, and links each result back to its saved chat.
 
 Next high-value ports:
 
 - Vector retrieval using the existing `local-embeddings` lane, with keyword fallback.
 - File upload ingestion for PDFs, Office docs, CSVs, and images with OCR/VLM summaries.
 - Deep Research jobs with progress events, source library persistence, report export, and chat spinoff.
-- Compare mode for local model lanes and search synthesis.
+- Search provider comparison and synthesis.
 - Notes/tasks/calendar primitives that the agent can reference and act on.
 - Cookbook hardware-aware model recommendations linked to Edison’s installed GPUs and storage layout.
 

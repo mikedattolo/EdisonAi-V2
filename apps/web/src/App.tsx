@@ -68,9 +68,22 @@ import type {
 
 const SESSION_ID = 'local-workbench';
 
-type ViewId = 'chat' | 'agent' | 'code' | 'media' | 'memory' | 'system' | 'settings';
+type ViewId = 'chat' | 'agent' | 'compare' | 'code' | 'media' | 'memory' | 'system' | 'settings';
 type IconType = typeof MessageSquare;
 type ContextFilter = 'all' | 'instructions' | 'index' | 'warnings';
+type CompareStatus = 'idle' | 'streaming' | 'done' | 'error';
+
+type CompareRun = {
+  id: string;
+  modelId: string;
+  displayName: string;
+  status: CompareStatus;
+  content: string;
+  conversationId?: string;
+  error?: string;
+  startedAt: number;
+  finishedAt?: number;
+};
 
 const CONTEXT_VISIBILITY_STORAGE_KEY = 'edison-chat-context-visible';
 const CONTEXT_FILTER_STORAGE_KEY = 'edison-chat-context-filter';
@@ -95,6 +108,7 @@ const modes: Array<{ value: ChatMode; label: string; description: string }> = [
 const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'agent', label: 'Agent', icon: Waypoints },
+  { id: 'compare', label: 'Compare', icon: Network },
   { id: 'code', label: 'Code Space', icon: Code2 },
   { id: 'media', label: 'Media', icon: GalleryHorizontalEnd },
   { id: 'memory', label: 'Memory', icon: Brain },
@@ -1195,6 +1209,10 @@ export default function App() {
             mediaStatus={mediaStatus}
             models={models}
             onCreateMediaJob={createMediaReadinessJob}
+            onOpenCompareConversation={loadConversation}
+            onRefreshConversations={async () => {
+              setConversations(await edisonApi.listConversations());
+            }}
             onIngestKnowledgeLocal={ingestKnowledgeLocal}
             onIngestKnowledgePreset={ingestKnowledgePreset}
             onIngestKnowledgeText={ingestKnowledgeText}
@@ -1996,6 +2014,8 @@ function WorkbenchView({
   mediaStatus,
   models,
   onCreateMediaJob,
+  onOpenCompareConversation,
+  onRefreshConversations,
   onIngestKnowledgeLocal,
   onIngestKnowledgePreset,
   onIngestKnowledgeText,
@@ -2047,6 +2067,8 @@ function WorkbenchView({
   mediaStatus: MediaSystemStatus | null;
   models: ModelProfile[];
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
+  onOpenCompareConversation: (conversationId: string) => Promise<void>;
+  onRefreshConversations: () => Promise<void>;
   onIngestKnowledgeLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
   onIngestKnowledgePreset: (preset: 'coding-core' | 'ai-foundations') => Promise<void>;
   onIngestKnowledgeText: (payload: { title: string; text: string; uri?: string }) => Promise<void>;
@@ -2084,6 +2106,15 @@ function WorkbenchView({
 }) {
   if (activeView === 'agent') {
     return <FeatureView icon={Waypoints} title="Agent Workspace" items={agentItems()} />;
+  }
+  if (activeView === 'compare') {
+    return (
+      <CompareView
+        models={models}
+        onOpenConversation={onOpenCompareConversation}
+        onRefreshConversations={onRefreshConversations}
+      />
+    );
   }
   if (activeView === 'code') {
     return (
@@ -2174,6 +2205,414 @@ function FeatureView({ icon: Icon, title, items }: { icon: IconType; title: stri
             <p>{body}</p>
           </article>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function CompareView({
+  models,
+  onOpenConversation,
+  onRefreshConversations,
+}: {
+  models: ModelProfile[];
+  onOpenConversation: (conversationId: string) => Promise<void>;
+  onRefreshConversations: () => Promise<void>;
+}) {
+  const chatModels = useMemo(
+    () => models.filter((model) => model.capabilities.includes('chat')),
+    [models],
+  );
+  const readyChatModels = useMemo(
+    () => chatModels.filter((model) => model.status === 'ready'),
+    [chatModels],
+  );
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [prompt, setPrompt] = useState('');
+  const [blindMode, setBlindMode] = useState(false);
+  const [includeKnowledge, setIncludeKnowledge] = useState(true);
+  const [runs, setRuns] = useState<CompareRun[]>([]);
+  const [synthesisRun, setSynthesisRun] = useState<CompareRun | null>(null);
+  const [isComparing, setIsComparing] = useState(false);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedModelIds.length > 0 || readyChatModels.length === 0) {
+      return;
+    }
+    setSelectedModelIds(readyChatModels.slice(0, 4).map((model) => model.id));
+  }, [readyChatModels, selectedModelIds.length]);
+
+  function toggleModel(modelId: string) {
+    setSelectedModelIds((current) => {
+      if (current.includes(modelId)) {
+        return current.filter((id) => id !== modelId);
+      }
+      return [...current, modelId].slice(0, 8);
+    });
+  }
+
+  async function runCompare() {
+    const content = prompt.trim();
+    const selectedModels = selectedModelIds
+      .map((modelId) => readyChatModels.find((model) => model.id === modelId))
+      .filter((model): model is ModelProfile => Boolean(model));
+    if (isComparing) {
+      return;
+    }
+    if (!content) {
+      setCompareError('Enter a prompt to compare.');
+      return;
+    }
+    if (selectedModels.length === 0) {
+      setCompareError('Select at least one ready chat model.');
+      return;
+    }
+
+    const startedAt = Date.now();
+    setCompareError(null);
+    setIsComparing(true);
+    setSynthesisRun(null);
+    setRuns(selectedModels.map((model) => ({
+      id: `${model.id}-${startedAt}`,
+      modelId: model.id,
+      displayName: model.display_name,
+      status: 'streaming',
+      content: '',
+      startedAt,
+    })));
+
+    try {
+      await Promise.all(selectedModels.map(async (model) => {
+        let streamedContent = '';
+        try {
+          const response = await edisonApi.streamChatTurn({
+            conversation_id: null,
+            message: content,
+            mode: 'chat',
+            preferred_model: model.id,
+            memory_enabled: true,
+            include_workspace_context: false,
+            include_knowledge_context: includeKnowledge,
+            max_knowledge_context_matches: includeKnowledge ? 5 : 1,
+          }, {
+            onStart: (event) => {
+              setRuns((current) => current.map((run) => (
+                run.modelId === model.id ? { ...run, conversationId: event.conversation_id } : run
+              )));
+            },
+            onToken: (delta) => {
+              streamedContent += delta;
+              setRuns((current) => current.map((run) => (
+                run.modelId === model.id ? { ...run, content: streamedContent } : run
+              )));
+            },
+            onError: (detail) => {
+              setRuns((current) => current.map((run) => (
+                run.modelId === model.id ? { ...run, status: 'error', error: detail, finishedAt: Date.now() } : run
+              )));
+            },
+          });
+          setRuns((current) => current.map((run) => (
+            run.modelId === model.id
+              ? {
+                  ...run,
+                  status: response.inference.finish_reason === 'error' ? 'error' : 'done',
+                  content: response.assistant_message.content,
+                  conversationId: response.conversation.id,
+                  error: response.inference.finish_reason === 'error' ? response.inference.content : undefined,
+                  finishedAt: Date.now(),
+                }
+              : run
+          )));
+        } catch (caught) {
+          setRuns((current) => current.map((run) => (
+            run.modelId === model.id
+              ? {
+                  ...run,
+                  status: 'error',
+                  error: caught instanceof Error ? caught.message : 'Compare run failed',
+                  finishedAt: Date.now(),
+                }
+              : run
+          )));
+        }
+      }));
+      await onRefreshConversations();
+    } catch (caught) {
+      setCompareError(caught instanceof Error ? caught.message : 'Compare refresh failed');
+    } finally {
+      setIsComparing(false);
+    }
+  }
+
+  async function runSynthesis() {
+    const completedRuns = runs.filter((run) => run.status === 'done' && run.content.trim());
+    const synthesisModel = readyChatModels.find((model) => selectedModelIds.includes(model.id)) ?? readyChatModels[0];
+    if (isSynthesizing) {
+      return;
+    }
+    if (completedRuns.length < 2) {
+      setCompareError('Run at least two successful model responses before synthesizing.');
+      return;
+    }
+    if (!synthesisModel) {
+      setCompareError('No ready chat model is available for synthesis.');
+      return;
+    }
+
+    const startedAt = Date.now();
+    const synthesisId = `synthesis-${startedAt}`;
+    const synthesisPrompt = [
+      'You are Edison reviewing a side-by-side AI model comparison.',
+      'Produce a concise decision report with: winner, why, notable misses, best use case for each answer, and a final merged answer when useful.',
+      `Original prompt:\n${prompt.trim()}`,
+      'Model responses:',
+      completedRuns.map((run, index) => {
+        const label = blindMode ? `Model ${index + 1}` : `${run.displayName} (${run.modelId})`;
+        return `### ${label}\n${run.content.trim()}`;
+      }).join('\n\n'),
+    ].join('\n\n');
+
+    let streamedContent = '';
+    setCompareError(null);
+    setIsSynthesizing(true);
+    setSynthesisRun({
+      id: synthesisId,
+      modelId: synthesisModel.id,
+      displayName: 'Synthesis',
+      status: 'streaming',
+      content: '',
+      startedAt,
+    });
+
+    try {
+      const response = await edisonApi.streamChatTurn({
+        conversation_id: null,
+        message: synthesisPrompt,
+        mode: 'reasoning',
+        preferred_model: synthesisModel.id,
+        memory_enabled: true,
+        include_workspace_context: false,
+        include_knowledge_context: false,
+        max_knowledge_context_matches: 1,
+      }, {
+        onStart: (event) => {
+          setSynthesisRun((current) => (
+            current?.id === synthesisId ? { ...current, conversationId: event.conversation_id } : current
+          ));
+        },
+        onToken: (delta) => {
+          streamedContent += delta;
+          setSynthesisRun((current) => (
+            current?.id === synthesisId ? { ...current, content: streamedContent } : current
+          ));
+        },
+        onError: (detail) => {
+          setSynthesisRun((current) => (
+            current?.id === synthesisId ? { ...current, status: 'error', error: detail, finishedAt: Date.now() } : current
+          ));
+        },
+      });
+      setSynthesisRun((current) => (
+        current?.id === synthesisId
+          ? {
+              ...current,
+              status: response.inference.finish_reason === 'error' ? 'error' : 'done',
+              content: response.assistant_message.content,
+              conversationId: response.conversation.id,
+              error: response.inference.finish_reason === 'error' ? response.inference.content : undefined,
+              finishedAt: Date.now(),
+            }
+          : current
+      ));
+      await onRefreshConversations();
+    } catch (caught) {
+      setSynthesisRun((current) => (
+        current?.id === synthesisId
+          ? {
+              ...current,
+              status: 'error',
+              error: caught instanceof Error ? caught.message : 'Synthesis failed',
+              finishedAt: Date.now(),
+            }
+          : current
+      ));
+    } finally {
+      setIsSynthesizing(false);
+    }
+  }
+
+  const selectedCount = selectedModelIds.filter((modelId) => readyChatModels.some((model) => model.id === modelId)).length;
+  const canSynthesize = runs.filter((run) => run.status === 'done' && run.content.trim()).length >= 2
+    && !isComparing
+    && !isSynthesizing;
+
+  return (
+    <section className="workbench-view compare-view" aria-label="Model Compare">
+      <div className="view-heading">
+        <Network size={26} />
+        <h3>Compare</h3>
+        <div className="view-actions">
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!canSynthesize}
+            onClick={() => void runSynthesis()}
+            type="button"
+          >
+            <Sparkles size={16} />
+            {isSynthesizing ? 'Synthesizing' : 'Synthesize'}
+          </button>
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!prompt.trim() || selectedCount === 0 || isComparing}
+            onClick={() => void runCompare()}
+            type="button"
+          >
+            <Send size={16} />
+            {isComparing ? 'Running' : 'Run Compare'}
+          </button>
+        </div>
+      </div>
+
+      <div className="compare-shell">
+        <aside className="compare-control-panel" aria-label="Compare controls">
+          <label htmlFor="compare-prompt">Prompt</label>
+          <textarea
+            id="compare-prompt"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Ask every selected model the same question"
+            rows={7}
+          />
+          <div className="compare-toggle-row">
+            <label>
+              <input
+                type="checkbox"
+                checked={blindMode}
+                onChange={(event) => setBlindMode(event.target.checked)}
+              />
+              Blind labels
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={includeKnowledge}
+                onChange={(event) => setIncludeKnowledge(event.target.checked)}
+              />
+              Use RAG
+            </label>
+          </div>
+          <div className="compare-model-list" aria-label="Models to compare">
+            {chatModels.map((model) => {
+              const isSelected = selectedModelIds.includes(model.id);
+              return (
+                <button
+                  className={isSelected ? 'compare-model-row active' : 'compare-model-row'}
+                  disabled={model.status !== 'ready'}
+                  key={model.id}
+                  onClick={() => toggleModel(model.id)}
+                  type="button"
+                >
+                  <span>{model.display_name}</span>
+                  <small>{model.status.replace('_', ' ')} / {model.provider}</small>
+                </button>
+              );
+            })}
+            {chatModels.length === 0 && <div className="empty-line">No chat-capable models registered.</div>}
+          </div>
+          {compareError && <div className="error-banner compact">{compareError}</div>}
+        </aside>
+
+        <section className="compare-results-panel" aria-label="Compare results">
+          {runs.length === 0 ? (
+            <div className="compare-empty">
+              <Network size={30} />
+              <strong>Send one prompt to multiple model lanes.</strong>
+              <span>Results stream side-by-side so you can judge quality, latency, and citation behavior.</span>
+            </div>
+          ) : (
+            <>
+              {synthesisRun && (
+                <article className="compare-synthesis-card">
+                  <div className="compare-result-header">
+                    <div>
+                      <strong>Compare synthesis</strong>
+                      <span>{synthesisRun.modelId}</span>
+                    </div>
+                    <small className={`compare-status ${synthesisRun.status}`}>{synthesisRun.status}</small>
+                  </div>
+                  <div className="compare-result-body">
+                    {synthesisRun.content ? (
+                      <MessageContent content={synthesisRun.content} metadata={{}} />
+                    ) : synthesisRun.status === 'streaming' ? (
+                      <div className="typing-indicator" aria-label="Synthesis is streaming">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    ) : (
+                      <p>{synthesisRun.error ?? 'No synthesis content.'}</p>
+                    )}
+                    {synthesisRun.error && <div className="compare-run-error">{synthesisRun.error}</div>}
+                  </div>
+                  <div className="compare-result-footer">
+                    <span>{formatCompareDuration(synthesisRun)}</span>
+                    {synthesisRun.conversationId && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => void onOpenConversation(synthesisRun.conversationId ?? '')}
+                        type="button"
+                      >
+                        Open Chat
+                      </button>
+                    )}
+                  </div>
+                </article>
+              )}
+              <div className="compare-result-grid">
+                {runs.map((run, index) => (
+                  <article className="compare-result-card" key={run.id}>
+                    <div className="compare-result-header">
+                      <div>
+                        <strong>{blindMode ? `Model ${index + 1}` : run.displayName}</strong>
+                        {!blindMode && <span>{run.modelId}</span>}
+                      </div>
+                      <small className={`compare-status ${run.status}`}>{run.status}</small>
+                    </div>
+                    <div className="compare-result-body">
+                      {run.content ? (
+                        <MessageContent content={run.content} metadata={{}} />
+                      ) : run.status === 'streaming' ? (
+                        <div className="typing-indicator" aria-label="Model is responding">
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                      ) : (
+                        <p>{run.error ?? 'No response content.'}</p>
+                      )}
+                      {run.error && <div className="compare-run-error">{run.error}</div>}
+                    </div>
+                    <div className="compare-result-footer">
+                      <span>{formatCompareDuration(run)}</span>
+                      {run.conversationId && (
+                        <button
+                          className="secondary-button"
+                          onClick={() => void onOpenConversation(run.conversationId ?? '')}
+                          type="button"
+                        >
+                          Open Chat
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
       </div>
     </section>
   );
@@ -3421,6 +3860,13 @@ function formatMaybeNumber(value: number | null | undefined, unit: string) {
     return '--';
   }
   return `${Math.round(value)}${unit}`;
+}
+
+function formatCompareDuration(run: CompareRun) {
+  if (!run.finishedAt) {
+    return run.status === 'streaming' ? 'Streaming' : 'Not started';
+  }
+  return `${((run.finishedAt - run.startedAt) / 1000).toFixed(1)}s`;
 }
 
 function formatDateTime(value: string) {
