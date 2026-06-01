@@ -110,7 +110,7 @@ class KnowledgeStore:
 
         with self.database.connect() as connection:
             self._insert_source(connection, source)
-            self._insert_chunks(connection, source.id, chunks)
+            self._insert_chunks(connection, source.id, chunks, path=_source_path(source))
 
         return source
 
@@ -201,7 +201,8 @@ class KnowledgeStore:
                     chunks.text,
                     chunks.text_lower,
                     sources.title,
-                    sources.kind
+                    sources.kind,
+                    sources.uri
                 FROM knowledge_chunks AS chunks
                 JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
                 ORDER BY sources.updated_at DESC
@@ -209,17 +210,29 @@ class KnowledgeStore:
             ).fetchall()
 
         scored: list[KnowledgeSearchMatch] = []
+        query_lower = " ".join(terms)
         for row in rows:
             text_lower = row["text_lower"]
-            hit_count = sum(text_lower.count(term) for term in terms)
+            title_lower = row["title"].lower()
+            term_hits = {term: text_lower.count(term) for term in terms}
+            hit_count = sum(term_hits.values())
             if hit_count <= 0:
                 continue
-            score = hit_count / max(len(terms), 1)
+            unique_hits = sum(1 for count in term_hits.values() if count > 0)
+            title_hits = sum(1 for term in terms if term in title_lower)
+            phrase_bonus = 2.5 if query_lower and query_lower in text_lower else 0.0
+            score = (
+                (unique_hits / max(len(terms), 1)) * 3.0
+                + min(hit_count, 12) * 0.18
+                + title_hits * 0.35
+                + phrase_bonus
+            )
             scored.append(
                 KnowledgeSearchMatch(
                     source_id=row["source_id"],
                     source_title=row["title"],
                     source_kind=row["kind"],
+                    uri=row["uri"],
                     path=row["path"],
                     score=round(float(score), 4),
                     snippet=_best_snippet(row["text"], terms),
@@ -274,7 +287,13 @@ class KnowledgeStore:
             ),
         )
 
-    def _insert_chunks(self, connection: sqlite3.Connection, source_id: str, chunks: list[str]) -> None:
+    def _insert_chunks(
+        self,
+        connection: sqlite3.Connection,
+        source_id: str,
+        chunks: list[str],
+        path: str | None = None,
+    ) -> None:
         now = utc_now().isoformat()
         for index, chunk in enumerate(chunks):
             connection.execute(
@@ -285,7 +304,7 @@ class KnowledgeStore:
                 (
                     f"kchunk_{uuid4().hex}",
                     source_id,
-                    None,
+                    path,
                     index,
                     chunk,
                     chunk.lower(),
@@ -375,6 +394,15 @@ def _best_snippet(text: str, terms: list[str], max_chars: int = 280) -> str:
     start = max(best_pos - 80, 0)
     snippet = text[start: start + max_chars].strip()
     return snippet if snippet else text[:max_chars].strip()
+
+
+def _source_path(source: KnowledgeSourceRecord) -> str | None:
+    path = source.metadata.get("path")
+    if isinstance(path, str) and path.strip():
+        return path.strip()
+    if source.kind in {"url", "wikipedia"}:
+        return source.uri
+    return None
 
 
 

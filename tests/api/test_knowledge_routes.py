@@ -35,6 +35,7 @@ def test_knowledge_ingest_text_status_sources_and_search(tmp_path):
     assert sources.json()[0]["title"] == "Python Basics"
     assert search.status_code == 200
     assert search.json()[0]["source_title"] == "Python Basics"
+    assert "snippet" in search.json()[0]
 
 
 def test_knowledge_ingest_local_indexes_workspace_files(tmp_path):
@@ -63,3 +64,4 @@ def test_knowledge_ingest_local_indexes_workspace_files(tmp_path):
     assert len(ingested.json()) == 1
     assert search.status_code == 200
     assert search.json()[0]["source_kind"] == "local_file"
+    assert search.json()[0]["path"] == "docs/guide.md"

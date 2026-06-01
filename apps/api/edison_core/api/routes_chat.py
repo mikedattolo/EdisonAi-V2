@@ -351,19 +351,30 @@ def _build_knowledge_context(payload: ChatRequest, knowledge: KnowledgeStore) ->
             "source_id": item.source_id,
             "source_title": item.source_title,
             "source_kind": item.source_kind,
+            "uri": item.uri,
             "path": item.path,
             "score": item.score,
+            "snippet": item.snippet,
         }
         for item in matches
     ]
     lines = [
-        f"- [{item.source_kind}] {item.source_title} (score={item.score}): {item.snippet}"
-        for item in matches
+        (
+            f"[{index}] [{item.source_kind}] {item.source_title}"
+            f"{' <' + item.uri + '>' if item.uri else ''}"
+            f" (score={item.score}): {item.snippet}"
+        )
+        for index, item in enumerate(matches, start=1)
     ]
     return [
         {
             "role": "system",
-            "content": "Knowledge base excerpts relevant to this request:\n" + "\n".join(lines),
+            "content": (
+                "Knowledge base excerpts relevant to this request are below. "
+                "Use them when they are relevant, cite the source title or source number, "
+                "and say when the provided knowledge does not answer the question.\n"
+                + "\n".join(lines)
+            ),
         }
     ], metadata
 

@@ -470,6 +470,7 @@ class KnowledgeSearchMatch(BaseModel):
     source_id: str
     source_title: str
     source_kind: str
+    uri: str | None = None
     path: str | None = None
     score: float
     snippet: str

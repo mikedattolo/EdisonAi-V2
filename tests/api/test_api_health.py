@@ -208,3 +208,4 @@ def test_chat_includes_knowledge_context_metadata(tmp_path):
     assert knowledge_context["enabled"] is True
     assert knowledge_context["matches"]
     assert knowledge_context["matches"][0]["source_title"] == "Wiki: Machine Learning"
+    assert knowledge_context["matches"][0]["snippet"]

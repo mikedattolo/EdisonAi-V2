@@ -3,15 +3,19 @@ import {
   Bot,
   Box,
   Brain,
+  BookOpen,
   ChevronUp,
   Code2,
   Cpu,
+  Database,
   Fan,
   FileCode2,
+  FileText,
   Folder,
   GalleryHorizontalEnd,
   Globe2,
   Image,
+  Link2,
   MessageSquare,
   Network,
   PanelRightClose,
@@ -24,6 +28,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Upload,
   Video,
   Waypoints,
   X,
@@ -40,6 +45,9 @@ import type {
   GPUFanMode,
   JobRecord,
   JobType,
+  KnowledgeSearchMatch,
+  KnowledgeSourceRecord,
+  KnowledgeStatus,
   MediaSystemStatus,
   MessageRecord,
   ModelProfile,
@@ -71,6 +79,8 @@ const CHAT_WORKSPACE_PATH_STORAGE_KEY = 'edison-chat-workspace-path';
 const CHAT_CONTEXT_MATCHES_STORAGE_KEY = 'edison-chat-context-matches';
 const CHAT_AUTO_PREVIEW_STORAGE_KEY = 'edison-chat-auto-preview';
 const CHAT_CONTEXT_PATHS_STORAGE_KEY = 'edison-chat-context-paths';
+const CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY = 'edison-chat-knowledge-enabled';
+const CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY = 'edison-chat-knowledge-matches';
 
 const modes: Array<{ value: ChatMode; label: string; description: string }> = [
   { value: 'instant', label: 'Quick', description: 'Fast replies' },
@@ -180,6 +190,11 @@ export default function App() {
   const [workspaceCommandResult, setWorkspaceCommandResult] = useState<WorkspaceCommandRunResult | null>(null);
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState('');
   const [workspaceSearchResults, setWorkspaceSearchResults] = useState<WorkspaceSearchMatch[]>([]);
+  const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null);
+  const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSourceRecord[]>([]);
+  const [knowledgeSearchQuery, setKnowledgeSearchQuery] = useState('');
+  const [knowledgeSearchResults, setKnowledgeSearchResults] = useState<KnowledgeSearchMatch[]>([]);
+  const [knowledgeNotice, setKnowledgeNotice] = useState<string | null>(null);
   const [activeConversation, setActiveConversation] = useState<ConversationWithMessages | null>(null);
   const [activeMode, setActiveMode] = useState<ChatMode>('chat');
   const [showWorkspaceContext, setShowWorkspaceContext] =
@@ -196,12 +211,18 @@ export default function App() {
   const [chatContextPreview, setChatContextPreview] = useState<ChatContextPreview | null>(null);
   const [chatAutoPreviewEnabled, setChatAutoPreviewEnabled] =
     useState<boolean>(() => readStoredBoolean(CHAT_AUTO_PREVIEW_STORAGE_KEY, true));
+  const [chatKnowledgeEnabled, setChatKnowledgeEnabled] =
+    useState<boolean>(() => readStoredBoolean(CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY, true));
+  const [chatKnowledgeQuery, setChatKnowledgeQuery] = useState('');
+  const [chatKnowledgeMatches, setChatKnowledgeMatches] =
+    useState<number>(() => readStoredInt(CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY, 5, 1, 20));
   const [chatContextPreviewUpdatedAt, setChatContextPreviewUpdatedAt] = useState<string | null>(null);
   const [isPreviewingContext, setIsPreviewingContext] = useState(false);
   const [composer, setComposer] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isMediaBusy, setIsMediaBusy] = useState(false);
   const [isWorkspaceBusy, setIsWorkspaceBusy] = useState(false);
+  const [isKnowledgeBusy, setIsKnowledgeBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -221,6 +242,9 @@ export default function App() {
     }
     if (activeView === 'code') {
       void refreshWorkspaceSurface(workspacePath);
+    }
+    if (activeView === 'memory') {
+      void refreshKnowledgeSurface();
     }
   }, [activeView]);
 
@@ -247,6 +271,14 @@ export default function App() {
   useEffect(() => {
     writeStoredBoolean(CHAT_AUTO_PREVIEW_STORAGE_KEY, chatAutoPreviewEnabled);
   }, [chatAutoPreviewEnabled]);
+
+  useEffect(() => {
+    writeStoredBoolean(CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY, chatKnowledgeEnabled);
+  }, [chatKnowledgeEnabled]);
+
+  useEffect(() => {
+    writeStoredString(CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY, String(chatKnowledgeMatches));
+  }, [chatKnowledgeMatches]);
 
   useEffect(() => {
     if (!activeConversation?.id) {
@@ -308,18 +340,30 @@ export default function App() {
   async function bootstrap() {
     try {
       setError(null);
-      const [nextStatus, nextFanControls, nextModels, nextConversations, nextSession] = await Promise.all([
+      const [
+        nextStatus,
+        nextFanControls,
+        nextModels,
+        nextConversations,
+        nextSession,
+        nextKnowledgeStatus,
+        nextKnowledgeSources,
+      ] = await Promise.all([
         edisonApi.getStatus(),
         edisonApi.getFanControls(),
         edisonApi.listModels(),
         edisonApi.listConversations(),
         edisonApi.getSession(SESSION_ID),
+        edisonApi.getKnowledgeStatus(),
+        edisonApi.listKnowledgeSources(50),
       ]);
       setStatus(nextStatus);
       setFanControls(nextFanControls);
       setModels(nextModels);
       setConversations(nextConversations);
       setSessionState(nextSession);
+      setKnowledgeStatus(nextKnowledgeStatus);
+      setKnowledgeSources(nextKnowledgeSources);
       setActiveMode(nextSession.selected_mode ?? 'chat');
       if (nextConversations[0]) {
         await loadConversation(nextConversations[0].id);
@@ -382,6 +426,9 @@ export default function App() {
         workspace_context_paths: chatContextPaths,
         include_workspace_context: ['coding', 'agent', 'swarm'].includes(activeMode),
         max_workspace_context_matches: chatContextMatches,
+        include_knowledge_context: chatKnowledgeEnabled,
+        knowledge_query: chatKnowledgeQuery.trim() || undefined,
+        max_knowledge_context_matches: chatKnowledgeMatches,
       };
       const draftUserId = `draft-user-${Date.now()}`;
       const draftAssistantId = `draft-assistant-${Date.now()}`;
@@ -790,6 +837,124 @@ export default function App() {
     }
   }
 
+  async function refreshKnowledgeSurface() {
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const [nextStatus, nextSources] = await Promise.all([
+        edisonApi.getKnowledgeStatus(),
+        edisonApi.listKnowledgeSources(100),
+      ]);
+      setKnowledgeStatus(nextStatus);
+      setKnowledgeSources(nextSources);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Knowledge status failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
+  async function handleKnowledgeSearch(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const query = knowledgeSearchQuery.trim();
+    if (!query) {
+      setKnowledgeSearchResults([]);
+      return;
+    }
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const results = await edisonApi.searchKnowledge({ query, max_results: 20 });
+      setKnowledgeSearchResults(results);
+      setKnowledgeNotice(results.length > 0 ? `Found ${results.length} knowledge match${results.length === 1 ? '' : 'es'}.` : 'No knowledge matches found.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Knowledge search failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
+  async function ingestKnowledgeText(payload: { title: string; text: string; uri?: string }) {
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const source = await edisonApi.ingestKnowledgeText({
+        title: payload.title,
+        text: payload.text,
+        uri: payload.uri || undefined,
+        metadata: { source: 'memory-center' },
+      });
+      setKnowledgeNotice(`Imported ${source.title}.`);
+      await refreshKnowledgeSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Text import failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
+  async function ingestKnowledgeUrl(payload: { url: string; title?: string }) {
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const source = await edisonApi.ingestKnowledgeUrl({
+        url: payload.url,
+        title: payload.title || undefined,
+      });
+      setKnowledgeNotice(`Imported ${source.title}.`);
+      await refreshKnowledgeSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'URL import failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
+  async function ingestKnowledgeWikipedia(payload: { title: string; language?: string }) {
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const source = await edisonApi.ingestKnowledgeWikipedia({
+        title: payload.title,
+        language: payload.language || 'en',
+      });
+      setKnowledgeNotice(`Imported ${source.title}.`);
+      await refreshKnowledgeSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Wikipedia import failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
+  async function ingestKnowledgeLocal(payload: { path: string; glob: string; max_files: number }) {
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const sources = await edisonApi.ingestKnowledgeLocal(payload);
+      setKnowledgeNotice(`Indexed ${sources.length} local file${sources.length === 1 ? '' : 's'}.`);
+      await refreshKnowledgeSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Local knowledge import failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
+  async function ingestKnowledgePreset(preset: 'coding-core' | 'ai-foundations') {
+    setIsKnowledgeBusy(true);
+    setError(null);
+    try {
+      const sources = await edisonApi.ingestKnowledgePreset({ preset });
+      setKnowledgeNotice(`Loaded ${sources.length} ${preset.replace('-', ' ')} source${sources.length === 1 ? '' : 's'}.`);
+      await refreshKnowledgeSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Preset import failed');
+    } finally {
+      setIsKnowledgeBusy(false);
+    }
+  }
+
   async function previewChatContext(options: { silent?: boolean } = {}) {
     const silent = Boolean(options.silent);
     setIsPreviewingContext(true);
@@ -977,6 +1142,13 @@ export default function App() {
             previewChatContext={previewChatContext}
             chatAutoPreviewEnabled={chatAutoPreviewEnabled}
             setChatAutoPreviewEnabled={setChatAutoPreviewEnabled}
+            chatKnowledgeEnabled={chatKnowledgeEnabled}
+            setChatKnowledgeEnabled={setChatKnowledgeEnabled}
+            chatKnowledgeQuery={chatKnowledgeQuery}
+            setChatKnowledgeQuery={setChatKnowledgeQuery}
+            chatKnowledgeMatches={chatKnowledgeMatches}
+            setChatKnowledgeMatches={setChatKnowledgeMatches}
+            knowledgeStatus={knowledgeStatus}
             resetWorkspaceContextPreferences={() => {
               setShowWorkspaceContext(true);
               setWorkspaceContextFilter('all');
@@ -985,6 +1157,9 @@ export default function App() {
               setChatContextPaths([]);
               setChatContextMatches(5);
               setChatAutoPreviewEnabled(true);
+              setChatKnowledgeEnabled(true);
+              setChatKnowledgeQuery('');
+              setChatKnowledgeMatches(5);
               setChatContextPreview(null);
               setChatContextPreviewUpdatedAt(null);
               removeStoredValue(CONTEXT_VISIBILITY_STORAGE_KEY);
@@ -993,6 +1168,8 @@ export default function App() {
               removeStoredValue(CHAT_CONTEXT_PATHS_STORAGE_KEY);
               removeStoredValue(CHAT_CONTEXT_MATCHES_STORAGE_KEY);
               removeStoredValue(CHAT_AUTO_PREVIEW_STORAGE_KEY);
+              removeStoredValue(CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY);
+              removeStoredValue(CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY);
               if (activeConversation?.id) {
                 removeStoredValue(collapsedContextStorageKey(activeConversation.id));
               }
@@ -1008,16 +1185,29 @@ export default function App() {
             artifacts={mediaArtifacts}
             isMediaBusy={isMediaBusy}
             isWorkspaceBusy={isWorkspaceBusy}
+            isKnowledgeBusy={isKnowledgeBusy}
+            knowledgeNotice={knowledgeNotice}
+            knowledgeSearchQuery={knowledgeSearchQuery}
+            knowledgeSearchResults={knowledgeSearchResults}
+            knowledgeSources={knowledgeSources}
+            knowledgeStatus={knowledgeStatus}
             mediaJobs={mediaJobs}
             mediaStatus={mediaStatus}
             models={models}
             onCreateMediaJob={createMediaReadinessJob}
+            onIngestKnowledgeLocal={ingestKnowledgeLocal}
+            onIngestKnowledgePreset={ingestKnowledgePreset}
+            onIngestKnowledgeText={ingestKnowledgeText}
+            onIngestKnowledgeUrl={ingestKnowledgeUrl}
+            onIngestKnowledgeWikipedia={ingestKnowledgeWikipedia}
             onOpenWorkspaceEntry={openWorkspaceEntry}
+            onRefreshKnowledge={refreshKnowledgeSurface}
             onRefreshMedia={refreshMediaSurface}
             onRefreshSystem={refreshSystemSurface}
             onUpdateFanControl={updateFanControl}
             onUseArtifactInChat={useArtifactInChat}
             onRefreshWorkspace={() => refreshWorkspaceSurface(workspacePath)}
+            onKnowledgeSearch={handleKnowledgeSearch}
             onWorkspaceParent={openWorkspaceParent}
             onWorkspaceSearch={handleWorkspaceSearch}
             sessionState={sessionState}
@@ -1036,6 +1226,7 @@ export default function App() {
               setWorkspaceDraftContent(value);
               setWorkspacePatchPreview(null);
             }}
+            setKnowledgeSearchQuery={setKnowledgeSearchQuery}
             setWorkspaceSearchQuery={setWorkspaceSearchQuery}
             onApplyWorkspacePatch={applyWorkspacePatch}
             onPreviewWorkspacePatch={previewWorkspacePatch}
@@ -1143,6 +1334,13 @@ function ChatView({
   previewChatContext,
   chatAutoPreviewEnabled,
   setChatAutoPreviewEnabled,
+  chatKnowledgeEnabled,
+  setChatKnowledgeEnabled,
+  chatKnowledgeQuery,
+  setChatKnowledgeQuery,
+  chatKnowledgeMatches,
+  setChatKnowledgeMatches,
+  knowledgeStatus,
   resetWorkspaceContextPreferences,
   recentArtifacts,
   onUseArtifactInChat,
@@ -1174,6 +1372,13 @@ function ChatView({
   previewChatContext: () => Promise<void>;
   chatAutoPreviewEnabled: boolean;
   setChatAutoPreviewEnabled: (value: boolean) => void;
+  chatKnowledgeEnabled: boolean;
+  setChatKnowledgeEnabled: (value: boolean) => void;
+  chatKnowledgeQuery: string;
+  setChatKnowledgeQuery: (value: string) => void;
+  chatKnowledgeMatches: number;
+  setChatKnowledgeMatches: (value: number) => void;
+  knowledgeStatus: KnowledgeStatus | null;
   resetWorkspaceContextPreferences: () => void;
   recentArtifacts: ArtifactRecord[];
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
@@ -1197,6 +1402,49 @@ function ChatView({
 
   return (
     <>
+      <details className="context-drawer rag-drawer">
+        <summary>
+          <span><Database size={16} /> Knowledge</span>
+          <small>
+            {knowledgeStatus
+              ? `${knowledgeStatus.source_count} sources / ${knowledgeStatus.chunk_count} chunks`
+              : 'RAG source status'}
+          </small>
+        </summary>
+        <div className="context-drawer-content rag-drawer-content">
+          <section className="rag-chat-controls" aria-label="Chat knowledge controls">
+            <button
+              className={chatKnowledgeEnabled ? 'mode-button active' : 'mode-button'}
+              onClick={() => setChatKnowledgeEnabled(!chatKnowledgeEnabled)}
+              type="button"
+            >
+              <span>{chatKnowledgeEnabled ? 'Knowledge On' : 'Knowledge Off'}</span>
+              <small>{chatKnowledgeEnabled ? 'Use RAG in replies' : 'No source retrieval'}</small>
+            </button>
+            <label htmlFor="chat-knowledge-query">Search wording</label>
+            <input
+              id="chat-knowledge-query"
+              value={chatKnowledgeQuery}
+              onChange={(event) => setChatKnowledgeQuery(event.target.value)}
+              placeholder="Use message text"
+            />
+            <label htmlFor="chat-knowledge-matches">Sources</label>
+            <input
+              id="chat-knowledge-matches"
+              type="number"
+              min={1}
+              max={20}
+              value={chatKnowledgeMatches}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.target.value, 10);
+                if (!Number.isNaN(parsed)) {
+                  setChatKnowledgeMatches(Math.max(1, Math.min(20, parsed)));
+                }
+              }}
+            />
+          </section>
+        </div>
+      </details>
       <details className="context-drawer">
         <summary>
           <span><Folder size={16} /> Repo context</span>
@@ -1378,9 +1626,15 @@ function ChatView({
         {activeConversation?.messages.map((message) => {
           const parsedContext =
             message.role === 'assistant' ? parseWorkspaceContext(message.metadata.workspace_context) : null;
+          const parsedKnowledge =
+            message.role === 'assistant' ? parseKnowledgeContext(message.metadata.knowledge_context) : null;
           const contextCount = parsedContext && parsedContext.enabled ? contextItemCount(parsedContext) : 0;
+          const knowledgeCount = parsedKnowledge && parsedKnowledge.enabled ? parsedKnowledge.matches.length : 0;
           const contextDetails = parsedContext && parsedContext.enabled
             ? contextBreakdownText(parsedContext)
+            : '';
+          const knowledgeDetails = parsedKnowledge && parsedKnowledge.enabled
+            ? `Knowledge matches: ${knowledgeCount}${parsedKnowledge.query ? ` for "${parsedKnowledge.query}"` : ''}`
             : '';
           const isContextCollapsed = Boolean(collapsedContextMessageIds[message.id]);
           return (
@@ -1399,21 +1653,33 @@ function ChatView({
                       Context {contextCount}
                     </span>
                   )}
+                  {knowledgeCount > 0 && (
+                    <span
+                      className="message-context-badge knowledge"
+                      title={knowledgeDetails}
+                      aria-label={knowledgeDetails}
+                    >
+                      Sources {knowledgeCount}
+                    </span>
+                  )}
                 </div>
                 <MessageContent content={message.content} metadata={message.metadata} />
                 {message.role === 'assistant' && (
-                  <WorkspaceContextView
-                    metadata={message.metadata}
-                    visible={showWorkspaceContext}
-                    filter={workspaceContextFilter}
-                    collapsed={isContextCollapsed}
-                    onToggleCollapse={() =>
-                      setCollapsedContextMessageIds((current) => ({
-                        ...current,
-                        [message.id]: !Boolean(current[message.id]),
-                      }))
-                    }
-                  />
+                  <>
+                    <KnowledgeContextView metadata={message.metadata} />
+                    <WorkspaceContextView
+                      metadata={message.metadata}
+                      visible={showWorkspaceContext}
+                      filter={workspaceContextFilter}
+                      collapsed={isContextCollapsed}
+                      onToggleCollapse={() =>
+                        setCollapsedContextMessageIds((current) => ({
+                          ...current,
+                          [message.id]: !Boolean(current[message.id]),
+                        }))
+                      }
+                    />
+                  </>
                 )}
               </div>
             </article>
@@ -1581,6 +1847,40 @@ function MediaJobInlineCard({ job }: { job: JobRecord }) {
   );
 }
 
+function KnowledgeContextView({ metadata }: { metadata: Record<string, unknown> }) {
+  const context = parseKnowledgeContext(metadata.knowledge_context);
+  if (!context || !context.enabled || context.matches.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="knowledge-context-card">
+      <summary>
+        <span><BookOpen size={15} /> Sources ({context.matches.length})</span>
+        {context.query && <small>{context.query}</small>}
+      </summary>
+      <div className="knowledge-source-list">
+        {context.matches.slice(0, 8).map((match, index) => (
+          <article className="knowledge-source-row" key={`${match.sourceId}-${index}`}>
+            <div>
+              <strong>{index + 1}. {match.sourceTitle}</strong>
+              <span>{match.sourceKind}{typeof match.score === 'number' ? ` / score ${match.score.toFixed(2)}` : ''}</span>
+            </div>
+            <p>{match.snippet}</p>
+            {(match.uri || match.path) && (
+              match.uri?.startsWith('http') ? (
+                <a href={match.uri} target="_blank" rel="noreferrer">{match.uri}</a>
+              ) : (
+                <code>{match.path ?? match.uri}</code>
+              )
+            )}
+          </article>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function WorkspaceContextView({
   metadata,
   visible,
@@ -1686,11 +1986,24 @@ function WorkbenchView({
   groupedModels,
   isMediaBusy,
   isWorkspaceBusy,
+  isKnowledgeBusy,
+  knowledgeNotice,
+  knowledgeSearchQuery,
+  knowledgeSearchResults,
+  knowledgeSources,
+  knowledgeStatus,
   mediaJobs,
   mediaStatus,
   models,
   onCreateMediaJob,
+  onIngestKnowledgeLocal,
+  onIngestKnowledgePreset,
+  onIngestKnowledgeText,
+  onIngestKnowledgeUrl,
+  onIngestKnowledgeWikipedia,
   onOpenWorkspaceEntry,
+  onKnowledgeSearch,
+  onRefreshKnowledge,
   onApplyWorkspacePatch,
   onPreviewWorkspacePatch,
   onRunWorkspaceCommand,
@@ -1714,6 +2027,7 @@ function WorkbenchView({
   workspaceSearchQuery,
   workspaceSearchResults,
   workspaceSummary,
+  setKnowledgeSearchQuery,
   setWorkspaceDraftContent,
   setWorkspaceSearchQuery,
 }: {
@@ -1723,11 +2037,24 @@ function WorkbenchView({
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   isMediaBusy: boolean;
   isWorkspaceBusy: boolean;
+  isKnowledgeBusy: boolean;
+  knowledgeNotice: string | null;
+  knowledgeSearchQuery: string;
+  knowledgeSearchResults: KnowledgeSearchMatch[];
+  knowledgeSources: KnowledgeSourceRecord[];
+  knowledgeStatus: KnowledgeStatus | null;
   mediaJobs: JobRecord[];
   mediaStatus: MediaSystemStatus | null;
   models: ModelProfile[];
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
+  onIngestKnowledgeLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
+  onIngestKnowledgePreset: (preset: 'coding-core' | 'ai-foundations') => Promise<void>;
+  onIngestKnowledgeText: (payload: { title: string; text: string; uri?: string }) => Promise<void>;
+  onIngestKnowledgeUrl: (payload: { url: string; title?: string }) => Promise<void>;
+  onIngestKnowledgeWikipedia: (payload: { title: string; language?: string }) => Promise<void>;
+  onKnowledgeSearch: (event?: FormEvent<HTMLFormElement>) => Promise<void>;
   onOpenWorkspaceEntry: (entry: WorkspaceEntry) => Promise<void>;
+  onRefreshKnowledge: () => Promise<void>;
   onApplyWorkspacePatch: () => Promise<void>;
   onPreviewWorkspacePatch: () => Promise<void>;
   onRunWorkspaceCommand: (command: WorkspaceCommand) => Promise<void>;
@@ -1751,6 +2078,7 @@ function WorkbenchView({
   workspaceSearchQuery: string;
   workspaceSearchResults: WorkspaceSearchMatch[];
   workspaceSummary: WorkspaceSummary | null;
+  setKnowledgeSearchQuery: (value: string) => void;
   setWorkspaceDraftContent: (value: string) => void;
   setWorkspaceSearchQuery: (value: string) => void;
 }) {
@@ -1798,7 +2126,24 @@ function WorkbenchView({
     );
   }
   if (activeView === 'memory') {
-    return <FeatureView icon={Brain} title="Memory Center" items={memoryItems()} />;
+    return (
+      <MemoryView
+        isBusy={isKnowledgeBusy}
+        notice={knowledgeNotice}
+        onIngestLocal={onIngestKnowledgeLocal}
+        onIngestPreset={onIngestKnowledgePreset}
+        onIngestText={onIngestKnowledgeText}
+        onIngestUrl={onIngestKnowledgeUrl}
+        onIngestWikipedia={onIngestKnowledgeWikipedia}
+        onRefresh={onRefreshKnowledge}
+        onSearch={onKnowledgeSearch}
+        searchQuery={knowledgeSearchQuery}
+        searchResults={knowledgeSearchResults}
+        setSearchQuery={setKnowledgeSearchQuery}
+        sources={knowledgeSources}
+        status={knowledgeStatus}
+      />
+    );
   }
   if (activeView === 'system') {
     return (
@@ -2133,6 +2478,259 @@ function CodeWorkspaceView({
             </button>
           ))}
           {searchQuery && searchResults.length === 0 && <div className="empty-line">No matches</div>}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function MemoryView({
+  isBusy,
+  notice,
+  onIngestLocal,
+  onIngestPreset,
+  onIngestText,
+  onIngestUrl,
+  onIngestWikipedia,
+  onRefresh,
+  onSearch,
+  searchQuery,
+  searchResults,
+  setSearchQuery,
+  sources,
+  status,
+}: {
+  isBusy: boolean;
+  notice: string | null;
+  onIngestLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
+  onIngestPreset: (preset: 'coding-core' | 'ai-foundations') => Promise<void>;
+  onIngestText: (payload: { title: string; text: string; uri?: string }) => Promise<void>;
+  onIngestUrl: (payload: { url: string; title?: string }) => Promise<void>;
+  onIngestWikipedia: (payload: { title: string; language?: string }) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onSearch: (event?: FormEvent<HTMLFormElement>) => Promise<void>;
+  searchQuery: string;
+  searchResults: KnowledgeSearchMatch[];
+  setSearchQuery: (value: string) => void;
+  sources: KnowledgeSourceRecord[];
+  status: KnowledgeStatus | null;
+}) {
+  const [url, setUrl] = useState('');
+  const [urlTitle, setUrlTitle] = useState('');
+  const [wikiTitle, setWikiTitle] = useState('');
+  const [wikiLanguage, setWikiLanguage] = useState('en');
+  const [localPath, setLocalPath] = useState('.');
+  const [localGlob, setLocalGlob] = useState('**/*.md');
+  const [localMaxFiles, setLocalMaxFiles] = useState(200);
+  const [textTitle, setTextTitle] = useState('');
+  const [textUri, setTextUri] = useState('');
+  const [textBody, setTextBody] = useState('');
+
+  return (
+    <section className="workbench-view memory-view" aria-label="Memory Center">
+      <div className="view-heading">
+        <Brain size={26} />
+        <h3>Memory Center</h3>
+        <button className="secondary-button icon-text-button" disabled={isBusy} onClick={() => void onRefresh()} type="button">
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+
+      <div className="memory-metric-row">
+        <article className="workspace-metric-card">
+          <strong>{status?.source_count ?? 0}</strong>
+          <span>Sources</span>
+        </article>
+        <article className="workspace-metric-card">
+          <strong>{status?.chunk_count ?? 0}</strong>
+          <span>Chunks</span>
+        </article>
+        <article className="workspace-metric-card wide">
+          <strong>{status?.latest_ingest_at ? formatDateTime(status.latest_ingest_at) : 'No imports yet'}</strong>
+          <span>Latest Import</span>
+        </article>
+        <article className="workspace-metric-card wide">
+          <strong>{status?.service ?? 'knowledge-base'}</strong>
+          <span>Retrieval Service</span>
+        </article>
+      </div>
+
+      {notice && <div className="memory-notice">{notice}</div>}
+
+      <div className="memory-grid">
+        <section className="memory-panel search-panel" aria-label="Search knowledge">
+          <div className="section-heading">
+            <Search size={18} />
+            <h3>Search RAG</h3>
+          </div>
+          <form className="memory-search-form" onSubmit={(event) => void onSearch(event)}>
+            <input
+              aria-label="Search knowledge base"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search knowledge sources"
+              value={searchQuery}
+            />
+            <button className="secondary-button icon-text-button" disabled={!searchQuery.trim() || isBusy} type="submit">
+              <Search size={16} />
+              Search
+            </button>
+          </form>
+          <div className="knowledge-results">
+            {searchResults.map((result, index) => (
+              <article className="knowledge-result" key={`${result.source_id}-${index}`}>
+                <div>
+                  <strong>{result.source_title}</strong>
+                  <span>{result.source_kind} / score {result.score.toFixed(2)}</span>
+                </div>
+                <p>{result.snippet}</p>
+                {(result.uri || result.path) && (
+                  result.uri?.startsWith('http') ? (
+                    <a href={result.uri} target="_blank" rel="noreferrer">{result.uri}</a>
+                  ) : (
+                    <code>{result.path ?? result.uri}</code>
+                  )
+                )}
+              </article>
+            ))}
+            {searchQuery && searchResults.length === 0 && <div className="empty-line">No knowledge matches</div>}
+          </div>
+        </section>
+
+        <section className="memory-panel import-panel" aria-label="Import knowledge">
+          <div className="section-heading">
+            <Upload size={18} />
+            <h3>Import Sources</h3>
+          </div>
+
+          <form
+            className="memory-import-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!url.trim()) {
+                return;
+              }
+              void onIngestUrl({ url: url.trim(), title: urlTitle.trim() || undefined }).then(() => {
+                setUrl('');
+                setUrlTitle('');
+              });
+            }}
+          >
+            <label htmlFor="knowledge-url">URL</label>
+            <input id="knowledge-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/doc" />
+            <input value={urlTitle} onChange={(event) => setUrlTitle(event.target.value)} placeholder="Optional title" />
+            <button className="secondary-button icon-text-button" disabled={!url.trim() || isBusy} type="submit">
+              <Link2 size={16} />
+              Import URL
+            </button>
+          </form>
+
+          <form
+            className="memory-import-form two-column"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!wikiTitle.trim()) {
+                return;
+              }
+              void onIngestWikipedia({ title: wikiTitle.trim(), language: wikiLanguage.trim() || 'en' }).then(() => {
+                setWikiTitle('');
+              });
+            }}
+          >
+            <label htmlFor="knowledge-wiki">Wikipedia</label>
+            <input id="knowledge-wiki" value={wikiTitle} onChange={(event) => setWikiTitle(event.target.value)} placeholder="Large language model" />
+            <input value={wikiLanguage} onChange={(event) => setWikiLanguage(event.target.value)} placeholder="en" />
+            <button className="secondary-button icon-text-button" disabled={!wikiTitle.trim() || isBusy} type="submit">
+              <Globe2 size={16} />
+              Import Wiki
+            </button>
+          </form>
+
+          <form
+            className="memory-import-form two-column"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!localPath.trim()) {
+                return;
+              }
+              void onIngestLocal({ path: localPath.trim(), glob: localGlob.trim() || '**/*', max_files: localMaxFiles });
+            }}
+          >
+            <label htmlFor="knowledge-local">Local Files</label>
+            <input id="knowledge-local" value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="docs" />
+            <input value={localGlob} onChange={(event) => setLocalGlob(event.target.value)} placeholder="**/*.md" />
+            <input
+              aria-label="Maximum local files"
+              min={1}
+              max={2000}
+              type="number"
+              value={localMaxFiles}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.target.value, 10);
+                if (!Number.isNaN(parsed)) {
+                  setLocalMaxFiles(Math.max(1, Math.min(2000, parsed)));
+                }
+              }}
+            />
+            <button className="secondary-button icon-text-button" disabled={!localPath.trim() || isBusy} type="submit">
+              <Folder size={16} />
+              Index Files
+            </button>
+          </form>
+
+          <form
+            className="memory-import-form text-import"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!textTitle.trim() || !textBody.trim()) {
+                return;
+              }
+              void onIngestText({ title: textTitle.trim(), text: textBody, uri: textUri.trim() || undefined }).then(() => {
+                setTextTitle('');
+                setTextUri('');
+                setTextBody('');
+              });
+            }}
+          >
+            <label htmlFor="knowledge-text-title">Text Note</label>
+            <input id="knowledge-text-title" value={textTitle} onChange={(event) => setTextTitle(event.target.value)} placeholder="Source title" />
+            <input value={textUri} onChange={(event) => setTextUri(event.target.value)} placeholder="Optional URI" />
+            <textarea value={textBody} onChange={(event) => setTextBody(event.target.value)} placeholder="Paste notes, docs, or reference text" rows={5} />
+            <button className="secondary-button icon-text-button" disabled={!textTitle.trim() || !textBody.trim() || isBusy} type="submit">
+              <FileText size={16} />
+              Save Text
+            </button>
+          </form>
+
+          <div className="preset-row">
+            <button className="secondary-button" disabled={isBusy} onClick={() => void onIngestPreset('ai-foundations')} type="button">
+              AI Foundations
+            </button>
+            <button className="secondary-button" disabled={isBusy} onClick={() => void onIngestPreset('coding-core')} type="button">
+              Coding Core
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <section className="memory-panel source-library" aria-label="Knowledge source library">
+        <div className="section-heading">
+          <Database size={18} />
+          <h3>Source Library</h3>
+        </div>
+        <div className="source-table">
+          {sources.map((source) => (
+            <article className="source-row" key={source.id}>
+              <div>
+                <strong>{source.title}</strong>
+                <span>{source.kind} / {source.chunk_count} chunks / {formatDateTime(source.updated_at)}</span>
+              </div>
+              {(source.uri || typeof source.metadata.path === 'string') && (
+                <code>{source.uri ?? String(source.metadata.path)}</code>
+              )}
+            </article>
+          ))}
+          {sources.length === 0 && <div className="empty-line">No sources imported yet</div>}
         </div>
       </section>
     </section>
@@ -2825,6 +3423,14 @@ function formatMaybeNumber(value: number | null | undefined, unit: string) {
   return `${Math.round(value)}${unit}`;
 }
 
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
 function friendlyError(error: string) {
   if (error.includes('Failed to fetch')) {
     return `Core API unavailable at ${edisonApi.apiBase || 'the current workbench origin'}`;
@@ -2840,6 +3446,21 @@ type ParsedWorkspaceContext = {
   warnings: string[];
   instructionFiles: string[];
   indexMatches: Array<{ path: string; score?: number; lineNumber?: number }>;
+};
+
+type ParsedKnowledgeContext = {
+  enabled: boolean;
+  query?: string;
+  warnings: string[];
+  matches: Array<{
+    sourceId: string;
+    sourceTitle: string;
+    sourceKind: string;
+    uri?: string;
+    path?: string;
+    score?: number;
+    snippet: string;
+  }>;
 };
 
 type ChatContextPreview = {
@@ -2870,6 +3491,19 @@ function parseWorkspaceContext(raw: unknown): ParsedWorkspaceContext | null {
     warnings: toStringArray(value.warnings),
     instructionFiles: toStringArray(value.instruction_files),
     indexMatches: toIndexMatches(value.index_matches),
+  };
+}
+
+function parseKnowledgeContext(raw: unknown): ParsedKnowledgeContext | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const value = raw as Record<string, unknown>;
+  return {
+    enabled: Boolean(value.enabled),
+    query: toOptionalString(value.query),
+    warnings: toStringArray(value.warnings),
+    matches: toKnowledgeMatches(value.matches),
   };
 }
 
@@ -3082,6 +3716,35 @@ function toIndexMatches(value: unknown): Array<{ path: string; score?: number; l
       path,
       score: typeof row.score === 'number' ? row.score : undefined,
       lineNumber: typeof row.line_number === 'number' ? row.line_number : undefined,
+    });
+  }
+  return matches;
+}
+
+function toKnowledgeMatches(value: unknown): ParsedKnowledgeContext['matches'] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const matches: ParsedKnowledgeContext['matches'] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const row = item as Record<string, unknown>;
+    const sourceId = toOptionalString(row.source_id) ?? toOptionalString(row.sourceId);
+    const sourceTitle = toOptionalString(row.source_title) ?? toOptionalString(row.sourceTitle);
+    const sourceKind = toOptionalString(row.source_kind) ?? toOptionalString(row.sourceKind) ?? 'source';
+    if (!sourceId || !sourceTitle) {
+      continue;
+    }
+    matches.push({
+      sourceId,
+      sourceTitle,
+      sourceKind,
+      uri: toOptionalString(row.uri),
+      path: toOptionalString(row.path),
+      score: typeof row.score === 'number' ? row.score : undefined,
+      snippet: toOptionalString(row.snippet) ?? '',
     });
   }
   return matches;

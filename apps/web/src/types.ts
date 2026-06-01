@@ -347,6 +347,7 @@ export interface KnowledgeSearchMatch {
   source_id: string;
   source_title: string;
   source_kind: string;
+  uri?: string | null;
   path?: string | null;
   score: number;
   snippet: string;
