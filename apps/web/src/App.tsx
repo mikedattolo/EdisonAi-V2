@@ -486,6 +486,8 @@ export default function App() {
         include_knowledge_context: chatKnowledgeEnabled,
         knowledge_query: chatKnowledgeQuery.trim() || undefined,
         max_knowledge_context_matches: chatKnowledgeMatches,
+        include_personal_context: true,
+        max_personal_context_items: 8,
       };
       const draftUserId = `draft-user-${Date.now()}`;
       const draftAssistantId = `draft-assistant-${Date.now()}`;

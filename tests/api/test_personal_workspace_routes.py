@@ -66,3 +66,43 @@ def test_documents_ingest_and_search_compare(tmp_path):
     assert compared.status_code == 200
     assert compared.json()["provider_counts"]["documents"] >= 1
     assert "knowledge" in compared.json()["results"]
+
+
+def test_chat_can_include_personal_workspace_context(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    client.post(
+        "/api/v1/organizer/items",
+        json={
+            "kind": "task",
+            "title": "Ship document workspace",
+            "body": "Make personal context available to chat.",
+        },
+    )
+    client.post(
+        "/api/v1/documents",
+        json={
+            "title": "Personal Context Note",
+            "content": "The chat pipeline should reference personal documents when requested.",
+        },
+    )
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "message": "What personal context exists for document workspace?",
+            "mode": "chat",
+            "include_personal_context": True,
+            "max_personal_context_items": 6,
+        },
+    )
+
+    assert response.status_code == 201
+    metadata = response.json()["assistant_message"]["metadata"]["personal_context"]
+    assert metadata["enabled"] is True
+    assert metadata["items"][0]["title"] == "Ship document workspace"
+    assert metadata["documents"][0]["title"] == "Personal Context Note"

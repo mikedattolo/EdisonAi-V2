@@ -38,6 +38,7 @@ Added in this integration pass:
 - Persistent organizer APIs and UI for tasks, notes, and calendar-style dated items.
 - Persistent document drafts with editing, saving, and one-click ingestion into Edison knowledge.
 - Search comparison across the knowledge base, workspace index, and saved documents.
+- Chat and agent requests can include personal organizer/document context in model metadata and prompts.
 
 Next high-value ports:
 
@@ -45,7 +46,7 @@ Next high-value ports:
 - File upload ingestion for PDFs, Office docs, CSVs, and images with OCR/VLM summaries.
 - Multi-step Deep Research jobs with progress events, source library persistence, report export, and chat spinoff.
 - External search provider comparison and synthesis.
-- Agent-side use of notes/tasks/calendar primitives during chat and tool planning.
+- Deeper agent actions over notes/tasks/calendar primitives, including automatic task creation and status changes.
 - Cookbook hardware-aware model recommendations linked to Edison’s installed GPUs and storage layout.
 
 ## Porting Constraints

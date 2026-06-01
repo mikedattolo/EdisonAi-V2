@@ -134,6 +134,8 @@ class ChatRequest(BaseModel):
     include_knowledge_context: bool = True
     knowledge_query: str | None = None
     max_knowledge_context_matches: int = Field(default=5, ge=0, le=20)
+    include_personal_context: bool = False
+    max_personal_context_items: int = Field(default=8, ge=0, le=20)
 
 
 class ChatResponse(BaseModel):

@@ -53,6 +53,8 @@ export interface ChatTurnPayload {
   include_knowledge_context?: boolean;
   knowledge_query?: string;
   max_knowledge_context_matches?: number;
+  include_personal_context?: boolean;
+  max_personal_context_items?: number;
 }
 
 interface ChatStreamHandlers {

@@ -9,6 +9,7 @@ from edison_core.api.dependencies import (
     get_conversation_store,
     get_knowledge_store,
     get_model_gateway,
+    get_personal_workspace_store,
     get_workspace_tools,
 )
 from edison_core.schemas import (
@@ -19,11 +20,13 @@ from edison_core.schemas import (
     InferenceRequest,
     MessageCreate,
     MessageRole,
+    OrganizerStatus,
     WorkspaceIndexSearchRequest,
 )
 from edison_core.services.conversation_store import ConversationNotFoundError, ConversationStore
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_gateway import ModelGateway
+from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.workspace_tools import WorkspaceNotFoundError, WorkspaceTools
 
 
@@ -37,12 +40,14 @@ def create_chat_turn(
     gateway: ModelGateway = Depends(get_model_gateway),
     workspace: WorkspaceTools = Depends(get_workspace_tools),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
+    personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
 ) -> ChatResponse:
     try:
         conversation_id = _ensure_conversation(payload, conversations)
         workspace_messages, workspace_metadata = _build_workspace_context(payload, workspace)
         knowledge_messages, knowledge_metadata = _build_knowledge_context(payload, knowledge)
-        context_messages = workspace_messages + knowledge_messages
+        personal_messages, personal_metadata = _build_personal_context(payload, personal)
+        context_messages = workspace_messages + knowledge_messages + personal_messages
         user_message = conversations.add_message(
             conversation_id,
             MessageCreate(
@@ -53,7 +58,11 @@ def create_chat_turn(
                     "mode": payload.mode.value,
                     "workspace_path": payload.workspace_path,
                     "workspace_context_paths": payload.workspace_context_paths,
-                    "context_warnings": workspace_metadata["warnings"] + knowledge_metadata["warnings"],
+                    "context_warnings": (
+                        workspace_metadata["warnings"]
+                        + knowledge_metadata["warnings"]
+                        + personal_metadata["warnings"]
+                    ),
                 },
             ),
         )
@@ -72,6 +81,7 @@ def create_chat_turn(
                 "messages": model_messages,
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
+                "personal_context": personal_metadata,
             },
         )
     )
@@ -87,6 +97,7 @@ def create_chat_turn(
                 "model_selection_reason": model_selection.reason,
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
+                "personal_context": personal_metadata,
             },
         ),
     )
@@ -106,12 +117,14 @@ def stream_chat_turn(
     gateway: ModelGateway = Depends(get_model_gateway),
     workspace: WorkspaceTools = Depends(get_workspace_tools),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
+    personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
 ) -> StreamingResponse:
     try:
         conversation_id = _ensure_conversation(payload, conversations)
         workspace_messages, workspace_metadata = _build_workspace_context(payload, workspace)
         knowledge_messages, knowledge_metadata = _build_knowledge_context(payload, knowledge)
-        context_messages = workspace_messages + knowledge_messages
+        personal_messages, personal_metadata = _build_personal_context(payload, personal)
+        context_messages = workspace_messages + knowledge_messages + personal_messages
         user_message = conversations.add_message(
             conversation_id,
             MessageCreate(
@@ -122,7 +135,11 @@ def stream_chat_turn(
                     "mode": payload.mode.value,
                     "workspace_path": payload.workspace_path,
                     "workspace_context_paths": payload.workspace_context_paths,
-                    "context_warnings": workspace_metadata["warnings"] + knowledge_metadata["warnings"],
+                    "context_warnings": (
+                        workspace_metadata["warnings"]
+                        + knowledge_metadata["warnings"]
+                        + personal_metadata["warnings"]
+                    ),
                     "streamed": True,
                 },
             ),
@@ -142,6 +159,7 @@ def stream_chat_turn(
                 "messages": model_messages,
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
+                "personal_context": personal_metadata,
             },
         )
     )
@@ -180,6 +198,7 @@ def stream_chat_turn(
                     "model_selection_reason": selection.reason,
                     "workspace_context": workspace_metadata,
                     "knowledge_context": knowledge_metadata,
+                    "personal_context": personal_metadata,
                     "streamed": True,
                 },
             ),
@@ -374,6 +393,75 @@ def _build_knowledge_context(payload: ChatRequest, knowledge: KnowledgeStore) ->
                 "Use them when they are relevant, cite the source title or source number, "
                 "and say when the provided knowledge does not answer the question.\n"
                 + "\n".join(lines)
+            ),
+        }
+    ], metadata
+
+
+def _build_personal_context(payload: ChatRequest, personal: PersonalWorkspaceStore) -> tuple[list[dict[str, str]], dict]:
+    metadata = {
+        "enabled": payload.include_personal_context,
+        "warnings": [],
+        "items": [],
+        "documents": [],
+    }
+    if not payload.include_personal_context or payload.max_personal_context_items <= 0:
+        return [], metadata
+
+    try:
+        items = personal.list_items(status=OrganizerStatus.ACTIVE, limit=payload.max_personal_context_items)
+        documents = personal.search_documents(
+            payload.message,
+            max_results=max(1, payload.max_personal_context_items // 2),
+        )
+    except Exception:
+        metadata["warnings"].append("Personal workspace context lookup failed.")
+        return [], metadata
+
+    metadata["items"] = [
+        {
+            "id": item.id,
+            "kind": item.kind.value,
+            "title": item.title,
+            "due_at": item.due_at.isoformat() if item.due_at else None,
+            "tags": item.tags,
+        }
+        for item in items
+    ]
+    metadata["documents"] = [
+        {
+            "title": document.title,
+            "path": document.path,
+            "score": document.score,
+        }
+        for document in documents
+    ]
+    if not items and not documents:
+        return [], metadata
+
+    sections: list[str] = []
+    if items:
+        item_lines = []
+        for item in items:
+            due = f", due {item.due_at.isoformat()}" if item.due_at else ""
+            tags = f", tags: {', '.join(item.tags)}" if item.tags else ""
+            body = f" -- {item.body[:240]}" if item.body else ""
+            item_lines.append(f"- [{item.kind.value}] {item.title}{due}{tags}{body}")
+        sections.append("Active tasks, notes, and calendar items:\n" + "\n".join(item_lines))
+    if documents:
+        doc_lines = [
+            f"- {document.title} (score={document.score}): {document.snippet}"
+            for document in documents
+        ]
+        sections.append("Relevant saved documents:\n" + "\n".join(doc_lines))
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Personal Edison context is available for this request. "
+                "Use it when it is relevant, but do not invent details beyond these items.\n\n"
+                + "\n\n".join(sections)
             ),
         }
     ], metadata
