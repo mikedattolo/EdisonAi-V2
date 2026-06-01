@@ -352,3 +352,52 @@ export interface KnowledgeSearchMatch {
   score: number;
   snippet: string;
 }
+
+export type OrganizerKind = 'task' | 'note' | 'calendar';
+export type OrganizerStatus = 'active' | 'done' | 'archived' | 'cancelled';
+
+export interface OrganizerItemRecord {
+  id: string;
+  kind: OrganizerKind;
+  title: string;
+  body: string;
+  status: OrganizerStatus;
+  due_at?: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DocumentFormat = 'markdown' | 'text';
+
+export interface DocumentRecord {
+  id: string;
+  title: string;
+  content: string;
+  format: DocumentFormat;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SearchProvider = 'knowledge' | 'workspace' | 'documents';
+
+export interface SearchCompareResult {
+  provider: SearchProvider;
+  title: string;
+  subtitle?: string | null;
+  snippet: string;
+  score: number;
+  uri?: string | null;
+  path?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface SearchCompareResponse {
+  query: string;
+  results: Record<SearchProvider, SearchCompareResult[]>;
+  provider_counts: Record<SearchProvider, number>;
+  best_provider?: SearchProvider | null;
+}

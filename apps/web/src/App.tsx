@@ -4,6 +4,8 @@ import {
   Box,
   Brain,
   BookOpen,
+  CalendarDays,
+  CheckSquare2,
   ChevronUp,
   Code2,
   Cpu,
@@ -41,6 +43,7 @@ import type {
   ChatMode,
   ConversationRecord,
   ConversationWithMessages,
+  DocumentRecord,
   GPUFanControlSnapshot,
   GPUFanMode,
   JobRecord,
@@ -52,7 +55,12 @@ import type {
   MessageRecord,
   ModelProfile,
   ModelSelection,
+  OrganizerItemRecord,
+  OrganizerKind,
+  OrganizerStatus,
   SessionStateRecord,
+  SearchCompareResponse,
+  SearchProvider,
   SystemStatus,
   WorkspaceCommand,
   WorkspaceCommandRunResult,
@@ -68,7 +76,19 @@ import type {
 
 const SESSION_ID = 'local-workbench';
 
-type ViewId = 'chat' | 'agent' | 'compare' | 'research' | 'code' | 'media' | 'memory' | 'system' | 'settings';
+type ViewId =
+  | 'chat'
+  | 'agent'
+  | 'compare'
+  | 'research'
+  | 'organizer'
+  | 'documents'
+  | 'search'
+  | 'code'
+  | 'media'
+  | 'memory'
+  | 'system'
+  | 'settings';
 type IconType = typeof MessageSquare;
 type ContextFilter = 'all' | 'instructions' | 'index' | 'warnings';
 type CompareStatus = 'idle' | 'streaming' | 'done' | 'error';
@@ -111,6 +131,9 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'agent', label: 'Agent', icon: Waypoints },
   { id: 'compare', label: 'Compare', icon: Network },
   { id: 'research', label: 'Research', icon: BookOpen },
+  { id: 'organizer', label: 'Organizer', icon: CheckSquare2 },
+  { id: 'documents', label: 'Docs', icon: FileText },
+  { id: 'search', label: 'Search', icon: Search },
   { id: 'code', label: 'Code Space', icon: Code2 },
   { id: 'media', label: 'Media', icon: GalleryHorizontalEnd },
   { id: 'memory', label: 'Memory', icon: Brain },
@@ -2145,6 +2168,15 @@ function WorkbenchView({
       />
     );
   }
+  if (activeView === 'organizer') {
+    return <OrganizerView />;
+  }
+  if (activeView === 'documents') {
+    return <DocumentsView />;
+  }
+  if (activeView === 'search') {
+    return <SearchCompareView />;
+  }
   if (activeView === 'code') {
     return (
       <CodeWorkspaceView
@@ -2863,6 +2895,487 @@ function ResearchView({
               </div>
             </article>
           )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function OrganizerView() {
+  const [kind, setKind] = useState<OrganizerKind>('task');
+  const [items, setItems] = useState<OrganizerItemRecord[]>([]);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [dueAt, setDueAt] = useState('');
+  const [tags, setTags] = useState('');
+  const [isBusy, setIsBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function refreshItems(nextKind = kind) {
+    setItems(await edisonApi.listOrganizerItems({ kind: nextKind, limit: 100 }));
+  }
+
+  useEffect(() => {
+    refreshItems().catch((caught) => setError(caught instanceof Error ? caught.message : 'Organizer failed'));
+  }, [kind]);
+
+  async function createItem() {
+    if (!title.trim() || isBusy) {
+      return;
+    }
+    setIsBusy(true);
+    setError(null);
+    try {
+      await edisonApi.createOrganizerItem({
+        kind,
+        title: title.trim(),
+        body: body.trim(),
+        due_at: dueAt ? new Date(dueAt).toISOString() : null,
+        tags: parseTagInput(tags),
+      });
+      setTitle('');
+      setBody('');
+      setDueAt('');
+      setTags('');
+      await refreshItems();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Create failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function setItemStatus(item: OrganizerItemRecord, status: OrganizerStatus) {
+    setError(null);
+    try {
+      await edisonApi.updateOrganizerItem(item.id, { status });
+      await refreshItems();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Update failed');
+    }
+  }
+
+  async function deleteItem(item: OrganizerItemRecord) {
+    setError(null);
+    try {
+      await edisonApi.deleteOrganizerItem(item.id);
+      await refreshItems();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Delete failed');
+    }
+  }
+
+  const activeItems = items.filter((item) => item.status === 'active');
+  const completedItems = items.filter((item) => item.status !== 'active');
+
+  return (
+    <section className="workbench-view organizer-view" aria-label="Organizer">
+      <div className="view-heading">
+        <CheckSquare2 size={26} />
+        <h3>Organizer</h3>
+        <div className="view-actions">
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!title.trim() || isBusy}
+            onClick={() => void createItem()}
+            type="button"
+          >
+            <Send size={16} />
+            Add
+          </button>
+        </div>
+      </div>
+
+      <div className="personal-shell">
+        <aside className="personal-control-panel" aria-label="Organizer controls">
+          <div className="personal-tabs" aria-label="Organizer type">
+            {(['task', 'note', 'calendar'] as OrganizerKind[]).map((option) => (
+              <button
+                className={kind === option ? 'active' : ''}
+                key={option}
+                onClick={() => setKind(option)}
+                type="button"
+              >
+                {option === 'calendar' ? 'Calendar' : option === 'task' ? 'Tasks' : 'Notes'}
+              </button>
+            ))}
+          </div>
+          <label htmlFor="organizer-title">Title</label>
+          <input
+            id="organizer-title"
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder={kind === 'calendar' ? 'Meeting, deadline, reminder' : 'New item'}
+            value={title}
+          />
+          <label htmlFor="organizer-body">Details</label>
+          <textarea
+            id="organizer-body"
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="Notes, context, links, or acceptance criteria"
+            rows={7}
+            value={body}
+          />
+          <label htmlFor="organizer-due">Due or scheduled</label>
+          <input
+            id="organizer-due"
+            onChange={(event) => setDueAt(event.target.value)}
+            type="datetime-local"
+            value={dueAt}
+          />
+          <label htmlFor="organizer-tags">Tags</label>
+          <input
+            id="organizer-tags"
+            onChange={(event) => setTags(event.target.value)}
+            placeholder="comma,separated,tags"
+            value={tags}
+          />
+          {error && <div className="error-banner compact">{error}</div>}
+        </aside>
+
+        <section className="personal-results-panel" aria-label="Organizer items">
+          {items.length === 0 ? (
+            <div className="personal-empty">
+              <CalendarDays size={30} />
+              <strong>No {kind} items yet.</strong>
+              <span>Create items here so Edison can keep working context outside a single chat.</span>
+            </div>
+          ) : (
+            <>
+              <div className="personal-list-section">
+                <h4>Active</h4>
+                <div className="personal-card-list">
+                  {activeItems.map((item) => (
+                    <OrganizerItemCard
+                      item={item}
+                      key={item.id}
+                      onArchive={() => void setItemStatus(item, 'archived')}
+                      onComplete={() => void setItemStatus(item, 'done')}
+                      onDelete={() => void deleteItem(item)}
+                    />
+                  ))}
+                  {activeItems.length === 0 && <span className="empty-line">Nothing active.</span>}
+                </div>
+              </div>
+              <div className="personal-list-section">
+                <h4>Closed</h4>
+                <div className="personal-card-list">
+                  {completedItems.map((item) => (
+                    <OrganizerItemCard
+                      item={item}
+                      key={item.id}
+                      onArchive={() => void setItemStatus(item, 'archived')}
+                      onComplete={() => void setItemStatus(item, 'active')}
+                      onDelete={() => void deleteItem(item)}
+                    />
+                  ))}
+                  {completedItems.length === 0 && <span className="empty-line">No closed items.</span>}
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function OrganizerItemCard({
+  item,
+  onArchive,
+  onComplete,
+  onDelete,
+}: {
+  item: OrganizerItemRecord;
+  onArchive: () => void;
+  onComplete: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <article className="personal-card">
+      <div>
+        <strong>{item.title}</strong>
+        <span>{item.due_at ? formatDateTime(item.due_at) : item.kind}</span>
+      </div>
+      {item.body && <p>{item.body}</p>}
+      {item.tags.length > 0 && <small>{item.tags.join(' / ')}</small>}
+      <div className="personal-card-actions">
+        <button className="secondary-button" onClick={onComplete} type="button">
+          {item.status === 'active' ? 'Done' : 'Reopen'}
+        </button>
+        <button className="secondary-button" onClick={onArchive} type="button">
+          Archive
+        </button>
+        <button className="secondary-button" onClick={onDelete} type="button">
+          Delete
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function DocumentsView() {
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [tags, setTags] = useState('');
+  const [isBusy, setIsBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const activeDocument = documents.find((document) => document.id === activeId) ?? null;
+
+  async function refreshDocuments(nextActiveId = activeId) {
+    const loaded = await edisonApi.listDocuments(100);
+    setDocuments(loaded);
+    const selected = loaded.find((document) => document.id === nextActiveId) ?? loaded[0] ?? null;
+    setActiveId(selected?.id ?? null);
+    setTitle(selected?.title ?? '');
+    setContent(selected?.content ?? '');
+    setTags(selected?.tags.join(', ') ?? '');
+  }
+
+  useEffect(() => {
+    refreshDocuments().catch((caught) => setError(caught instanceof Error ? caught.message : 'Documents failed'));
+  }, []);
+
+  async function createDocument() {
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const created = await edisonApi.createDocument({
+        title: 'Untitled document',
+        content: '',
+        format: 'markdown',
+        tags: [],
+      });
+      await refreshDocuments(created.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Create failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function saveDocument() {
+    if (!activeDocument || !title.trim()) {
+      return;
+    }
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const saved = await edisonApi.updateDocument(activeDocument.id, {
+        title: title.trim(),
+        content,
+        tags: parseTagInput(tags),
+      });
+      setMessage('Saved');
+      await refreshDocuments(saved.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Save failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function ingestDocument() {
+    if (!activeDocument) {
+      return;
+    }
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const source = await edisonApi.ingestDocument(activeDocument.id);
+      setMessage(`Indexed ${source.chunk_count} knowledge chunks`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Ingest failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <section className="workbench-view documents-view" aria-label="Documents">
+      <div className="view-heading">
+        <FileText size={26} />
+        <h3>Docs</h3>
+        <div className="view-actions">
+          <button className="secondary-button icon-text-button" onClick={() => void createDocument()} type="button">
+            <FileText size={16} />
+            New
+          </button>
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!activeDocument || !title.trim() || isBusy}
+            onClick={() => void saveDocument()}
+            type="button"
+          >
+            <Upload size={16} />
+            Save
+          </button>
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!activeDocument || isBusy}
+            onClick={() => void ingestDocument()}
+            type="button"
+          >
+            <Database size={16} />
+            Index
+          </button>
+        </div>
+      </div>
+
+      <div className="documents-shell">
+        <aside className="documents-list" aria-label="Saved documents">
+          {documents.map((document) => (
+            <button
+              className={document.id === activeId ? 'active' : ''}
+              key={document.id}
+              onClick={() => {
+                setActiveId(document.id);
+                setTitle(document.title);
+                setContent(document.content);
+                setTags(document.tags.join(', '));
+              }}
+              type="button"
+            >
+              <strong>{document.title}</strong>
+              <span>{formatDateTime(document.updated_at)}</span>
+            </button>
+          ))}
+          {documents.length === 0 && <span className="empty-line">No documents yet.</span>}
+        </aside>
+
+        <section className="document-editor-panel" aria-label="Document editor">
+          <label htmlFor="document-title">Title</label>
+          <input
+            id="document-title"
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Document title"
+            value={title}
+          />
+          <label htmlFor="document-tags">Tags</label>
+          <input
+            id="document-tags"
+            onChange={(event) => setTags(event.target.value)}
+            placeholder="research,report,project"
+            value={tags}
+          />
+          <label htmlFor="document-content">Content</label>
+          <textarea
+            id="document-content"
+            onChange={(event) => setContent(event.target.value)}
+            placeholder="Draft, edit, and save Markdown or plain text"
+            value={content}
+          />
+          {message && <div className="success-banner compact">{message}</div>}
+          {error && <div className="error-banner compact">{error}</div>}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function SearchCompareView() {
+  const [query, setQuery] = useState('');
+  const [providers, setProviders] = useState<SearchProvider[]>(['knowledge', 'workspace', 'documents']);
+  const [response, setResponse] = useState<SearchCompareResponse | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggleProvider(provider: SearchProvider) {
+    setProviders((current) => (
+      current.includes(provider)
+        ? current.filter((candidate) => candidate !== provider)
+        : [...current, provider]
+    ));
+  }
+
+  async function runSearch() {
+    if (!query.trim() || providers.length === 0 || isBusy) {
+      return;
+    }
+    setIsBusy(true);
+    setError(null);
+    try {
+      setResponse(await edisonApi.compareSearch({ query: query.trim(), providers, max_results: 5 }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Search failed');
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <section className="workbench-view search-compare-view" aria-label="Search Compare">
+      <div className="view-heading">
+        <Search size={26} />
+        <h3>Search</h3>
+        <div className="view-actions">
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!query.trim() || providers.length === 0 || isBusy}
+            onClick={() => void runSearch()}
+            type="button"
+          >
+            <Search size={16} />
+            Compare
+          </button>
+        </div>
+      </div>
+
+      <div className="search-compare-shell">
+        <aside className="personal-control-panel" aria-label="Search controls">
+          <label htmlFor="search-query">Query</label>
+          <textarea
+            id="search-query"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Compare what Edison knows, what is in the workspace, and what is in saved documents"
+            rows={5}
+            value={query}
+          />
+          <div className="search-provider-list">
+            {(['knowledge', 'workspace', 'documents'] as SearchProvider[]).map((provider) => (
+              <label key={provider}>
+                <input
+                  checked={providers.includes(provider)}
+                  onChange={() => toggleProvider(provider)}
+                  type="checkbox"
+                />
+                {provider}
+              </label>
+            ))}
+          </div>
+          {response?.best_provider && <div className="success-banner compact">Best hit count: {response.best_provider}</div>}
+          {error && <div className="error-banner compact">{error}</div>}
+        </aside>
+
+        <section className="search-results-grid" aria-label="Compared results">
+          {providers.map((provider) => {
+            const results = response?.results[provider] ?? [];
+            return (
+              <article className="search-provider-card" key={provider}>
+                <div className="search-provider-header">
+                  <strong>{provider}</strong>
+                  <span>{response?.provider_counts[provider] ?? 0} hits</span>
+                </div>
+                <div className="search-provider-results">
+                  {results.map((result, index) => (
+                    <div className="search-result-card" key={`${provider}-${index}-${result.title}`}>
+                      <strong>{result.title}</strong>
+                      <span>{result.subtitle ?? result.path ?? result.uri ?? provider}</span>
+                      <p>{result.snippet}</p>
+                      <small>Score {result.score.toFixed(2)}</small>
+                    </div>
+                  ))}
+                  {results.length === 0 && <span className="empty-line">No results yet.</span>}
+                </div>
+              </article>
+            );
+          })}
         </section>
       </div>
     </section>
@@ -4131,6 +4644,14 @@ function buildResearchPrompt(topic: string, depth: ResearchDepth, includeKnowled
       : 'Do not rely on retrieved local knowledge. State when external verification would be needed.',
     `Research topic:\n${topic}`,
   ].join('\n\n');
+}
+
+function parseTagInput(value: string) {
+  return value
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .slice(0, 16);
 }
 
 function formatDateTime(value: string) {

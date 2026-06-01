@@ -4,6 +4,8 @@ import type {
   ChatTurnResponse,
   ConversationRecord,
   ConversationWithMessages,
+  DocumentFormat,
+  DocumentRecord,
   GPUFanControlSnapshot,
   GPUFanControlState,
   GPUFanMode,
@@ -13,10 +15,15 @@ import type {
   MessageRecord,
   ModelProfile,
   ModelSelection,
+  OrganizerItemRecord,
+  OrganizerKind,
+  OrganizerStatus,
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
   SessionStateRecord,
+  SearchCompareResponse,
+  SearchProvider,
   SystemStatus,
   WorkspaceCommandRunResult,
   WorkspaceEntry,
@@ -292,6 +299,83 @@ export const edisonApi = {
     }),
   ingestKnowledgePreset: (payload: { preset: 'coding-core' | 'ai-foundations' }) =>
     request<KnowledgeSourceRecord[]>('/api/v1/knowledge/ingest/preset', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listOrganizerItems: (params: { kind?: OrganizerKind; status?: OrganizerStatus; limit?: number } = {}) =>
+    request<OrganizerItemRecord[]>(withQuery('/api/v1/organizer/items', params)),
+  createOrganizerItem: (payload: {
+    kind: OrganizerKind;
+    title: string;
+    body?: string;
+    status?: OrganizerStatus;
+    due_at?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }) =>
+    request<OrganizerItemRecord>('/api/v1/organizer/items', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateOrganizerItem: (
+    itemId: string,
+    payload: Partial<{
+      title: string;
+      body: string;
+      status: OrganizerStatus;
+      due_at: string | null;
+      tags: string[];
+      metadata: Record<string, unknown>;
+    }>,
+  ) =>
+    request<OrganizerItemRecord>(`/api/v1/organizer/items/${itemId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteOrganizerItem: async (itemId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/organizer/items/${itemId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+  },
+  listDocuments: (limit = 100) => request<DocumentRecord[]>(withQuery('/api/v1/documents', { limit })),
+  createDocument: (payload: {
+    title: string;
+    content?: string;
+    format?: DocumentFormat;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }) =>
+    request<DocumentRecord>('/api/v1/documents', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateDocument: (
+    documentId: string,
+    payload: Partial<{
+      title: string;
+      content: string;
+      format: DocumentFormat;
+      tags: string[];
+      metadata: Record<string, unknown>;
+    }>,
+  ) =>
+    request<DocumentRecord>(`/api/v1/documents/${documentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteDocument: async (documentId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/documents/${documentId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+  },
+  ingestDocument: (documentId: string) =>
+    request<KnowledgeSourceRecord>(`/api/v1/documents/${documentId}/ingest`, {
+      method: 'POST',
+    }),
+  compareSearch: (payload: { query: string; providers: SearchProvider[]; max_results?: number }) =>
+    request<SearchCompareResponse>('/api/v1/search/compare', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

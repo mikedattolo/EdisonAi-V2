@@ -519,6 +519,108 @@ class KnowledgeSearchRequest(BaseModel):
     max_results: int = Field(default=10, ge=1, le=50)
 
 
+class OrganizerKind(str, Enum):
+    TASK = "task"
+    NOTE = "note"
+    CALENDAR = "calendar"
+
+
+class OrganizerStatus(str, Enum):
+    ACTIVE = "active"
+    DONE = "done"
+    ARCHIVED = "archived"
+    CANCELLED = "cancelled"
+
+
+class OrganizerItemCreate(BaseModel):
+    kind: OrganizerKind
+    title: str = Field(min_length=1, max_length=180)
+    body: str = ""
+    status: OrganizerStatus = OrganizerStatus.ACTIVE
+    due_at: datetime | None = None
+    tags: list[str] = Field(default_factory=list, max_length=16)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OrganizerItemUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    body: str | None = None
+    status: OrganizerStatus | None = None
+    due_at: datetime | None = None
+    tags: list[str] | None = Field(default=None, max_length=16)
+    metadata: dict[str, Any] | None = None
+
+
+class OrganizerItemRecord(OrganizerItemCreate):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentFormat(str, Enum):
+    MARKDOWN = "markdown"
+    TEXT = "text"
+
+
+class DocumentCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    content: str = ""
+    format: DocumentFormat = DocumentFormat.MARKDOWN
+    tags: list[str] = Field(default_factory=list, max_length=16)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    content: str | None = None
+    format: DocumentFormat | None = None
+    tags: list[str] | None = Field(default=None, max_length=16)
+    metadata: dict[str, Any] | None = None
+
+
+class DocumentRecord(DocumentCreate):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SearchProvider(str, Enum):
+    KNOWLEDGE = "knowledge"
+    WORKSPACE = "workspace"
+    DOCUMENTS = "documents"
+
+
+class SearchCompareRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=240)
+    providers: list[SearchProvider] = Field(
+        default_factory=lambda: [
+            SearchProvider.KNOWLEDGE,
+            SearchProvider.WORKSPACE,
+            SearchProvider.DOCUMENTS,
+        ],
+        max_length=6,
+    )
+    max_results: int = Field(default=5, ge=1, le=20)
+
+
+class SearchCompareResult(BaseModel):
+    provider: SearchProvider
+    title: str
+    subtitle: str | None = None
+    snippet: str
+    score: float
+    uri: str | None = None
+    path: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SearchCompareResponse(BaseModel):
+    query: str
+    results: dict[SearchProvider, list[SearchCompareResult]]
+    provider_counts: dict[SearchProvider, int]
+    best_provider: SearchProvider | None = None
+
+
 class GPUDevice(BaseModel):
     index: int
     name: str

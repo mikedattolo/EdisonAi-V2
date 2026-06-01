@@ -566,6 +566,20 @@ button {
   color: #8f3e13;
 }
 
+.success-banner {
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  border: 1px solid #b7d6ca;
+  border-radius: 8px;
+  background: #f0fbf6;
+  color: #176a58;
+}
+
+.error-banner.compact,
+.success-banner.compact {
+  margin: 0;
+}
+
 .chat-surface {
   display: grid;
   align-content: start;
@@ -1445,6 +1459,238 @@ button {
   border: 1px solid #d9dee8;
   border-radius: 8px;
   background: #fbfcfd;
+}
+
+.organizer-view,
+.documents-view,
+.search-compare-view {
+  gap: 16px;
+}
+
+.personal-shell,
+.documents-shell,
+.search-compare-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.personal-control-panel,
+.personal-results-panel,
+.documents-list,
+.document-editor-panel,
+.search-results-grid {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.personal-control-panel,
+.documents-list {
+  align-content: start;
+}
+
+.personal-control-panel label,
+.document-editor-panel label {
+  color: #566276;
+  font-size: 0.82rem;
+  font-weight: 780;
+}
+
+.personal-control-panel input,
+.document-editor-panel input,
+.personal-control-panel textarea,
+.document-editor-panel textarea {
+  width: 100%;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  padding: 10px;
+  color: #202a38;
+}
+
+.personal-control-panel textarea {
+  min-height: 130px;
+  resize: vertical;
+}
+
+.personal-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid #d7dfe8;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.personal-tabs button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #445267;
+  font-weight: 760;
+}
+
+.personal-tabs button.active {
+  border-color: #80cbb9;
+  background: #ffffff;
+  color: #176a58;
+}
+
+.personal-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 360px;
+  color: #687386;
+  text-align: center;
+}
+
+.personal-empty strong {
+  color: #1f2937;
+}
+
+.personal-list-section {
+  display: grid;
+  gap: 8px;
+}
+
+.personal-list-section h4 {
+  margin: 0;
+  color: #202a38;
+}
+
+.personal-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.personal-card,
+.search-result-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.personal-card div:first-child,
+.search-provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.personal-card strong,
+.search-result-card strong,
+.search-provider-header strong {
+  overflow: hidden;
+  color: #1f2937;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personal-card span,
+.personal-card small,
+.search-result-card span,
+.search-result-card small,
+.search-provider-header span {
+  color: #687386;
+  font-size: 0.8rem;
+}
+
+.personal-card p,
+.search-result-card p {
+  margin: 0;
+  color: #46546a;
+  line-height: 1.45;
+}
+
+.personal-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.documents-list {
+  max-height: 720px;
+  overflow: auto;
+}
+
+.documents-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  background: #fbfcfd;
+  text-align: left;
+}
+
+.documents-list button.active {
+  border-color: #80cbb9;
+  background: #effaf6;
+}
+
+.documents-list span {
+  color: #687386;
+  font-size: 0.78rem;
+}
+
+.document-editor-panel {
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto auto;
+}
+
+.document-editor-panel textarea {
+  min-height: 460px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.search-provider-list {
+  display: grid;
+  gap: 8px;
+}
+
+.search-provider-list label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #d7dfe8;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #344255;
+}
+
+.search-results-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+}
+
+.search-provider-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search-provider-results {
+  display: grid;
+  gap: 10px;
 }
 
 .fan-control-panel,
@@ -3194,7 +3440,11 @@ button {
   .memory-grid,
   .compare-shell,
   .compare-result-grid,
-  .research-shell {
+  .research-shell,
+  .personal-shell,
+  .documents-shell,
+  .search-compare-shell,
+  .search-results-grid {
     grid-template-columns: 1fr;
   }
 }

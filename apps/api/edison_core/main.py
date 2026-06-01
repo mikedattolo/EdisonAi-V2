@@ -11,6 +11,7 @@ from edison_core.api import (
     routes_knowledge,
     routes_media,
     routes_models,
+    routes_personal,
     routes_sessions,
     routes_workspace,
 )
@@ -25,6 +26,7 @@ from edison_core.services.media_orchestrator import MediaOrchestrator
 from edison_core.services.modly_client import ModlyClient
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_registry import ModelRegistry, ModelRouter
+from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.wan22_client import Wan22Client
@@ -38,10 +40,12 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     session_state_store = SessionStateStore(database)
     generation_store = GenerationStore(database)
     knowledge_store = KnowledgeStore(database, resolved_settings.workspace_roots[0])
+    personal_workspace_store = PersonalWorkspaceStore(database)
     conversation_store.initialize()
     session_state_store.initialize()
     generation_store.initialize()
     knowledge_store.initialize()
+    personal_workspace_store.initialize()
 
     model_registry = ModelRegistry.from_file(resolved_settings.model_registry_path)
     model_router = ModelRouter(model_registry)
@@ -91,6 +95,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.session_state_store = session_state_store
     app.state.generation_store = generation_store
     app.state.knowledge_store = knowledge_store
+    app.state.personal_workspace_store = personal_workspace_store
     app.state.model_registry = model_registry
     app.state.model_router = model_router
     app.state.model_gateway = model_gateway
@@ -108,6 +113,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.include_router(routes_chat.router)
     app.include_router(routes_jobs.router)
     app.include_router(routes_knowledge.router)
+    app.include_router(routes_personal.router)
     app.include_router(routes_media.router)
     app.include_router(routes_workspace.router)
     app.include_router(routes_conversations.router)
