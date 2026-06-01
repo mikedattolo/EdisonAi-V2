@@ -68,10 +68,11 @@ import type {
 
 const SESSION_ID = 'local-workbench';
 
-type ViewId = 'chat' | 'agent' | 'compare' | 'code' | 'media' | 'memory' | 'system' | 'settings';
+type ViewId = 'chat' | 'agent' | 'compare' | 'research' | 'code' | 'media' | 'memory' | 'system' | 'settings';
 type IconType = typeof MessageSquare;
 type ContextFilter = 'all' | 'instructions' | 'index' | 'warnings';
 type CompareStatus = 'idle' | 'streaming' | 'done' | 'error';
+type ResearchDepth = 'scan' | 'brief' | 'deep';
 
 type CompareRun = {
   id: string;
@@ -109,6 +110,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'agent', label: 'Agent', icon: Waypoints },
   { id: 'compare', label: 'Compare', icon: Network },
+  { id: 'research', label: 'Research', icon: BookOpen },
   { id: 'code', label: 'Code Space', icon: Code2 },
   { id: 'media', label: 'Media', icon: GalleryHorizontalEnd },
   { id: 'memory', label: 'Memory', icon: Brain },
@@ -144,6 +146,24 @@ const mediaPlan = [
     icon: Box,
     stack: 'TripoSR, Stable Fast 3D, InstantMesh, Blender automation hooks',
     lane: 'Artifact-first pipeline for GLB, OBJ, STL outputs',
+  },
+];
+
+const researchDepthOptions: Array<{ value: ResearchDepth; label: string; instruction: string }> = [
+  {
+    value: 'scan',
+    label: 'Scan',
+    instruction: 'Return a fast orientation with the strongest facts, uncertainties, and next checks.',
+  },
+  {
+    value: 'brief',
+    label: 'Brief',
+    instruction: 'Return a concise research brief with claims, source notes, risks, and recommendations.',
+  },
+  {
+    value: 'deep',
+    label: 'Deep',
+    instruction: 'Return a structured deep research report with source-backed findings, gaps, and action steps.',
   },
 ];
 
@@ -2116,6 +2136,15 @@ function WorkbenchView({
       />
     );
   }
+  if (activeView === 'research') {
+    return (
+      <ResearchView
+        models={models}
+        onOpenConversation={onOpenCompareConversation}
+        onRefreshConversations={onRefreshConversations}
+      />
+    );
+  }
   if (activeView === 'code') {
     return (
       <CodeWorkspaceView
@@ -2611,6 +2640,228 @@ function CompareView({
                 ))}
               </div>
             </>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function ResearchView({
+  models,
+  onOpenConversation,
+  onRefreshConversations,
+}: {
+  models: ModelProfile[];
+  onOpenConversation: (conversationId: string) => Promise<void>;
+  onRefreshConversations: () => Promise<void>;
+}) {
+  const readyChatModels = useMemo(
+    () => models.filter((model) => model.status === 'ready' && model.capabilities.includes('chat')),
+    [models],
+  );
+  const preferredModel = useMemo(
+    () => readyChatModels.find((model) => model.capabilities.includes('reasoning')) ?? readyChatModels[0],
+    [readyChatModels],
+  );
+  const [topic, setTopic] = useState('');
+  const [depth, setDepth] = useState<ResearchDepth>('deep');
+  const [includeKnowledge, setIncludeKnowledge] = useState(true);
+  const [sourceLimit, setSourceLimit] = useState(8);
+  const [run, setRun] = useState<CompareRun | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runResearch() {
+    const trimmedTopic = topic.trim();
+    if (isRunning) {
+      return;
+    }
+    if (!trimmedTopic) {
+      setError('Enter a research topic.');
+      return;
+    }
+    if (!preferredModel) {
+      setError('No ready chat model is available for research.');
+      return;
+    }
+
+    const startedAt = Date.now();
+    const runId = `research-${startedAt}`;
+    let streamedContent = '';
+    setError(null);
+    setIsRunning(true);
+    setRun({
+      id: runId,
+      modelId: preferredModel.id,
+      displayName: preferredModel.display_name,
+      status: 'streaming',
+      content: '',
+      startedAt,
+    });
+
+    try {
+      const response = await edisonApi.streamChatTurn({
+        conversation_id: null,
+        message: buildResearchPrompt(trimmedTopic, depth, includeKnowledge, sourceLimit),
+        mode: 'reasoning',
+        preferred_model: preferredModel.id,
+        memory_enabled: true,
+        include_workspace_context: false,
+        include_knowledge_context: includeKnowledge,
+        knowledge_query: trimmedTopic,
+        max_knowledge_context_matches: includeKnowledge ? sourceLimit : 1,
+      }, {
+        onStart: (event) => {
+          setRun((current) => (
+            current?.id === runId ? { ...current, conversationId: event.conversation_id } : current
+          ));
+        },
+        onToken: (delta) => {
+          streamedContent += delta;
+          setRun((current) => (
+            current?.id === runId ? { ...current, content: streamedContent } : current
+          ));
+        },
+        onError: (detail) => {
+          setRun((current) => (
+            current?.id === runId ? { ...current, status: 'error', error: detail, finishedAt: Date.now() } : current
+          ));
+        },
+      });
+      setRun((current) => (
+        current?.id === runId
+          ? {
+              ...current,
+              status: response.inference.finish_reason === 'error' ? 'error' : 'done',
+              content: response.assistant_message.content,
+              conversationId: response.conversation.id,
+              error: response.inference.finish_reason === 'error' ? response.inference.content : undefined,
+              finishedAt: Date.now(),
+            }
+          : current
+      ));
+      await onRefreshConversations();
+    } catch (caught) {
+      const detail = caught instanceof Error ? caught.message : 'Research run failed';
+      setError(detail);
+      setRun((current) => (
+        current?.id === runId ? { ...current, status: 'error', error: detail, finishedAt: Date.now() } : current
+      ));
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  return (
+    <section className="workbench-view research-view" aria-label="Research">
+      <div className="view-heading">
+        <BookOpen size={26} />
+        <h3>Research</h3>
+        <div className="view-actions">
+          <button
+            className="secondary-button icon-text-button"
+            disabled={!topic.trim() || isRunning}
+            onClick={() => void runResearch()}
+            type="button"
+          >
+            <Send size={16} />
+            {isRunning ? 'Researching' : 'Run Research'}
+          </button>
+        </div>
+      </div>
+
+      <div className="research-shell">
+        <aside className="research-control-panel" aria-label="Research controls">
+          <label htmlFor="research-topic">Topic</label>
+          <textarea
+            id="research-topic"
+            onChange={(event) => setTopic(event.target.value)}
+            placeholder="Research a product, repo, hardware plan, paper, or implementation question"
+            rows={6}
+            value={topic}
+          />
+          <div className="research-depth-row" aria-label="Research depth">
+            {researchDepthOptions.map((option) => (
+              <button
+                className={depth === option.value ? 'active' : ''}
+                key={option.value}
+                onClick={() => setDepth(option.value)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="research-toggle-row">
+            <label>
+              <input
+                checked={includeKnowledge}
+                onChange={(event) => setIncludeKnowledge(event.target.checked)}
+                type="checkbox"
+              />
+              Use RAG
+            </label>
+          </div>
+          <label htmlFor="research-source-limit">Source matches: {sourceLimit}</label>
+          <input
+            id="research-source-limit"
+            max={12}
+            min={3}
+            onChange={(event) => setSourceLimit(Number(event.target.value))}
+            type="range"
+            value={sourceLimit}
+          />
+          <div className="research-model-line">
+            <span>Model</span>
+            <strong>{preferredModel?.display_name ?? 'No ready chat model'}</strong>
+          </div>
+          {error && <div className="error-banner compact">{error}</div>}
+        </aside>
+
+        <section className="research-results-panel" aria-label="Research report">
+          {!run ? (
+            <div className="research-empty">
+              <BookOpen size={30} />
+              <strong>Turn a question into a source-aware report.</strong>
+              <span>Edison uses the local knowledge index when enabled and saves each research run as a chat.</span>
+            </div>
+          ) : (
+            <article className="research-report-card">
+              <div className="compare-result-header">
+                <div>
+                  <strong>{run.displayName}</strong>
+                  <span>{run.modelId}</span>
+                </div>
+                <small className={`compare-status ${run.status}`}>{run.status}</small>
+              </div>
+              <div className="compare-result-body">
+                {run.content ? (
+                  <MessageContent content={run.content} metadata={{}} />
+                ) : run.status === 'streaming' ? (
+                  <div className="typing-indicator" aria-label="Research is streaming">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                ) : (
+                  <p>{run.error ?? 'No research output.'}</p>
+                )}
+                {run.error && <div className="compare-run-error">{run.error}</div>}
+              </div>
+              <div className="compare-result-footer">
+                <span>{formatCompareDuration(run)}</span>
+                {run.conversationId && (
+                  <button
+                    className="secondary-button"
+                    onClick={() => void onOpenConversation(run.conversationId ?? '')}
+                    type="button"
+                  >
+                    Open Chat
+                  </button>
+                )}
+              </div>
+            </article>
           )}
         </section>
       </div>
@@ -3867,6 +4118,19 @@ function formatCompareDuration(run: CompareRun) {
     return run.status === 'streaming' ? 'Streaming' : 'Not started';
   }
   return `${((run.finishedAt - run.startedAt) / 1000).toFixed(1)}s`;
+}
+
+function buildResearchPrompt(topic: string, depth: ResearchDepth, includeKnowledge: boolean, sourceLimit: number) {
+  const depthOption = researchDepthOptions.find((option) => option.value === depth) ?? researchDepthOptions[2];
+  return [
+    'You are Edison running a research task for the local AI workstation.',
+    depthOption.instruction,
+    'Use clear section headings, separate confirmed facts from assumptions, call out weak evidence, and end with concrete next actions.',
+    includeKnowledge
+      ? `Use the retrieved Edison knowledge context as the primary source set. Cite source titles or URLs when they are available. Use up to ${sourceLimit} retrieved matches.`
+      : 'Do not rely on retrieved local knowledge. State when external verification would be needed.',
+    `Research topic:\n${topic}`,
+  ].join('\n\n');
 }
 
 function formatDateTime(value: string) {

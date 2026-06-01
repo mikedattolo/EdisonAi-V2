@@ -1316,6 +1316,137 @@ button {
   font-size: 0.84rem;
 }
 
+.research-view {
+  gap: 16px;
+}
+
+.research-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.research-control-panel,
+.research-results-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.research-control-panel {
+  align-content: start;
+}
+
+.research-control-panel label {
+  color: #566276;
+  font-size: 0.82rem;
+  font-weight: 780;
+}
+
+.research-control-panel textarea {
+  width: 100%;
+  min-height: 140px;
+  max-height: 300px;
+  resize: vertical;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  padding: 10px;
+  color: #202a38;
+}
+
+.research-depth-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid #d7dfe8;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.research-depth-row button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #445267;
+  font-weight: 760;
+}
+
+.research-depth-row button.active {
+  border-color: #80cbb9;
+  background: #ffffff;
+  color: #176a58;
+}
+
+.research-toggle-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #d7dfe8;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #344255;
+}
+
+.research-control-panel input[type='range'] {
+  width: 100%;
+  accent-color: #1f6f62;
+}
+
+.research-model-line {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.research-model-line span {
+  color: #687386;
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.research-model-line strong {
+  overflow: hidden;
+  color: #26313f;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 360px;
+  color: #687386;
+  text-align: center;
+}
+
+.research-empty strong {
+  color: #1f2937;
+}
+
+.research-report-card {
+  display: grid;
+  grid-template-rows: auto minmax(360px, 1fr) auto;
+  min-width: 0;
+  min-height: 520px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
 .fan-control-panel,
 .fan-controller-card {
   border: 1px solid #d9dee8;
@@ -3062,7 +3193,8 @@ button {
   .memory-metric-row,
   .memory-grid,
   .compare-shell,
-  .compare-result-grid {
+  .compare-result-grid,
+  .research-shell {
     grid-template-columns: 1fr;
   }
 }
