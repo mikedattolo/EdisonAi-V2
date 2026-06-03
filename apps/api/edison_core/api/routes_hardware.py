@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import subprocess
+from collections.abc import Iterator
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from edison_core.api.dependencies import get_generation_store, get_hardware_device_service
 from edison_core.schemas import (
@@ -9,6 +14,7 @@ from edison_core.schemas import (
     CameraDeviceRecord,
     CameraSnapshotRequest,
     CameraSnapshotResponse,
+    CameraVisionStatus,
     HardwareAcceleratorRecord,
     HardwareStatus,
 )
@@ -65,3 +71,53 @@ def capture_camera_snapshot(
         )
     )
     return CameraSnapshotResponse(camera=capture.camera, artifact=artifact, detail=capture.detail)
+
+
+@router.get("/cameras/feed")
+def camera_feed(
+    device_path: str | None = Query(None),
+    width: int = Query(1280, ge=160, le=4096),
+    height: int = Query(720, ge=120, le=2160),
+    input_format: Literal["mjpeg", "yuyv422"] = Query("mjpeg"),
+    hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+) -> StreamingResponse:
+    payload = CameraSnapshotRequest(
+        device_path=device_path,
+        width=width,
+        height=height,
+        input_format=input_format,
+    )
+    try:
+        _camera, command, boundary = hardware.camera_feed_command(payload)
+    except CameraCaptureError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return StreamingResponse(
+        _stream_process(command),
+        media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+    )
+
+
+@router.get("/cameras/vision", response_model=CameraVisionStatus)
+def camera_vision_status(
+    device_path: str | None = Query(None),
+    hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+) -> CameraVisionStatus:
+    return hardware.camera_vision_status(device_path)
+
+
+def _stream_process(command: list[str]) -> Iterator[bytes]:
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        if process.stdout is None:
+            return
+        while True:
+            chunk = process.stdout.read(32_768)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()

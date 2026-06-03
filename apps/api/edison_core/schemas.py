@@ -291,6 +291,25 @@ class MediaJobDeliveryRequest(BaseModel):
     conversation_id: str | None = None
 
 
+class WorkspaceRootRecord(BaseModel):
+    id: str
+    name: str
+    path: str
+    kind: Literal["app", "project"]
+    description: str | None = None
+    created_at: datetime | None = None
+
+
+class WorkspaceProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(min_length=1, max_length=2000)
+    initialize_git: bool = True
+
+
+class WorkspaceProjectRecord(WorkspaceRootRecord):
+    kind: Literal["project"] = "project"
+
+
 class WorkspaceEntry(BaseModel):
     path: str
     name: str
@@ -675,6 +694,17 @@ class CameraSnapshotResponse(BaseModel):
     detail: str
 
 
+class CameraVisionStatus(BaseModel):
+    service: str = "camera-vision"
+    status: Literal["ready", "setup_required", "offline", "error"]
+    camera: CameraDeviceRecord | None = None
+    backend: str | None = None
+    feed_url: str | None = None
+    detail: str
+    labels: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class GPUDevice(BaseModel):
     index: int
     name: str
@@ -701,6 +731,7 @@ class GPUFanControlState(BaseModel):
     gpu: GPUDevice
     policy: GPUFanPolicy
     target_speed_percent: int | None = None
+    target_fan_ids: list[int] = Field(default_factory=list)
     hardware_control_enabled: bool = False
     backend: str = "monitor"
     applied: bool = False

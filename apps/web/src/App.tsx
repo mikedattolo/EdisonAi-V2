@@ -45,6 +45,7 @@ import type {
   ChatMode,
   ConversationRecord,
   ConversationWithMessages,
+  CameraVisionStatus,
   DocumentRecord,
   GPUFanControlSnapshot,
   GPUFanMode,
@@ -72,6 +73,7 @@ import type {
   WorkspaceIndexSearchMatch,
   WorkspaceInstructionContext,
   WorkspacePatchPreview,
+  WorkspaceRootRecord,
   WorkspaceScan,
   WorkspaceSearchMatch,
   WorkspaceSummary,
@@ -239,10 +241,13 @@ export default function App() {
   const [mediaStatus, setMediaStatus] = useState<MediaSystemStatus | null>(null);
   const [fanControls, setFanControls] = useState<GPUFanControlSnapshot | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
+  const [cameraVisionStatus, setCameraVisionStatus] = useState<CameraVisionStatus | null>(null);
   const [mediaJobs, setMediaJobs] = useState<JobRecord[]>([]);
   const [mediaArtifacts, setMediaArtifacts] = useState<ArtifactRecord[]>([]);
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
   const [workspaceScan, setWorkspaceScan] = useState<WorkspaceScan | null>(null);
+  const [workspaceRoots, setWorkspaceRoots] = useState<WorkspaceRootRecord[]>([]);
+  const [activeWorkspaceRootId, setActiveWorkspaceRootId] = useState('app');
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([]);
   const [workspacePath, setWorkspacePath] = useState('');
   const [workspaceFile, setWorkspaceFile] = useState<WorkspaceFile | null>(null);
@@ -486,7 +491,7 @@ export default function App() {
     setIsSending(true);
     setError(null);
     try {
-      if (activeMode === 'media') {
+      if (activeMode === 'media' || isMediaGenerationPrompt(content)) {
         await handleMediaChatSend(content);
         return;
       }
@@ -544,7 +549,7 @@ export default function App() {
 
   async function handleMediaChatSend(content: string) {
     const jobType = inferMediaJobType(content);
-    const sourceArtifact = jobType === 'mesh' ? latestImageArtifactFromConversation(activeConversation) : null;
+    let sourceArtifact = jobType === 'mesh' ? latestImageArtifactFromConversation(activeConversation) : null;
     const conversation = await ensureChatConversation(content, 'media');
     await edisonApi.addMessage(conversation.id, {
       role: 'user',
@@ -552,11 +557,57 @@ export default function App() {
       metadata: { mode: 'media', source: 'chat-media-request' },
     });
     if (jobType === 'mesh' && !sourceArtifact) {
+      const prepMessage = await edisonApi.addMessage(conversation.id, {
+        role: 'assistant',
+        content: 'I am creating a source image first, then I will send it to Modly for a 3D mesh.',
+        model: 'comfyui',
+        metadata: { delivery_type: 'media_job_status', backend: 'comfyui', stage: 'mesh_source_image' },
+      });
+      setComposer('');
+      setActiveConversation(await edisonApi.getConversation(conversation.id));
+      const imageJob = await edisonApi.createMediaJob({
+        job_type: 'image',
+        title: `mesh source: ${conversationTitle(content)}`,
+        prompt: `${content}. Single clear subject, product render, centered object, neutral background, full object visible for image-to-3D reconstruction.`,
+        metadata: {
+          source: 'chat-mesh-source',
+          conversation_id: conversation.id,
+          deliver_to_chat: false,
+          width: 1024,
+          height: 1024,
+          steps: 30,
+          cfg: 6.5,
+          sampler_name: 'dpmpp_2m',
+          scheduler: 'karras',
+          enhance_prompt: true,
+        },
+      });
+      setActiveConversation((current) => updateMediaStatusMessage(current, prepMessage.id, imageJob));
+      const completedImageJob = await waitForMediaJobCompletion(imageJob.id, conversation.id, prepMessage.id);
+      if (completedImageJob.status !== 'complete' || !completedImageJob.result_artifact_id) {
+        await refreshMediaSurface();
+        return;
+      }
+      const artifacts = await edisonApi.listArtifacts(80);
+      sourceArtifact = artifacts.find((artifact) => artifact.id === completedImageJob.result_artifact_id) ?? null;
+      if (!sourceArtifact) {
+        await edisonApi.addMessage(conversation.id, {
+          role: 'assistant',
+          content: 'I generated the source image, but could not find the saved artifact to pass into Modly.',
+          model: 'modly',
+          metadata: { delivery_type: 'media_job_error', media_job: completedImageJob },
+        });
+        setActiveConversation(await edisonApi.getConversation(conversation.id));
+        await refreshMediaSurface();
+        return;
+      }
+    }
+    if (jobType === 'mesh' && !sourceArtifact) {
       await edisonApi.addMessage(conversation.id, {
         role: 'assistant',
-        content: 'Modly is ready for image-to-3D. Add or generate an image in this chat first, then ask me to turn it into a 3D mesh.',
+        content: 'Modly needs a source image before it can build a mesh, and I could not prepare one for this request.',
         model: 'modly',
-        metadata: { delivery_type: 'media_job_guidance', backend: 'modly' },
+        metadata: { delivery_type: 'media_job_error', backend: 'modly' },
       });
       setComposer('');
       setActiveConversation(await edisonApi.getConversation(conversation.id));
@@ -600,6 +651,36 @@ export default function App() {
     if (['queued', 'loading', 'generating', 'encoding'].includes(job.status)) {
       void pollMediaJobForChat(job.id, conversation.id, statusMessage.id);
     }
+  }
+
+  async function waitForMediaJobCompletion(
+    jobId: string,
+    conversationId: string,
+    statusMessageId?: string,
+  ): Promise<JobRecord> {
+    let latest = await edisonApi.syncMediaJob(jobId);
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (statusMessageId) {
+        setActiveConversation((current) => updateMediaStatusMessage(current, statusMessageId, latest));
+      }
+      if (latest.status === 'complete' || ['error', 'cancelled', 'setup_required'].includes(latest.status)) {
+        if (['error', 'cancelled', 'setup_required'].includes(latest.status)) {
+          await edisonApi.addMessage(conversationId, {
+            role: 'assistant',
+            content: mediaJobFailureLine(latest),
+            model: latest.backend,
+            metadata: {
+              delivery_type: 'media_job_error',
+              media_job: latest,
+            },
+          });
+        }
+        return latest;
+      }
+      await sleep(2500);
+      latest = await edisonApi.syncMediaJob(jobId);
+    }
+    return latest;
   }
 
   async function ensureChatConversation(firstMessage: string, mode: ChatMode): Promise<ConversationRecord> {
@@ -701,14 +782,16 @@ export default function App() {
 
   async function refreshSystemSurface() {
     try {
-      const [nextStatus, nextFanControls, nextHardwareStatus] = await Promise.all([
+      const [nextStatus, nextFanControls, nextHardwareStatus, nextVisionStatus] = await Promise.all([
         edisonApi.getStatus(),
         edisonApi.getFanControls(),
         edisonApi.getHardwareStatus(),
+        edisonApi.getCameraVisionStatus(),
       ]);
       setStatus(nextStatus);
       setFanControls(nextFanControls);
       setHardwareStatus(nextHardwareStatus);
+      setCameraVisionStatus(nextVisionStatus);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'System status failed');
     }
@@ -730,6 +813,7 @@ export default function App() {
         edisonApi.listArtifacts(24),
       ]);
       setHardwareStatus(nextHardwareStatus);
+      setCameraVisionStatus(await edisonApi.getCameraVisionStatus(devicePath ?? undefined));
       setMediaArtifacts(nextArtifacts);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Camera snapshot failed');
@@ -811,21 +895,54 @@ export default function App() {
     }
   }
 
-  async function refreshWorkspaceSurface(path = workspacePath) {
+  async function refreshWorkspaceSurface(path = workspacePath, rootId = activeWorkspaceRootId) {
     setIsWorkspaceBusy(true);
     setError(null);
     try {
-      const [nextSummary, nextEntries] = await Promise.all([
-        edisonApi.getWorkspaceSummary(),
-        edisonApi.listWorkspaceFiles(path),
+      const [nextRoots, nextSummary, nextEntries] = await Promise.all([
+        edisonApi.listWorkspaceRoots(),
+        edisonApi.getWorkspaceSummary(rootId),
+        edisonApi.listWorkspaceFiles(path, rootId),
       ]);
-      const nextScan = await edisonApi.getWorkspaceScan();
+      const nextScan = await edisonApi.getWorkspaceScan(rootId);
+      setWorkspaceRoots(nextRoots);
       setWorkspaceSummary(nextSummary);
       setWorkspaceScan(nextScan);
       setWorkspaceEntries(nextEntries);
       setWorkspacePath(path);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Workspace tools failed');
+    } finally {
+      setIsWorkspaceBusy(false);
+    }
+  }
+
+  async function selectWorkspaceRoot(rootId: string) {
+    setActiveWorkspaceRootId(rootId);
+    setWorkspacePath('');
+    setWorkspaceFile(null);
+    setWorkspaceDraftContent('');
+    setWorkspacePatchPreview(null);
+    setWorkspaceCommandResult(null);
+    setWorkspaceSearchResults([]);
+    await refreshWorkspaceSurface('', rootId);
+  }
+
+  async function createWorkspaceProject(name: string, prompt: string) {
+    if (!name.trim() || !prompt.trim()) {
+      return;
+    }
+    setIsWorkspaceBusy(true);
+    setError(null);
+    try {
+      const project = await edisonApi.createWorkspaceProject({
+        name: name.trim(),
+        prompt: prompt.trim(),
+        initialize_git: true,
+      });
+      await selectWorkspaceRoot(project.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Project creation failed');
     } finally {
       setIsWorkspaceBusy(false);
     }
@@ -842,7 +959,7 @@ export default function App() {
         await refreshWorkspaceSurface(entry.path);
         return;
       }
-      const file = await edisonApi.getWorkspaceFile(entry.path);
+      const file = await edisonApi.getWorkspaceFile(entry.path, activeWorkspaceRootId);
       setWorkspaceFile(file);
       setWorkspaceDraftContent(file.content);
       setWorkspacePatchPreview(null);
@@ -868,10 +985,13 @@ export default function App() {
     setIsWorkspaceBusy(true);
     setError(null);
     try {
-      const preview = await edisonApi.previewWorkspacePatch({
-        path: workspaceFile.path,
-        proposed_content: workspaceDraftContent,
-      });
+      const preview = await edisonApi.previewWorkspacePatch(
+        {
+          path: workspaceFile.path,
+          proposed_content: workspaceDraftContent,
+        },
+        activeWorkspaceRootId,
+      );
       setWorkspacePatchPreview(preview);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Patch preview failed');
@@ -887,12 +1007,15 @@ export default function App() {
     setIsWorkspaceBusy(true);
     setError(null);
     try {
-      const result = await edisonApi.applyWorkspacePatch({
-        path: workspaceFile.path,
-        proposed_content: workspaceDraftContent,
-        expected_sha256: workspacePatchPreview.current_sha256,
-        approved: true,
-      });
+      const result = await edisonApi.applyWorkspacePatch(
+        {
+          path: workspaceFile.path,
+          proposed_content: workspaceDraftContent,
+          expected_sha256: workspacePatchPreview.current_sha256,
+          approved: true,
+        },
+        activeWorkspaceRootId,
+      );
       setWorkspaceFile(result.file);
       setWorkspaceDraftContent(result.file.content);
       setWorkspacePatchPreview(null);
@@ -908,12 +1031,15 @@ export default function App() {
     setIsWorkspaceBusy(true);
     setError(null);
     try {
-      const result = await edisonApi.runWorkspaceCommand({
-        command: command.command,
-        cwd: command.cwd,
-        timeout_seconds: 120,
-        approved: true,
-      });
+      const result = await edisonApi.runWorkspaceCommand(
+        {
+          command: command.command,
+          cwd: command.cwd,
+          timeout_seconds: 120,
+          approved: true,
+        },
+        activeWorkspaceRootId,
+      );
       setWorkspaceCommandResult(result);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Command run failed');
@@ -931,7 +1057,7 @@ export default function App() {
     setIsWorkspaceBusy(true);
     setError(null);
     try {
-      const results = await edisonApi.searchWorkspace({ query, max_results: 80 });
+      const results = await edisonApi.searchWorkspace({ query, max_results: 80 }, activeWorkspaceRootId);
       setWorkspaceSearchResults(results);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Workspace search failed');
@@ -1292,6 +1418,7 @@ export default function App() {
             groupedModels={groupedModels}
             fanControls={fanControls}
             hardwareStatus={hardwareStatus}
+            cameraVisionStatus={cameraVisionStatus}
             artifacts={mediaArtifacts}
             isCameraBusy={isCameraBusy}
             isMediaBusy={isMediaBusy}
@@ -1305,7 +1432,9 @@ export default function App() {
             mediaJobs={mediaJobs}
             mediaStatus={mediaStatus}
             models={models}
+            activeWorkspaceRootId={activeWorkspaceRootId}
             onCreateMediaJob={createMediaReadinessJob}
+            onCreateWorkspaceProject={createWorkspaceProject}
             onOpenCompareConversation={loadConversation}
             onRefreshConversations={async () => {
               setConversations(await edisonApi.listConversations());
@@ -1326,6 +1455,7 @@ export default function App() {
             onKnowledgeSearch={handleKnowledgeSearch}
             onWorkspaceParent={openWorkspaceParent}
             onWorkspaceSearch={handleWorkspaceSearch}
+            onSelectWorkspaceRoot={selectWorkspaceRoot}
             sessionState={sessionState}
             status={status}
             workspaceCommandResult={workspaceCommandResult}
@@ -1334,6 +1464,7 @@ export default function App() {
             workspaceFile={workspaceFile}
             workspacePath={workspacePath}
             workspacePatchPreview={workspacePatchPreview}
+            workspaceRoots={workspaceRoots}
             workspaceScan={workspaceScan}
             workspaceSearchQuery={workspaceSearchQuery}
             workspaceSearchResults={workspaceSearchResults}
@@ -2096,11 +2227,13 @@ function WorkspaceContextView({
 }
 
 function WorkbenchView({
+  activeWorkspaceRootId,
   activeView,
   artifacts,
   fanControls,
   groupedModels,
   hardwareStatus,
+  cameraVisionStatus,
   isCameraBusy,
   isMediaBusy,
   isWorkspaceBusy,
@@ -2113,6 +2246,7 @@ function WorkbenchView({
   mediaJobs,
   mediaStatus,
   models,
+  onCreateWorkspaceProject,
   onCreateMediaJob,
   onCaptureCameraSnapshot,
   onOpenCompareConversation,
@@ -2136,6 +2270,7 @@ function WorkbenchView({
   onRefreshWorkspace,
   onWorkspaceParent,
   onWorkspaceSearch,
+  onSelectWorkspaceRoot,
   sessionState,
   status,
   workspaceCommandResult,
@@ -2144,6 +2279,7 @@ function WorkbenchView({
   workspaceFile,
   workspacePath,
   workspacePatchPreview,
+  workspaceRoots,
   workspaceScan,
   workspaceSearchQuery,
   workspaceSearchResults,
@@ -2152,11 +2288,13 @@ function WorkbenchView({
   setWorkspaceDraftContent,
   setWorkspaceSearchQuery,
 }: {
+  activeWorkspaceRootId: string;
   activeView: ViewId;
   artifacts: ArtifactRecord[];
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   hardwareStatus: HardwareStatus | null;
+  cameraVisionStatus: CameraVisionStatus | null;
   isCameraBusy: boolean;
   isMediaBusy: boolean;
   isWorkspaceBusy: boolean;
@@ -2169,6 +2307,7 @@ function WorkbenchView({
   mediaJobs: JobRecord[];
   mediaStatus: MediaSystemStatus | null;
   models: ModelProfile[];
+  onCreateWorkspaceProject: (name: string, prompt: string) => Promise<void>;
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
   onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
@@ -2192,6 +2331,7 @@ function WorkbenchView({
   onRefreshWorkspace: () => Promise<void>;
   onWorkspaceParent: () => Promise<void>;
   onWorkspaceSearch: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onSelectWorkspaceRoot: (rootId: string) => Promise<void>;
   sessionState: SessionStateRecord | null;
   status: SystemStatus | null;
   workspaceCommandResult: WorkspaceCommandRunResult | null;
@@ -2200,6 +2340,7 @@ function WorkbenchView({
   workspaceFile: WorkspaceFile | null;
   workspacePath: string;
   workspacePatchPreview: WorkspacePatchPreview | null;
+  workspaceRoots: WorkspaceRootRecord[];
   workspaceScan: WorkspaceScan | null;
   workspaceSearchQuery: string;
   workspaceSearchResults: WorkspaceSearchMatch[];
@@ -2241,12 +2382,14 @@ function WorkbenchView({
   if (activeView === 'code') {
     return (
       <CodeWorkspaceView
+        activeRootId={activeWorkspaceRootId}
         commandResult={workspaceCommandResult}
         entries={workspaceEntries}
         draftContent={workspaceDraftContent}
         file={workspaceFile}
         isBusy={isWorkspaceBusy}
         onApplyPatch={onApplyWorkspacePatch}
+        onCreateProject={onCreateWorkspaceProject}
         onOpenEntry={onOpenWorkspaceEntry}
         onParent={onWorkspaceParent}
         onPreviewPatch={onPreviewWorkspacePatch}
@@ -2254,8 +2397,10 @@ function WorkbenchView({
         onRunCommand={onRunWorkspaceCommand}
         onAddChatContextPath={onAddChatContextPath}
         onSearch={onWorkspaceSearch}
+        onSelectRoot={onSelectWorkspaceRoot}
         path={workspacePath}
         patchPreview={workspacePatchPreview}
+        roots={workspaceRoots}
         scan={workspaceScan}
         searchQuery={workspaceSearchQuery}
         searchResults={workspaceSearchResults}
@@ -2304,6 +2449,7 @@ function WorkbenchView({
         fanControls={fanControls}
         groupedModels={groupedModels}
         hardwareStatus={hardwareStatus}
+        cameraVisionStatus={cameraVisionStatus}
         isCameraBusy={isCameraBusy}
         models={models}
         onCaptureCameraSnapshot={onCaptureCameraSnapshot}
@@ -2313,7 +2459,16 @@ function WorkbenchView({
       />
     );
   }
-  return <SettingsView sessionState={sessionState} status={status} />;
+  return (
+    <SettingsView
+      fanControls={fanControls}
+      hardwareStatus={hardwareStatus}
+      mediaStatus={mediaStatus}
+      sessionState={sessionState}
+      status={status}
+      workspaceRoots={workspaceRoots}
+    />
+  );
 }
 
 function FeatureView({ icon: Icon, title, items }: { icon: IconType; title: string; items: Array<[string, string]> }) {
@@ -3447,12 +3602,14 @@ function SearchCompareView() {
 }
 
 function CodeWorkspaceView({
+  activeRootId,
   commandResult,
   entries,
   draftContent,
   file,
   isBusy,
   onApplyPatch,
+  onCreateProject,
   onOpenEntry,
   onParent,
   onPreviewPatch,
@@ -3460,8 +3617,10 @@ function CodeWorkspaceView({
   onRunCommand,
   onAddChatContextPath,
   onSearch,
+  onSelectRoot,
   path,
   patchPreview,
+  roots,
   scan,
   searchQuery,
   searchResults,
@@ -3469,12 +3628,14 @@ function CodeWorkspaceView({
   setDraftContent,
   summary,
 }: {
+  activeRootId: string;
   commandResult: WorkspaceCommandRunResult | null;
   entries: WorkspaceEntry[];
   draftContent: string;
   file: WorkspaceFile | null;
   isBusy: boolean;
   onApplyPatch: () => Promise<void>;
+  onCreateProject: (name: string, prompt: string) => Promise<void>;
   onOpenEntry: (entry: WorkspaceEntry) => Promise<void>;
   onParent: () => Promise<void>;
   onPreviewPatch: () => Promise<void>;
@@ -3482,8 +3643,10 @@ function CodeWorkspaceView({
   onRunCommand: (command: WorkspaceCommand) => Promise<void>;
   onAddChatContextPath: (path: string) => void;
   onSearch: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onSelectRoot: (rootId: string) => Promise<void>;
   path: string;
   patchPreview: WorkspacePatchPreview | null;
+  roots: WorkspaceRootRecord[];
   scan: WorkspaceScan | null;
   searchQuery: string;
   searchResults: WorkspaceSearchMatch[];
@@ -3491,11 +3654,21 @@ function CodeWorkspaceView({
   setDraftContent: (value: string) => void;
   summary: WorkspaceSummary | null;
 }) {
+  const [projectName, setProjectName] = useState('');
+  const [projectPrompt, setProjectPrompt] = useState('');
   const topLanguages = Object.entries(summary?.languages ?? {}).slice(0, 3);
   const commandPreview = scan?.commands.slice(0, 6) ?? [];
   const entrypointPreview = scan?.entrypoints.slice(0, 5) ?? [];
   const configPreview = scan?.config_files.slice(0, 6) ?? [];
   const draftChanged = Boolean(file && draftContent !== file.content);
+  const activeRoot = roots.find((root) => root.id === activeRootId);
+
+  async function handleCreateProject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onCreateProject(projectName, projectPrompt);
+    setProjectName('');
+    setProjectPrompt('');
+  }
 
   return (
     <section className="workbench-view code-view" aria-label="Code Space">
@@ -3507,6 +3680,43 @@ function CodeWorkspaceView({
           Refresh
         </button>
       </div>
+
+      <section className="workspace-root-panel" aria-label="Code Space projects">
+        <div className="workspace-root-controls">
+          <label htmlFor="workspace-root">Code Space</label>
+          <select
+            disabled={isBusy}
+            id="workspace-root"
+            onChange={(event) => void onSelectRoot(event.target.value)}
+            value={activeRootId}
+          >
+            {(roots.length ? roots : [{ id: 'app', name: 'Edison App', path: summary?.root_path ?? '', kind: 'app' as const }]).map((root) => (
+              <option key={root.id} value={root.id}>
+                {root.name} ({root.kind})
+              </option>
+            ))}
+          </select>
+          <span>{activeRoot?.path ?? summary?.root_path ?? 'Workspace root'}</span>
+        </div>
+        <form className="workspace-project-form" onSubmit={(event) => void handleCreateProject(event)}>
+          <input
+            aria-label="New project name"
+            onChange={(event) => setProjectName(event.target.value)}
+            placeholder="New repo name"
+            value={projectName}
+          />
+          <input
+            aria-label="New project brief"
+            onChange={(event) => setProjectPrompt(event.target.value)}
+            placeholder="What should Edison build here?"
+            value={projectPrompt}
+          />
+          <button className="secondary-button icon-text-button" disabled={isBusy || !projectName.trim() || !projectPrompt.trim()} type="submit">
+            <Folder size={16} />
+            Create
+          </button>
+        </form>
+      </section>
 
       <div className="code-overview-row">
         <article className="workspace-metric-card">
@@ -4147,6 +4357,7 @@ function MediaView({
 }
 
 function SystemView({
+  cameraVisionStatus,
   fanControls,
   groupedModels,
   hardwareStatus,
@@ -4157,6 +4368,7 @@ function SystemView({
   onUpdateFanControl,
   status,
 }: {
+  cameraVisionStatus: CameraVisionStatus | null;
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   hardwareStatus: HardwareStatus | null;
@@ -4169,6 +4381,10 @@ function SystemView({
 }) {
   const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
   const cameras = hardwareStatus?.cameras ?? [];
+  const liveCamera = cameraVisionStatus?.camera ?? cameras.find((cameraDevice) => cameraDevice.capture_path);
+  const liveFeedUrl = liveCamera?.capture_path
+    ? edisonApi.cameraFeedUrl({ device_path: liveCamera.capture_path, width: 960, height: 540, input_format: 'mjpeg' })
+    : null;
 
   return (
     <section className="workbench-view" aria-label="System Status">
@@ -4303,6 +4519,32 @@ function SystemView({
               <p>No camera was detected by Edison.</p>
             </article>
           )}
+          <article className="hardware-device-card camera-feed-card">
+            <div className="device-card-header">
+              <div>
+                <span className="section-label">Live vision</span>
+                <strong>{liveCamera?.name ?? 'Camera feed'}</strong>
+              </div>
+              <span className={`backend-status ${statusClassName(cameraVisionStatus?.status ?? 'offline')}`}>
+                {(cameraVisionStatus?.status ?? 'offline').replace('_', ' ')}
+              </span>
+            </div>
+            <div className="camera-feed-frame">
+              {liveFeedUrl ? (
+                <img alt={`${liveCamera?.name ?? 'Camera'} live feed`} src={liveFeedUrl} />
+              ) : (
+                <div className="empty-preview">
+                  <Camera size={30} />
+                  <strong>No live feed</strong>
+                </div>
+              )}
+            </div>
+            <p>{cameraVisionStatus?.detail ?? 'Vision status has not loaded yet.'}</p>
+            <div className="chip-list">
+              {(cameraVisionStatus?.labels ?? []).map((label) => <span key={label}>{label}</span>)}
+              {!cameraVisionStatus?.labels.length && <span>{cameraVisionStatus?.backend ?? 'vision backend'}</span>}
+            </div>
+          </article>
         </div>
       </section>
       <section className="fan-control-panel" aria-label="Multi GPU fan control">
@@ -4366,7 +4608,7 @@ function FanControlCard({
           <strong>{controller.gpu.name}</strong>
         </div>
         <small className={controller.applied ? 'fan-apply-state applied' : 'fan-apply-state'}>
-          {controller.applied ? 'Applied' : 'Staged'}
+          {controller.applied ? 'Applied' : 'Ready'}
         </small>
       </div>
 
@@ -4392,6 +4634,10 @@ function FanControlCard({
           <div>
             <dt>Power</dt>
             <dd>{formatMaybeNumber(controller.gpu.power_draw_watts, 'W')}</dd>
+          </div>
+          <div>
+            <dt>Targets</dt>
+            <dd>{controller.target_fan_ids.length ? controller.target_fan_ids.map((fanId) => `fan:${fanId}`).join(' ') : 'Auto'}</dd>
           </div>
         </dl>
       </div>
@@ -4445,7 +4691,30 @@ function FanControlCard({
   );
 }
 
-function SettingsView({ sessionState, status }: { sessionState: SessionStateRecord | null; status: SystemStatus | null }) {
+function SettingsView({
+  fanControls,
+  hardwareStatus,
+  mediaStatus,
+  sessionState,
+  status,
+  workspaceRoots,
+}: {
+  fanControls: GPUFanControlSnapshot | null;
+  hardwareStatus: HardwareStatus | null;
+  mediaStatus: MediaSystemStatus | null;
+  sessionState: SessionStateRecord | null;
+  status: SystemStatus | null;
+  workspaceRoots: WorkspaceRootRecord[];
+}) {
+  const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
+  const cameras = hardwareStatus?.cameras ?? [];
+  const mediaBackends = [
+    ['ComfyUI', mediaStatus?.comfyui.status, mediaStatus?.comfyui.base_url],
+    ['InvokeAI', mediaStatus?.invokeai.status, mediaStatus?.invokeai.base_url],
+    ['WAN 2.2', mediaStatus?.wan22.status, mediaStatus?.wan22.base_url],
+    ['Modly', mediaStatus?.modly.status, mediaStatus?.modly.base_url],
+  ];
+
   return (
     <section className="workbench-view" aria-label="Settings">
       <div className="view-heading">
@@ -4455,35 +4724,81 @@ function SettingsView({ sessionState, status }: { sessionState: SessionStateReco
       <div className="settings-stack">
         <article className="settings-panel">
           <div className="section-heading">
-            <Brain size={18} />
-            <h3>Model Plan</h3>
+            <Database size={18} />
+            <h3>Storage</h3>
           </div>
           <dl className="settings-list">
-            {modelPlan.map(([key, value]) => (
+            <div>
+              <dt>Database</dt>
+              <dd>{status?.database_path ?? 'Not loaded'}</dd>
+            </div>
+            {Object.entries(status?.storage_roots ?? {}).map(([key, value]) => (
               <div key={key}>
                 <dt>{key}</dt>
                 <dd>{value}</dd>
+              </div>
+            ))}
+            <div>
+              <dt>Code Spaces</dt>
+              <dd>{status?.storage_roots.projects ?? workspaceRoots.find((root) => root.kind === 'project')?.path ?? 'No project root loaded yet'}</dd>
+            </div>
+          </dl>
+        </article>
+        <article className="settings-panel">
+          <div className="section-heading">
+            <GalleryHorizontalEnd size={18} />
+            <h3>Media Backends</h3>
+          </div>
+          <dl className="settings-list">
+            {mediaBackends.map(([name, backendStatus, url]) => (
+              <div key={name}>
+                <dt>{name}</dt>
+                <dd>{backendStatus ?? 'not checked'} / {url ?? 'no URL'}</dd>
               </div>
             ))}
           </dl>
         </article>
         <article className="settings-panel">
           <div className="section-heading">
-            <Globe2 size={18} />
-            <h3>Remote Access</h3>
+            <Fan size={18} />
+            <h3>Hardware Control</h3>
           </div>
           <dl className="settings-list">
             <div>
-              <dt>Network</dt>
-              <dd>Tailscale private tailnet for anywhere access without exposing public ports.</dd>
+              <dt>Fan Backend</dt>
+              <dd>{fanControls?.backend ?? 'monitor'} / {fanControls?.hardware_control_enabled ? 'writes enabled' : 'monitor mode'}</dd>
             </div>
             <div>
-              <dt>Host</dt>
-              <dd>Run EDISON on the primary AI PC, advertise it as a tailnet service, and keep auth in Tailscale.</dd>
+              <dt>Fan Controllers</dt>
+              <dd>{fanControls?.controllers.length ?? 0}</dd>
             </div>
+            <div>
+              <dt>Hailo-8</dt>
+              <dd>{hailo ? `${hailo.status.replace('_', ' ')} / ${hailo.pci_address ?? 'no PCIe address'}` : 'not checked'}</dd>
+            </div>
+            <div>
+              <dt>Cameras</dt>
+              <dd>{cameras.map((cameraDevice) => `${cameraDevice.name} ${cameraDevice.capture_path ?? ''}`.trim()).join(' / ') || 'none'}</dd>
+            </div>
+          </dl>
+        </article>
+        <article className="settings-panel">
+          <div className="section-heading">
+            <Globe2 size={18} />
+            <h3>Session</h3>
+          </div>
+          <dl className="settings-list">
             <div>
               <dt>Current Session</dt>
               <dd>{sessionState?.session_id ?? 'local-workbench'} on {status?.environment ?? 'local'}.</dd>
+            </div>
+            <div>
+              <dt>Selected Mode</dt>
+              <dd>{sessionState?.selected_mode ?? 'chat'}</dd>
+            </div>
+            <div>
+              <dt>Selected Model</dt>
+              <dd>{sessionState?.selected_model ?? 'auto'}</dd>
             </div>
           </dl>
         </article>
@@ -4723,13 +5038,19 @@ function inferMediaJobType(content: string): JobType {
   if (/\b(video|animation|movie|clip|timelapse|wan)\b/.test(lowered)) {
     return 'video';
   }
-  if (/\b(3d|mesh|model|glb|obj|stl|sculpt)\b/.test(lowered)) {
+  if (/\b(3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt)\b/.test(lowered)) {
     return 'mesh';
   }
   if (/\b(audio|music|song|voice|sound)\b/.test(lowered)) {
     return 'audio';
   }
   return 'image';
+}
+
+function isMediaGenerationPrompt(content: string): boolean {
+  const lowered = content.toLowerCase();
+  return /\b(generate|make|create|render|draw|design|turn|convert|animate|produce)\b/.test(lowered)
+    && /\b(image|picture|photo|art|poster|video|animation|movie|clip|3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt|modly|comfy|wan)\b/.test(lowered);
 }
 
 function mediaJobTitle(content: string, jobType: JobType) {

@@ -7,6 +7,7 @@ from edison_core.main import create_app
 from edison_core.schemas import (
     CameraDeviceRecord,
     CameraSnapshotRequest,
+    CameraVisionStatus,
     HardwareAcceleratorRecord,
     HardwareStatus,
 )
@@ -45,6 +46,19 @@ def test_camera_snapshot_route_creates_downloadable_artifact(tmp_path):
     assert created.json()["camera"]["id"] == "logitech-brio"
     assert downloaded.status_code == 200
     assert downloaded.content.startswith(b"\xff\xd8")
+
+
+def test_camera_vision_route_reports_setup_state(tmp_path):
+    app = create_app(_settings(tmp_path))
+    app.state.hardware_device_service = _FakeHardwareDeviceService(tmp_path / "artifacts")
+    client = TestClient(app)
+
+    response = client.get("/api/v1/hardware/cameras/vision")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "setup_required"
+    assert response.json()["camera"]["id"] == "logitech-brio"
+    assert response.json()["backend"] == "hailo8"
 
 
 class _FakeHardwareDeviceService:
@@ -98,6 +112,15 @@ class _FakeHardwareDeviceService:
             absolute_path=output_path,
             artifact_path="camera/fake-brio.jpg",
             detail=f"Captured fake frame from {payload.device_path}.",
+        )
+
+    def camera_vision_status(self, device_path: str | None = None) -> CameraVisionStatus:
+        return CameraVisionStatus(
+            status="setup_required",
+            camera=self.detect_cameras()[0],
+            backend="hailo8",
+            feed_url="/api/v1/hardware/cameras/feed",
+            detail="Camera feed is ready, but HailoRT is missing.",
         )
 
 

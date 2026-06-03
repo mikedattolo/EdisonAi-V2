@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from edison_core.api.dependencies import get_generation_store, get_workspace_tools
+from edison_core.api.dependencies import get_generation_store, get_workspace_project_manager
 from edison_core.schemas import (
     JobCreate,
     JobStatus,
     JobType,
+    WorkspaceProjectCreate,
+    WorkspaceProjectRecord,
+    WorkspaceRootRecord,
     WorkspaceEntry,
     WorkspaceFile,
     WorkspaceCommandRunRequest,
@@ -36,28 +39,55 @@ from edison_core.services.workspace_tools import (
     WorkspaceUnsupportedFileError,
 )
 from edison_core.services.generation_store import GenerationStore
+from edison_core.services.workspace_projects import WorkspaceProjectManager
 
 
 router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
 
 
+@router.get("/roots", response_model=list[WorkspaceRootRecord])
+def workspace_roots(
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> list[WorkspaceRootRecord]:
+    return projects.list_roots()
+
+
+@router.post("/projects", response_model=WorkspaceProjectRecord, status_code=status.HTTP_201_CREATED)
+def create_workspace_project(
+    payload: WorkspaceProjectCreate,
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> WorkspaceProjectRecord:
+    try:
+        return projects.create_project(payload)
+    except WorkspaceAccessError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+
+
 @router.get("/summary", response_model=WorkspaceSummary)
-def workspace_summary(workspace: WorkspaceTools = Depends(get_workspace_tools)) -> WorkspaceSummary:
-    return workspace.summarize()
+def workspace_summary(
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> WorkspaceSummary:
+    return _workspace(root_id, projects).summarize()
 
 
 @router.get("/scan", response_model=WorkspaceScan)
-def workspace_scan(workspace: WorkspaceTools = Depends(get_workspace_tools)) -> WorkspaceScan:
-    return workspace.scan()
+def workspace_scan(
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> WorkspaceScan:
+    return _workspace(root_id, projects).scan()
 
 
 @router.get("/files", response_model=list[WorkspaceEntry])
 def list_workspace_files(
     path: str = "",
     limit: int = Query(200, ge=1, le=500),
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> list[WorkspaceEntry]:
     try:
+        workspace = _workspace(root_id, projects)
         return workspace.list_directory(path, limit=limit)
     except WorkspaceAccessError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
@@ -68,9 +98,11 @@ def list_workspace_files(
 @router.get("/files/content", response_model=WorkspaceFile)
 def read_workspace_file(
     path: str = Query(..., min_length=1),
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> WorkspaceFile:
     try:
+        workspace = _workspace(root_id, projects)
         return workspace.read_file(path)
     except WorkspaceAccessError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
@@ -83,25 +115,29 @@ def read_workspace_file(
 @router.post("/search", response_model=list[WorkspaceSearchMatch])
 def search_workspace(
     payload: WorkspaceSearchRequest,
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> list[WorkspaceSearchMatch]:
-    return workspace.search(payload)
+    return _workspace(root_id, projects).search(payload)
 
 
 @router.get("/instructions", response_model=list[WorkspaceInstructionFile])
 def list_workspace_instructions(
     limit: int = Query(200, ge=1, le=500),
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> list[WorkspaceInstructionFile]:
-    return workspace.list_instruction_files(limit=limit)
+    return _workspace(root_id, projects).list_instruction_files(limit=limit)
 
 
 @router.get("/instructions/context", response_model=WorkspaceInstructionContext)
 def workspace_instruction_context(
     path: str = Query(..., min_length=1),
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> WorkspaceInstructionContext:
     try:
+        workspace = _workspace(root_id, projects)
         return workspace.instruction_context(path)
     except WorkspaceAccessError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
@@ -110,15 +146,20 @@ def workspace_instruction_context(
 
 
 @router.get("/index/status", response_model=WorkspaceIndexStatus)
-def workspace_index_status(workspace: WorkspaceTools = Depends(get_workspace_tools)) -> WorkspaceIndexStatus:
-    return workspace.index_status()
+def workspace_index_status(
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> WorkspaceIndexStatus:
+    return _workspace(root_id, projects).index_status()
 
 
 @router.post("/index/rebuild", response_model=WorkspaceIndexStatus)
 def workspace_index_rebuild(
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
     store: GenerationStore = Depends(get_generation_store),
 ) -> WorkspaceIndexStatus:
+    workspace = _workspace(root_id, projects)
     job = store.create_job(
         JobCreate(
             job_type=JobType.CODE,
@@ -147,17 +188,20 @@ def workspace_index_rebuild(
 @router.post("/index/search", response_model=list[WorkspaceIndexSearchMatch])
 def workspace_index_search(
     payload: WorkspaceIndexSearchRequest,
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> list[WorkspaceIndexSearchMatch]:
-    return workspace.search_index(payload)
+    return _workspace(root_id, projects).search_index(payload)
 
 
 @router.post("/patches/preview", response_model=WorkspacePatchPreview)
 def preview_workspace_patch(
     payload: WorkspacePatchRequest,
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
     store: GenerationStore = Depends(get_generation_store),
 ) -> WorkspacePatchPreview:
+    workspace = _workspace(root_id, projects)
     job = store.create_job(
         JobCreate(
             job_type=JobType.CODE,
@@ -201,9 +245,11 @@ def preview_workspace_patch(
 @router.post("/patches/apply", response_model=WorkspacePatchApplyResult)
 def apply_workspace_patch(
     payload: WorkspacePatchApplyRequest,
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
     store: GenerationStore = Depends(get_generation_store),
 ) -> WorkspacePatchApplyResult:
+    workspace = _workspace(root_id, projects)
     job = store.create_job(
         JobCreate(
             job_type=JobType.CODE,
@@ -248,9 +294,11 @@ def apply_workspace_patch(
 @router.post("/commands/run", response_model=WorkspaceCommandRunResult)
 def run_workspace_command(
     payload: WorkspaceCommandRunRequest,
-    workspace: WorkspaceTools = Depends(get_workspace_tools),
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
     store: GenerationStore = Depends(get_generation_store),
 ) -> WorkspaceCommandRunResult:
+    workspace = _workspace(root_id, projects)
     job = store.create_job(
         JobCreate(
             job_type=JobType.CODE,
@@ -295,3 +343,10 @@ def run_workspace_command(
     except WorkspaceNotFoundError as error:
         store.update_job_status(job.id, JobStatus.CANCELLED, str(error), {"command": payload.command, "cwd": payload.cwd})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+
+def _workspace(root_id: str, projects: WorkspaceProjectManager) -> WorkspaceTools:
+    try:
+        return projects.workspace_for(root_id)
+    except WorkspaceAccessError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error

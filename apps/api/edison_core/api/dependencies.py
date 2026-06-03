@@ -16,6 +16,7 @@ from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.wan22_client import Wan22Client
+from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
 
 
@@ -57,6 +58,10 @@ def get_comfyui_client(request: Request) -> ComfyUIClient:
 
 def get_workspace_tools(request: Request) -> WorkspaceTools:
     return request.app.state.workspace_tools
+
+
+def get_workspace_project_manager(request: Request) -> WorkspaceProjectManager:
+    return request.app.state.workspace_project_manager
 
 
 def get_knowledge_store(request: Request) -> KnowledgeStore:

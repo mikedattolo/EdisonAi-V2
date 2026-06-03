@@ -10,6 +10,7 @@ cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 database_path = "data/edison.sqlite3"
 artifact_root = "artifacts"
 log_root = "logs"
+project_root = "projects"
 
 [models]
 registry_path = "config/model-registry.example.json"
@@ -31,6 +32,10 @@ workflow_root = "workflows"
 [hardware]
 gpu_fan_control_enabled = false
 gpu_fan_control_backend = "monitor"
+# Edison multi-GPU rigs usually run the NVIDIA control X server on :99.
+gpu_fan_control_display = ":99"
+# Optional map for GPUs with more than one physical fan target.
+# gpu_fan_target_map = { 0 = [0], 1 = [1, 2], 2 = [3, 4] }
 
 [security]
 workspace_roots = ["."]

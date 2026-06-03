@@ -7,6 +7,7 @@ import type {
   DocumentFormat,
   DocumentRecord,
   CameraSnapshotResponse,
+  CameraVisionStatus,
   GPUFanControlSnapshot,
   GPUFanControlState,
   GPUFanMode,
@@ -34,6 +35,8 @@ import type {
   WorkspaceInstructionContext,
   WorkspacePatchApplyResult,
   WorkspacePatchPreview,
+  WorkspaceProjectRecord,
+  WorkspaceRootRecord,
   WorkspaceScan,
   WorkspaceSearchMatch,
   WorkspaceSummary,
@@ -98,6 +101,15 @@ export const edisonApi = {
   apiBase: API_BASE,
   getStatus: () => request<SystemStatus>('/api/v1/status'),
   getHardwareStatus: () => request<HardwareStatus>('/api/v1/hardware/status'),
+  getCameraVisionStatus: (devicePath?: string | null) =>
+    request<CameraVisionStatus>(withQuery('/api/v1/hardware/cameras/vision', { device_path: devicePath ?? undefined })),
+  cameraFeedUrl: (params: { device_path?: string | null; width?: number; height?: number; input_format?: 'mjpeg' | 'yuyv422' } = {}) =>
+    `${API_BASE}${withQuery('/api/v1/hardware/cameras/feed', {
+      device_path: params.device_path ?? undefined,
+      width: params.width ?? 1280,
+      height: params.height ?? 720,
+      input_format: params.input_format ?? 'mjpeg',
+    })}`,
   captureCameraSnapshot: (payload: { device_path?: string | null; width?: number; height?: number; input_format?: 'mjpeg' | 'yuyv422'; title?: string }) =>
     request<CameraSnapshotResponse>('/api/v1/hardware/cameras/snapshot', {
       method: 'POST',
@@ -227,13 +239,20 @@ export const edisonApi = {
       method: 'POST',
     }),
   artifactDownloadUrl: (artifactId: string) => `${API_BASE}/api/v1/artifacts/${artifactId}/download`,
-  getWorkspaceSummary: () => request<WorkspaceSummary>('/api/v1/workspace/summary'),
-  getWorkspaceScan: () => request<WorkspaceScan>('/api/v1/workspace/scan'),
-  listWorkspaceFiles: (path = '') => request<WorkspaceEntry[]>(withQuery('/api/v1/workspace/files', { path })),
-  getWorkspaceFile: (path: string) =>
-    request<WorkspaceFile>(withQuery('/api/v1/workspace/files/content', { path })),
-  searchWorkspace: (payload: { query: string; max_results?: number; case_sensitive?: boolean; include_content?: boolean }) =>
-    request<WorkspaceSearchMatch[]>('/api/v1/workspace/search', {
+  listWorkspaceRoots: () => request<WorkspaceRootRecord[]>('/api/v1/workspace/roots'),
+  createWorkspaceProject: (payload: { name: string; prompt: string; initialize_git?: boolean }) =>
+    request<WorkspaceProjectRecord>('/api/v1/workspace/projects', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getWorkspaceSummary: (rootId = 'app') => request<WorkspaceSummary>(withQuery('/api/v1/workspace/summary', { root_id: rootId })),
+  getWorkspaceScan: (rootId = 'app') => request<WorkspaceScan>(withQuery('/api/v1/workspace/scan', { root_id: rootId })),
+  listWorkspaceFiles: (path = '', rootId = 'app') =>
+    request<WorkspaceEntry[]>(withQuery('/api/v1/workspace/files', { path, root_id: rootId })),
+  getWorkspaceFile: (path: string, rootId = 'app') =>
+    request<WorkspaceFile>(withQuery('/api/v1/workspace/files/content', { path, root_id: rootId })),
+  searchWorkspace: (payload: { query: string; max_results?: number; case_sensitive?: boolean; include_content?: boolean }, rootId = 'app') =>
+    request<WorkspaceSearchMatch[]>(withQuery('/api/v1/workspace/search', { root_id: rootId }), {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -243,8 +262,8 @@ export const edisonApi = {
     summary?: string;
     create_if_missing?: boolean;
     expected_sha256?: string | null;
-  }) =>
-    request<WorkspacePatchPreview>('/api/v1/workspace/patches/preview', {
+  }, rootId = 'app') =>
+    request<WorkspacePatchPreview>(withQuery('/api/v1/workspace/patches/preview', { root_id: rootId }), {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -255,20 +274,20 @@ export const edisonApi = {
     create_if_missing?: boolean;
     expected_sha256?: string | null;
     approved: boolean;
-  }) =>
-    request<WorkspacePatchApplyResult>('/api/v1/workspace/patches/apply', {
+  }, rootId = 'app') =>
+    request<WorkspacePatchApplyResult>(withQuery('/api/v1/workspace/patches/apply', { root_id: rootId }), {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  runWorkspaceCommand: (payload: { command: string; cwd: string; timeout_seconds?: number; approved: boolean }) =>
-    request<WorkspaceCommandRunResult>('/api/v1/workspace/commands/run', {
+  runWorkspaceCommand: (payload: { command: string; cwd: string; timeout_seconds?: number; approved: boolean }, rootId = 'app') =>
+    request<WorkspaceCommandRunResult>(withQuery('/api/v1/workspace/commands/run', { root_id: rootId }), {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  getWorkspaceInstructionContext: (path: string) =>
-    request<WorkspaceInstructionContext>(withQuery('/api/v1/workspace/instructions/context', { path })),
-  searchWorkspaceIndex: (payload: { query: string; max_results?: number }) =>
-    request<WorkspaceIndexSearchMatch[]>('/api/v1/workspace/index/search', {
+  getWorkspaceInstructionContext: (path: string, rootId = 'app') =>
+    request<WorkspaceInstructionContext>(withQuery('/api/v1/workspace/instructions/context', { path, root_id: rootId })),
+  searchWorkspaceIndex: (payload: { query: string; max_results?: number }, rootId = 'app') =>
+    request<WorkspaceIndexSearchMatch[]>(withQuery('/api/v1/workspace/index/search', { root_id: rootId }), {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

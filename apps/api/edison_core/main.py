@@ -32,6 +32,7 @@ from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.wan22_client import Wan22Client
+from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
 
 
@@ -79,6 +80,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     fan_control_service = GPUFanControlService(resolved_settings, status_service.gpu_manager)
     hardware_device_service = HardwareDeviceService(resolved_settings)
     workspace_tools = WorkspaceTools(resolved_settings.workspace_roots[0])
+    workspace_project_manager = WorkspaceProjectManager(resolved_settings)
 
     app = FastAPI(
         title=resolved_settings.app_name,
@@ -111,6 +113,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.fan_control_service = fan_control_service
     app.state.hardware_device_service = hardware_device_service
     app.state.workspace_tools = workspace_tools
+    app.state.workspace_project_manager = workspace_project_manager
 
     app.include_router(routes_health.router)
     app.include_router(routes_hardware.router)

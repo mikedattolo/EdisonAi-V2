@@ -12,6 +12,7 @@ from edison_core.config import EdisonSettings
 from edison_core.schemas import (
     CameraDeviceRecord,
     CameraSnapshotRequest,
+    CameraVisionStatus,
     HardwareAcceleratorRecord,
     HardwareStatus,
 )
@@ -105,6 +106,65 @@ class HardwareDeviceService:
             absolute_path=output_path,
             artifact_path=f"camera/{output_name}",
             detail=f"Captured {size} {payload.input_format} frame from {device_path}.",
+        )
+
+    def camera_feed_command(self, payload: CameraSnapshotRequest) -> tuple[CameraDeviceRecord, list[str], str]:
+        camera = self._select_capture_camera(payload.device_path)
+        device_path = payload.device_path or camera.capture_path
+        if not device_path:
+            raise CameraCaptureError("Camera device path was not available.")
+        size = f"{payload.width}x{payload.height}"
+        boundary = "edisonframe"
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "v4l2",
+            "-input_format",
+            payload.input_format,
+            "-video_size",
+            size,
+            "-i",
+            device_path,
+            "-an",
+            "-r",
+            "12",
+            "-q:v",
+            "5",
+            "-f",
+            "mpjpeg",
+            "-boundary_tag",
+            boundary,
+            "pipe:1",
+        ]
+        return camera, command, boundary
+
+    def camera_vision_status(self, device_path: str | None = None) -> CameraVisionStatus:
+        try:
+            camera = self._select_capture_camera(device_path)
+        except CameraCaptureError as error:
+            return CameraVisionStatus(status="offline", detail=str(error), backend=None)
+
+        hailo = self._detect_hailo8()
+        if hailo.status == "ready":
+            return CameraVisionStatus(
+                status="ready",
+                camera=camera,
+                backend="hailo8",
+                feed_url="/api/v1/hardware/cameras/feed",
+                detail="Camera feed is ready and HailoRT is available for object detection workflows.",
+                labels=["object", "person", "vehicle", "device"],
+                metadata={"accelerator": hailo.model_dump(mode="json")},
+            )
+        return CameraVisionStatus(
+            status="setup_required",
+            camera=camera,
+            backend="hailo8",
+            feed_url="/api/v1/hardware/cameras/feed",
+            detail=f"Camera feed is ready, but object recognition needs HailoRT ready first: {hailo.detail}",
+            metadata={"accelerator": hailo.model_dump(mode="json")},
         )
 
     def _detect_hailo8(self) -> HardwareAcceleratorRecord:
@@ -269,6 +329,19 @@ class HardwareDeviceService:
         if shutil.which(command[0]) is None:
             return CommandResult(returncode=127, stderr=f"{command[0]} is not installed")
         return self._runner(command, timeout)
+
+    def _select_capture_camera(self, device_path: str | None) -> CameraDeviceRecord:
+        cameras = self.detect_cameras()
+        ready_cameras = [camera for camera in cameras if camera.capture_path]
+        if not ready_cameras:
+            raise CameraCaptureError("No capture-capable camera was detected.")
+        selected_path = device_path or ready_cameras[0].capture_path
+        if not selected_path or not _is_video_device_path(selected_path):
+            raise CameraCaptureError("Camera device path must be a /dev/video* device.")
+        selected = next((camera for camera in ready_cameras if selected_path in camera.device_paths), None)
+        if selected is None:
+            raise CameraCaptureError(f"Camera device is not managed by Edison: {selected_path}")
+        return selected
 
 
 class CameraCaptureError(RuntimeError):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 
 from edison_core.config import EdisonSettings
@@ -52,6 +54,7 @@ class SystemStatusService:
             storage_roots={
                 "artifacts": str(self.settings.artifact_root),
                 "logs": str(self.settings.log_root),
+                "projects": str(self.settings.project_root),
             },
         )
 
@@ -82,14 +85,20 @@ class GPUFanControlService:
     def _state_for_gpu(self, gpu: GPUDevice, apply: bool) -> GPUFanControlState:
         policy = self._policies.setdefault(gpu.index, GPUFanPolicy(curve=_default_curve()))
         target_speed = _target_speed(policy, gpu.temperature_c, gpu.fan_speed_percent)
+        target_fan_ids = (
+            self._fan_ids_for_gpu(gpu.index, self._nvidia_env())
+            if self.settings.gpu_fan_control_backend == "nvidia-settings"
+            else []
+        )
         applied, detail = self._apply_policy(gpu.index, policy, target_speed) if apply else (
             False,
-            "Fan policy loaded; use PUT /api/v1/system/fans/{gpu_index} to apply changes.",
+            "Fan controller is ready.",
         )
         return GPUFanControlState(
             gpu=gpu,
             policy=policy,
             target_speed_percent=target_speed,
+            target_fan_ids=target_fan_ids,
             hardware_control_enabled=self.settings.gpu_fan_control_enabled,
             backend=self.settings.gpu_fan_control_backend,
             applied=applied,
@@ -107,24 +116,59 @@ class GPUFanControlService:
             return False, "Hardware fan writes are disabled; policy is saved for this API process."
         if self.settings.gpu_fan_control_backend != "nvidia-settings":
             return False, f"Backend {self.settings.gpu_fan_control_backend!r} does not support fan writes."
+        env = self._nvidia_env()
+        fan_ids = self._fan_ids_for_gpu(gpu_index, env)
+        if not fan_ids and policy.mode != "auto":
+            return False, "No writable NVIDIA fan targets were detected."
         commands = [["nvidia-settings", "-a", f"[gpu:{gpu_index}]/GPUFanControlState=0"]]
         if policy.mode != "auto" and target_speed is not None:
-            commands = [[
-                "nvidia-settings",
-                "-a",
-                f"[gpu:{gpu_index}]/GPUFanControlState=1",
-                "-a",
-                f"[fan:{gpu_index}]/GPUTargetFanSpeed={target_speed}",
-            ]]
+            command = ["nvidia-settings", "-a", f"[gpu:{gpu_index}]/GPUFanControlState=1"]
+            for fan_id in fan_ids:
+                command.extend(["-a", f"[fan:{fan_id}]/GPUTargetFanSpeed={target_speed}"])
+            commands = [command]
         for command in commands:
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+                result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False, env=env)
             except (FileNotFoundError, subprocess.TimeoutExpired) as error:
                 return False, f"Fan write failed: {error}"
             if result.returncode != 0:
                 detail = result.stderr.strip() or result.stdout.strip() or "nvidia-settings returned an error"
                 return False, detail
-        return True, "Fan policy applied through nvidia-settings."
+        targets = ", ".join(f"fan:{fan_id}" for fan_id in fan_ids) if fan_ids else f"gpu:{gpu_index}"
+        return True, f"Fan policy applied through nvidia-settings on {targets}."
+
+    def _fan_ids_for_gpu(self, gpu_index: int, env: dict[str, str]) -> list[int]:
+        configured = self.settings.gpu_fan_target_map.get(gpu_index)
+        if configured:
+            return configured
+        detected = self._detect_fan_ids(env)
+        if not detected:
+            return [gpu_index]
+        gpu_count = len(self.gpu_manager.detect_gpus())
+        if gpu_count == 3 and len(detected) == 5:
+            default_map = {0: detected[:1], 1: detected[1:3], 2: detected[3:5]}
+            return default_map.get(gpu_index, [])
+        return [gpu_index] if gpu_index in detected else detected
+
+    def _detect_fan_ids(self, env: dict[str, str]) -> list[int]:
+        try:
+            result = subprocess.run(
+                ["nvidia-settings", "-q", "fans"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+                env=env,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        fan_ids = {int(match.group(1)) for match in re.finditer(r"\[fan:(\d+)\]", result.stdout)}
+        return sorted(fan_ids)
+
+    def _nvidia_env(self) -> dict[str, str]:
+        return {**os.environ, "DISPLAY": self.settings.gpu_fan_control_display}
 
 
 def _parse_gpu_line(line: str) -> GPUDevice:

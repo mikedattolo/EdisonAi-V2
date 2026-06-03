@@ -68,6 +68,7 @@ export interface GPUFanControlState {
   gpu: GPUDevice;
   policy: GPUFanPolicy;
   target_speed_percent?: number | null;
+  target_fan_ids: number[];
   hardware_control_enabled: boolean;
   backend: string;
   applied: boolean;
@@ -135,6 +136,17 @@ export interface CameraSnapshotResponse {
   camera: CameraDeviceRecord;
   artifact: ArtifactRecord;
   detail: string;
+}
+
+export interface CameraVisionStatus {
+  service: string;
+  status: 'ready' | 'setup_required' | 'offline' | 'error';
+  camera?: CameraDeviceRecord | null;
+  backend?: string | null;
+  feed_url?: string | null;
+  detail: string;
+  labels: string[];
+  metadata: Record<string, unknown>;
 }
 
 export interface ConversationRecord {
@@ -261,6 +273,19 @@ export interface WorkspaceFile {
   content: string;
   truncated: boolean;
 }
+
+export interface WorkspaceRootRecord {
+  id: string;
+  name: string;
+  path: string;
+  kind: 'app' | 'project';
+  description?: string | null;
+  created_at?: string | null;
+}
+
+export type WorkspaceProjectRecord = WorkspaceRootRecord & {
+  kind: 'project';
+};
 
 export interface WorkspaceSummary {
   service: string;

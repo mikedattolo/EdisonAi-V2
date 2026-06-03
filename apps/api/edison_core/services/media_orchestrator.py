@@ -99,7 +99,7 @@ class MediaOrchestrator:
         if backend == "invokeai":
             return self._submit_generic(self.invokeai.base_url, payload, default_submit_path="/generate")
         if backend == "wan22":
-            return self._submit_generic(self.wan22.base_url, payload, default_submit_path="/generate")
+            return self._submit_wan22(payload)
         if backend == "modly":
             return self._submit_modly(payload, store)
         raise MediaExecutionError(f"Unsupported media backend: {backend}")
@@ -107,6 +107,8 @@ class MediaOrchestrator:
     def _poll(self, backend: str, remote_job_id: str, metadata: dict[str, Any]) -> BackendSubmission:
         if backend == "comfyui":
             return self._poll_comfyui(remote_job_id)
+        if backend == "wan22" and metadata.get("adapter") == "comfyui":
+            return self._poll_comfyui(remote_job_id, base_url=self.wan22.base_url)
         if backend == "modly":
             return self._poll_modly(remote_job_id)
         base_url = self._base_url_for(backend)
@@ -126,12 +128,40 @@ class MediaOrchestrator:
             if payload.job_type.value not in {"image", "image_edit"}:
                 raise MediaExecutionError("ComfyUI submissions require metadata.workflow with an API prompt graph")
             workflow = _default_sdxl_workflow(payload)
+        return self._submit_comfyui_prompt(self.comfyui.base_url, workflow, detail="ComfyUI prompt submitted")
+
+    def _submit_wan22(self, payload: JobCreate) -> BackendSubmission:
+        if not self.wan22.base_url:
+            raise MediaExecutionError("WAN 2.2 base URL is not configured")
+        workflow = payload.metadata.get("workflow")
+        if not isinstance(workflow, dict) or not workflow:
+            workflow = _default_wan22_workflow(payload)
+        return self._submit_comfyui_prompt(
+            self.wan22.base_url,
+            workflow,
+            detail="WAN 2.2 ComfyUI video prompt submitted",
+            metadata={"adapter": "comfyui", "workflow_template": "wan2.2-ti2v-5b"},
+        )
+
+    def _submit_comfyui_prompt(
+        self,
+        base_url: str,
+        workflow: dict[str, Any],
+        *,
+        detail: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> BackendSubmission:
         body = {"prompt": workflow}
-        response = self._post_json(self.comfyui.base_url, "/prompt", body)
+        response = self._post_json(base_url, "/prompt", body)
         prompt_id = str(response.get("prompt_id") or response.get("prompt_id", ""))
         if not prompt_id:
             raise MediaExecutionError("ComfyUI did not return a prompt_id")
-        return BackendSubmission(remote_job_id=prompt_id, status="queued", detail="ComfyUI prompt submitted", metadata={"prompt_id": prompt_id})
+        return BackendSubmission(
+            remote_job_id=prompt_id,
+            status="queued",
+            detail=detail,
+            metadata={"prompt_id": prompt_id, **(metadata or {})},
+        )
 
     def _submit_modly(self, payload: JobCreate, store: GenerationStore) -> BackendSubmission:
         if not self.modly.base_url:
@@ -184,10 +214,11 @@ class MediaOrchestrator:
             },
         )
 
-    def _poll_comfyui(self, remote_job_id: str) -> BackendSubmission:
-        if not self.comfyui.base_url:
+    def _poll_comfyui(self, remote_job_id: str, base_url: str | None = None) -> BackendSubmission:
+        target_base_url = base_url or self.comfyui.base_url
+        if not target_base_url:
             raise MediaExecutionError("ComfyUI base URL is not configured")
-        response = self._get_json(self.comfyui.base_url, f"/history/{remote_job_id}")
+        response = self._get_json(target_base_url, f"/history/{remote_job_id}")
         job_payload = response.get(remote_job_id)
         if not isinstance(job_payload, dict):
             return BackendSubmission(remote_job_id=remote_job_id, status="generating", detail="ComfyUI job still running")
@@ -309,7 +340,9 @@ class MediaOrchestrator:
 
     def _save_output_artifact(self, job: JobRecord, output: dict[str, Any], index: int, store: GenerationStore):
         if job.backend == "comfyui":
-            content, mime_type, suffix = self._download_comfyui_output(output)
+            content, mime_type, suffix = self._download_comfyui_output(output, self.comfyui.base_url)
+        elif job.backend == "wan22" and job.metadata.get("adapter") == "comfyui":
+            content, mime_type, suffix = self._download_comfyui_output(output, self.wan22.base_url)
         else:
             content, mime_type, suffix = self._download_generic_output(output)
 
@@ -326,8 +359,8 @@ class MediaOrchestrator:
             )
         )
 
-    def _download_comfyui_output(self, output: dict[str, Any]) -> tuple[bytes, str, str]:
-        if not self.comfyui.base_url:
+    def _download_comfyui_output(self, output: dict[str, Any], base_url: str | None) -> tuple[bytes, str, str]:
+        if not base_url:
             raise MediaExecutionError("ComfyUI base URL is not configured")
         filename = str(output.get("filename") or "")
         if not filename:
@@ -335,7 +368,7 @@ class MediaOrchestrator:
         subfolder = str(output.get("subfolder") or "")
         folder_type = str(output.get("type") or "output")
         query = f"?filename={filename}&subfolder={subfolder}&type={folder_type}"
-        content, content_type = self._get_bytes(self.comfyui.base_url, f"/view{query}")
+        content, content_type = self._get_bytes(base_url, f"/view{query}")
         suffix = Path(filename).suffix or _suffix_from_mime(content_type)
         return content, content_type or _mime_from_suffix(suffix), suffix
 
@@ -471,6 +504,81 @@ def _suffix_from_mime(content_type: str | None) -> str:
 
 def _mime_from_suffix(suffix: str) -> str:
     return mimetypes.guess_type(f"file{suffix}")[0] or "application/octet-stream"
+
+
+def _default_wan22_workflow(payload: JobCreate) -> dict[str, Any]:
+    metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
+    prompt = (payload.prompt or payload.title or "A cinematic Edison video").strip()
+    negative_prompt = str(
+        metadata.get("negative_prompt")
+        or "low quality, blurry, distorted, static frame, watermark, text artifacts, broken motion, bad anatomy"
+    )
+    width = _int_metadata(metadata, "width", 640, minimum=256, maximum=1280)
+    height = _int_metadata(metadata, "height", 352, minimum=144, maximum=720)
+    length = _int_metadata(metadata, "length", 49, minimum=9, maximum=121)
+    steps = _int_metadata(metadata, "steps", 16, minimum=1, maximum=40)
+    cfg = _float_metadata(metadata, "cfg", 5.0, minimum=1.0, maximum=12.0)
+    fps = _int_metadata(metadata, "fps", 16, minimum=4, maximum=30)
+    seed = _int_metadata(metadata, "seed", random.randint(1, 2**31 - 1), minimum=0, maximum=2**63 - 1)
+    filename_prefix = str(metadata.get("filename_prefix") or "video/edison_wan22")
+
+    return {
+        "37": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": str(metadata.get("unet_name") or "wan2.2_ti2v_5B_fp16.safetensors"),
+                "weight_dtype": str(metadata.get("weight_dtype") or "default"),
+            },
+        },
+        "38": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": str(metadata.get("clip_name") or "umt5_xxl_fp8_e4m3fn_scaled.safetensors"),
+                "type": "wan",
+                "device": str(metadata.get("clip_device") or "default"),
+            },
+        },
+        "39": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": str(metadata.get("vae_name") or "wan2.2_vae.safetensors")},
+        },
+        "48": {
+            "class_type": "ModelSamplingSD3",
+            "inputs": {"shift": _float_metadata(metadata, "shift", 8.0, minimum=0.0, maximum=20.0), "model": ["37", 0]},
+        },
+        "55": {
+            "class_type": "Wan22ImageToVideoLatent",
+            "inputs": {"width": width, "height": height, "length": length, "batch_size": 1, "vae": ["39", 0]},
+        },
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["38", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["38", 0]}},
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": str(metadata.get("sampler_name") or "uni_pc"),
+                "scheduler": str(metadata.get("scheduler") or "simple"),
+                "denoise": 1.0,
+                "model": ["48", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["55", 0],
+            },
+        },
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+        "57": {"class_type": "CreateVideo", "inputs": {"images": ["8", 0], "fps": fps}},
+        "58": {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": ["57", 0],
+                "filename_prefix": filename_prefix,
+                "format": str(metadata.get("format") or "mp4"),
+                "codec": str(metadata.get("codec") or "h264"),
+            },
+        },
+    }
 
 
 def _default_sdxl_workflow(payload: JobCreate) -> dict[str, Any]:

@@ -112,6 +112,54 @@ def test_media_orchestrator_uses_quality_defaults_for_comfyui_images(tmp_path):
     assert "high quality" in workflow["6"]["inputs"]["text"]
 
 
+def test_media_orchestrator_submits_wan22_comfyui_workflow(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        artifact_root=tmp_path / "artifacts",
+        workspace_roots=[tmp_path],
+        comfyui_base_url="",
+        invokeai_base_url=None,
+        wan22_base_url="http://comfyui.local",
+        modly_base_url=None,
+    )
+    store = GenerationStore(SQLiteDatabase(settings.database_path))
+    store.initialize()
+
+    orchestrator = MediaOrchestrator(
+        settings,
+        ComfyUIClient(None),
+        InvokeAIClient(None),
+        Wan22Client(settings.wan22_base_url),
+        ModlyClient(None),
+    )
+    captured = {}
+
+    def fake_post_json(base_url, path, payload):
+        captured.update({"base_url": base_url, "path": path, "payload": payload})
+        return {"prompt_id": "wan-prompt-1"}
+
+    orchestrator._post_json = fake_post_json  # type: ignore[method-assign]
+
+    submitted = orchestrator.submit_job(
+        JobCreate(
+            job_type=JobType.VIDEO,
+            title="A city timelapse",
+            backend="wan22",
+            prompt="A city timelapse at sunset",
+        ),
+        store,
+    )
+
+    workflow = captured["payload"]["prompt"]
+    assert submitted.status == "generating"
+    assert captured["base_url"] == "http://comfyui.local"
+    assert captured["path"] == "/prompt"
+    assert submitted.metadata["adapter"] == "comfyui"
+    assert workflow["37"]["inputs"]["unet_name"] == "wan2.2_ti2v_5B_fp16.safetensors"
+    assert workflow["38"]["inputs"]["clip_name"] == "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    assert workflow["58"]["inputs"]["format"] == "mp4"
+
+
 def test_media_orchestrator_submits_modly_image_to_mesh(tmp_path):
     settings = EdisonSettings(
         database_path=tmp_path / "edison.sqlite3",

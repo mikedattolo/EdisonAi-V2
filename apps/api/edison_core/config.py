@@ -22,6 +22,7 @@ class EdisonSettings(BaseModel):
     database_path: Path = PROJECT_ROOT / "data" / "edison.sqlite3"
     artifact_root: Path = PROJECT_ROOT / "artifacts"
     log_root: Path = PROJECT_ROOT / "logs"
+    project_root: Path = PROJECT_ROOT / "projects"
     model_registry_path: Path = PROJECT_ROOT / "config" / "model-registry.example.json"
     default_chat_model: str = "local-general-chat"
     default_coding_model: str = "local-coding"
@@ -37,6 +38,8 @@ class EdisonSettings(BaseModel):
     workflow_root: Path = PROJECT_ROOT / "workflows"
     gpu_fan_control_enabled: bool = False
     gpu_fan_control_backend: str = "monitor"
+    gpu_fan_control_display: str = ":99"
+    gpu_fan_target_map: dict[int, list[int]] = Field(default_factory=dict)
     workspace_roots: list[Path] = Field(default_factory=lambda: [PROJECT_ROOT])
     require_approval_for_destructive_tools: bool = True
     require_approval_for_external_side_effects: bool = True
@@ -71,6 +74,7 @@ def load_settings(config_path: str | Path | None = None) -> EdisonSettings:
             os.getenv("EDISON_ARTIFACT_ROOT", storage.get("artifact_root", "artifacts"))
         ),
         log_root=_resolve_path(os.getenv("EDISON_LOG_ROOT", storage.get("log_root", "logs"))),
+        project_root=_resolve_path(os.getenv("EDISON_PROJECT_ROOT", storage.get("project_root", "projects"))),
         model_registry_path=_resolve_path(
             os.getenv(
                 "EDISON_MODEL_REGISTRY_PATH",
@@ -114,6 +118,12 @@ def load_settings(config_path: str | Path | None = None) -> EdisonSettings:
         gpu_fan_control_backend=os.getenv(
             "EDISON_GPU_FAN_CONTROL_BACKEND", hardware.get("gpu_fan_control_backend", "monitor")
         ),
+        gpu_fan_control_display=os.getenv(
+            "EDISON_GPU_FAN_CONTROL_DISPLAY", hardware.get("gpu_fan_control_display", ":99")
+        ),
+        gpu_fan_target_map=_fan_target_map_env(
+            "EDISON_GPU_FAN_TARGET_MAP", hardware.get("gpu_fan_target_map", {})
+        ),
         workspace_roots=[
             _resolve_path(root)
             for root in _list_env("EDISON_WORKSPACE_ROOTS", security.get("workspace_roots", ["."]))
@@ -150,3 +160,38 @@ def _list_env(name: str, default: list[str] | None) -> list[str]:
     if value:
         return [item.strip() for item in value.split(",") if item.strip()]
     return default or ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+def _fan_target_map_env(name: str, default: object) -> dict[int, list[int]]:
+    value = os.getenv(name)
+    raw = value if value else default
+    if isinstance(raw, dict):
+        return {
+            int(gpu_index): [int(fan_id) for fan_id in _coerce_list(fan_ids)]
+            for gpu_index, fan_ids in raw.items()
+        }
+    if isinstance(raw, list):
+        pairs = raw
+    elif isinstance(raw, str):
+        pairs = [item.strip() for item in raw.split(";") if item.strip()]
+    else:
+        return {}
+    parsed: dict[int, list[int]] = {}
+    for pair in pairs:
+        if not isinstance(pair, str) or ":" not in pair:
+            continue
+        gpu_index, fan_ids = pair.split(":", 1)
+        parsed[int(gpu_index.strip())] = [
+            int(fan_id.strip()) for fan_id in fan_ids.split(",") if fan_id.strip()
+        ]
+    return parsed
+
+
+def _coerce_list(value: object) -> list[object]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [value]

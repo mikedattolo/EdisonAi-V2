@@ -2,6 +2,9 @@ from fastapi.testclient import TestClient
 
 from edison_core.config import EdisonSettings
 from edison_core.main import create_app
+from edison_core.schemas import GPUDevice, GPUFanControlUpdate
+from edison_core.services import system_status
+from edison_core.services.system_status import GPUFanControlService
 
 
 def test_health_and_status_routes(tmp_path):
@@ -43,6 +46,60 @@ def test_gpu_fan_control_routes_are_safe_by_default(tmp_path):
     assert updated.json()["policy"]["mode"] == "manual"
     assert updated.json()["target_speed_percent"] == 58
     assert updated.json()["applied"] is False
+
+
+def test_gpu_fan_control_uses_display_and_multi_fan_targets(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeGPUManager:
+        def detect_gpus(self):
+            return [
+                GPUDevice(index=0, name="RTX 5060 Ti"),
+                GPUDevice(index=1, name="RTX 4060 Ti"),
+                GPUDevice(index=2, name="RTX 3090"),
+            ]
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command == ["nvidia-settings", "-q", "fans"]:
+            return FakeResult(
+                "Attribute 'fans' (edison:99): 5.\n"
+                "  [fan:0] [fan:1] [fan:2] [fan:3] [fan:4]\n"
+            )
+        return FakeResult()
+
+    monkeypatch.setattr(system_status.subprocess, "run", fake_run)
+    service = GPUFanControlService(
+        EdisonSettings(
+            database_path=tmp_path / "edison.sqlite3",
+            model_registry_path=tmp_path / "missing-models.json",
+            artifact_root=tmp_path / "artifacts",
+            log_root=tmp_path / "logs",
+            gpu_fan_control_enabled=True,
+            gpu_fan_control_backend="nvidia-settings",
+            gpu_fan_control_display=":99",
+        ),
+        FakeGPUManager(),
+    )
+
+    updated = service.update_policy(
+        1,
+        GPUFanControlUpdate(mode="manual", manual_speed_percent=58),
+    )
+
+    apply_command, apply_kwargs = calls[-1]
+    assert updated.applied is True
+    assert updated.target_fan_ids == [1, 2]
+    assert apply_kwargs["env"]["DISPLAY"] == ":99"
+    assert "[fan:1]/GPUTargetFanSpeed=58" in apply_command
+    assert "[fan:2]/GPUTargetFanSpeed=58" in apply_command
 
 
 def test_conversation_routes_round_trip(tmp_path):
@@ -171,6 +228,35 @@ def test_coding_chat_focus_paths_are_included_in_workspace_context(tmp_path):
 
     assert response.status_code == 201
     assert assistant_metadata["workspace_context"]["focus_paths"] == ["main.py", "README.md"]
+
+
+def test_workspace_projects_create_separate_code_space_root(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        workspace_roots=[tmp_path / "edison-app"],
+        project_root=tmp_path / "projects",
+    )
+    settings.workspace_roots[0].mkdir()
+    client = TestClient(create_app(settings))
+
+    created = client.post(
+        "/api/v1/workspace/projects",
+        json={"name": "Robot Dashboard", "prompt": "Build a dashboard for robot telemetry."},
+    )
+    roots = client.get("/api/v1/workspace/roots")
+    readme = client.get(
+        "/api/v1/workspace/files/content",
+        params={"root_id": created.json()["id"], "path": "README.md"},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["id"] == "robot-dashboard"
+    assert created.json()["path"].endswith("robot-dashboard")
+    assert roots.status_code == 200
+    assert {root["id"] for root in roots.json()} == {"app", "robot-dashboard"}
+    assert readme.status_code == 200
+    assert "robot telemetry" in readme.json()["content"]
 
 
 def test_chat_includes_knowledge_context_metadata(tmp_path):
