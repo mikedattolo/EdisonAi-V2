@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from starlette.background import BackgroundTask
 from fastapi.responses import StreamingResponse
 
 from edison_core.api.dependencies import get_generation_store, get_hardware_device_service
@@ -91,9 +92,11 @@ def camera_feed(
         _camera, command, boundary = hardware.camera_feed_command(payload)
     except CameraCaptureError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     return StreamingResponse(
-        _stream_process(command),
+        _stream_process(process),
         media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+        background=BackgroundTask(_terminate_process, process),
     )
 
 
@@ -105,8 +108,7 @@ def camera_vision_status(
     return hardware.camera_vision_status(device_path)
 
 
-def _stream_process(command: list[str]) -> Iterator[bytes]:
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+def _stream_process(process: subprocess.Popen[bytes]) -> Iterator[bytes]:
     try:
         if process.stdout is None:
             return
@@ -116,8 +118,14 @@ def _stream_process(command: list[str]) -> Iterator[bytes]:
                 break
             yield chunk
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        _terminate_process(process)
+
+
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
