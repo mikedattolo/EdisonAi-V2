@@ -6,9 +6,11 @@ import type {
   ConversationWithMessages,
   DocumentFormat,
   DocumentRecord,
+  CameraSnapshotResponse,
   GPUFanControlSnapshot,
   GPUFanControlState,
   GPUFanMode,
+  HardwareStatus,
   JobRecord,
   JobType,
   MediaSystemStatus,
@@ -95,6 +97,12 @@ function withQuery(path: string, params: Record<string, string | number | boolea
 export const edisonApi = {
   apiBase: API_BASE,
   getStatus: () => request<SystemStatus>('/api/v1/status'),
+  getHardwareStatus: () => request<HardwareStatus>('/api/v1/hardware/status'),
+  captureCameraSnapshot: (payload: { device_path?: string | null; width?: number; height?: number; input_format?: 'mjpeg' | 'yuyv422'; title?: string }) =>
+    request<CameraSnapshotResponse>('/api/v1/hardware/cameras/snapshot', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getFanControls: () => request<GPUFanControlSnapshot>('/api/v1/system/fans'),
   updateFanControl: (gpuIndex: number, payload: { mode: GPUFanMode; manual_speed_percent: number; curve?: Array<{ temperature_c: number; speed_percent: number }> }) =>
     request<GPUFanControlState>(`/api/v1/system/fans/${gpuIndex}`, {

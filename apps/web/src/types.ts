@@ -93,6 +93,50 @@ export interface SystemStatus {
   storage_roots: Record<string, string>;
 }
 
+export interface HardwareAcceleratorRecord {
+  id: string;
+  name: string;
+  kind: 'hailo8' | 'gpu' | 'other';
+  bus: 'pcie' | 'usb' | 'unknown';
+  status: 'ready' | 'detected' | 'driver_missing' | 'runtime_missing' | 'not_detected' | 'error';
+  detail: string;
+  pci_address?: string | null;
+  vendor_id?: string | null;
+  product_id?: string | null;
+  device_nodes: string[];
+  driver_loaded: boolean;
+  runtime_available: boolean;
+  runtime_version?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface CameraDeviceRecord {
+  id: string;
+  name: string;
+  status: 'ready' | 'detected' | 'permission_required' | 'offline' | 'error';
+  detail: string;
+  vendor_id?: string | null;
+  product_id?: string | null;
+  device_paths: string[];
+  media_paths: string[];
+  capture_path?: string | null;
+  formats: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface HardwareStatus {
+  service: string;
+  accelerators: HardwareAcceleratorRecord[];
+  cameras: CameraDeviceRecord[];
+  checked_at: string;
+}
+
+export interface CameraSnapshotResponse {
+  camera: CameraDeviceRecord;
+  artifact: ArtifactRecord;
+  detail: string;
+}
+
 export interface ConversationRecord {
   id: string;
   title: string;

@@ -623,6 +623,58 @@ class SearchCompareResponse(BaseModel):
     best_provider: SearchProvider | None = None
 
 
+class HardwareAcceleratorRecord(BaseModel):
+    id: str
+    name: str
+    kind: Literal["hailo8", "gpu", "other"]
+    bus: Literal["pcie", "usb", "unknown"] = "unknown"
+    status: Literal["ready", "detected", "driver_missing", "runtime_missing", "not_detected", "error"]
+    detail: str
+    pci_address: str | None = None
+    vendor_id: str | None = None
+    product_id: str | None = None
+    device_nodes: list[str] = Field(default_factory=list)
+    driver_loaded: bool = False
+    runtime_available: bool = False
+    runtime_version: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CameraDeviceRecord(BaseModel):
+    id: str
+    name: str
+    status: Literal["ready", "detected", "permission_required", "offline", "error"]
+    detail: str
+    vendor_id: str | None = None
+    product_id: str | None = None
+    device_paths: list[str] = Field(default_factory=list)
+    media_paths: list[str] = Field(default_factory=list)
+    capture_path: str | None = None
+    formats: list[str] = Field(default_factory=list, max_length=24)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HardwareStatus(BaseModel):
+    service: str = "hardware"
+    accelerators: list[HardwareAcceleratorRecord] = Field(default_factory=list)
+    cameras: list[CameraDeviceRecord] = Field(default_factory=list)
+    checked_at: datetime = Field(default_factory=utc_now)
+
+
+class CameraSnapshotRequest(BaseModel):
+    device_path: str | None = None
+    width: int = Field(default=1280, ge=160, le=4096)
+    height: int = Field(default=720, ge=120, le=2160)
+    input_format: Literal["mjpeg", "yuyv422"] = "mjpeg"
+    title: str | None = Field(default=None, max_length=160)
+
+
+class CameraSnapshotResponse(BaseModel):
+    camera: CameraDeviceRecord
+    artifact: ArtifactRecord
+    detail: str
+
+
 class GPUDevice(BaseModel):
     index: int
     name: str

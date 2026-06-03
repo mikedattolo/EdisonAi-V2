@@ -57,6 +57,14 @@ DISPLAY=:99 nvidia-settings -q fans
 for i in 0 1 2 3 4; do DISPLAY=:99 nvidia-settings -q "[fan:$i]/GPUCurrentFanSpeedRPM"; done
 ```
 
+## Hailo-8 and Brio
+
+The Hailo-8 PCIe accelerator and Logitech Brio camera setup is tracked in:
+
+```text
+docs/operations/hailo8-brio-setup.md
+```
+
 ## ComfyUI Media Backend
 
 ComfyUI is installed outside the repository at:

@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from edison_core.api import (
     routes_chat,
     routes_conversations,
+    routes_hardware,
     routes_health,
     routes_jobs,
     routes_knowledge,
@@ -20,6 +21,7 @@ from edison_core.database import SQLiteDatabase
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
 from edison_core.services.generation_store import GenerationStore
+from edison_core.services.hardware_devices import HardwareDeviceService
 from edison_core.services.invokeai_client import InvokeAIClient
 from edison_core.services.model_gateway import ModelGateway
 from edison_core.services.media_orchestrator import MediaOrchestrator
@@ -75,6 +77,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     )
     status_service = SystemStatusService(resolved_settings, model_registry)
     fan_control_service = GPUFanControlService(resolved_settings, status_service.gpu_manager)
+    hardware_device_service = HardwareDeviceService(resolved_settings)
     workspace_tools = WorkspaceTools(resolved_settings.workspace_roots[0])
 
     app = FastAPI(
@@ -106,9 +109,11 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.media_orchestrator = media_orchestrator
     app.state.status_service = status_service
     app.state.fan_control_service = fan_control_service
+    app.state.hardware_device_service = hardware_device_service
     app.state.workspace_tools = workspace_tools
 
     app.include_router(routes_health.router)
+    app.include_router(routes_hardware.router)
     app.include_router(routes_models.router)
     app.include_router(routes_chat.router)
     app.include_router(routes_jobs.router)

@@ -5,6 +5,7 @@ import {
   Brain,
   BookOpen,
   CalendarDays,
+  Camera,
   CheckSquare2,
   ChevronUp,
   Code2,
@@ -34,6 +35,7 @@ import {
   Video,
   Waypoints,
   X,
+  Zap,
 } from 'lucide-react';
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -46,6 +48,7 @@ import type {
   DocumentRecord,
   GPUFanControlSnapshot,
   GPUFanMode,
+  HardwareStatus,
   JobRecord,
   JobType,
   KnowledgeSearchMatch,
@@ -235,6 +238,7 @@ export default function App() {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [mediaStatus, setMediaStatus] = useState<MediaSystemStatus | null>(null);
   const [fanControls, setFanControls] = useState<GPUFanControlSnapshot | null>(null);
+  const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const [mediaJobs, setMediaJobs] = useState<JobRecord[]>([]);
   const [mediaArtifacts, setMediaArtifacts] = useState<ArtifactRecord[]>([]);
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
@@ -278,6 +282,7 @@ export default function App() {
   const [composer, setComposer] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isMediaBusy, setIsMediaBusy] = useState(false);
+  const [isCameraBusy, setIsCameraBusy] = useState(false);
   const [isWorkspaceBusy, setIsWorkspaceBusy] = useState(false);
   const [isKnowledgeBusy, setIsKnowledgeBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -365,6 +370,16 @@ export default function App() {
     return { ready, pending };
   }, [models]);
 
+  const hardwareSummary = useMemo(() => {
+    const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
+    const readyCameras = hardwareStatus?.cameras.filter((cameraDevice) => cameraDevice.status === 'ready').length ?? 0;
+    return {
+      hailoLabel: hailo ? hailo.status.replace('_', ' ') : 'not checked',
+      hailoReady: hailo?.status === 'ready',
+      readyCameras,
+    };
+  }, [hardwareStatus]);
+
   const chatContextDiagnostics = useMemo(
     () => summarizeConversationContext(activeConversation),
     [activeConversation],
@@ -400,6 +415,7 @@ export default function App() {
       const [
         nextStatus,
         nextFanControls,
+        nextHardwareStatus,
         nextModels,
         nextConversations,
         nextSession,
@@ -408,6 +424,7 @@ export default function App() {
       ] = await Promise.all([
         edisonApi.getStatus(),
         edisonApi.getFanControls(),
+        edisonApi.getHardwareStatus(),
         edisonApi.listModels(),
         edisonApi.listConversations(),
         edisonApi.getSession(SESSION_ID),
@@ -416,6 +433,7 @@ export default function App() {
       ]);
       setStatus(nextStatus);
       setFanControls(nextFanControls);
+      setHardwareStatus(nextHardwareStatus);
       setModels(nextModels);
       setConversations(nextConversations);
       setSessionState(nextSession);
@@ -683,14 +701,40 @@ export default function App() {
 
   async function refreshSystemSurface() {
     try {
-      const [nextStatus, nextFanControls] = await Promise.all([
+      const [nextStatus, nextFanControls, nextHardwareStatus] = await Promise.all([
         edisonApi.getStatus(),
         edisonApi.getFanControls(),
+        edisonApi.getHardwareStatus(),
       ]);
       setStatus(nextStatus);
       setFanControls(nextFanControls);
+      setHardwareStatus(nextHardwareStatus);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'System status failed');
+    }
+  }
+
+  async function captureCameraSnapshot(devicePath?: string | null) {
+    setIsCameraBusy(true);
+    setError(null);
+    try {
+      await edisonApi.captureCameraSnapshot({
+        device_path: devicePath ?? null,
+        width: 1280,
+        height: 720,
+        input_format: 'mjpeg',
+        title: 'Brio camera snapshot',
+      });
+      const [nextHardwareStatus, nextArtifacts] = await Promise.all([
+        edisonApi.getHardwareStatus(),
+        edisonApi.listArtifacts(24),
+      ]);
+      setHardwareStatus(nextHardwareStatus);
+      setMediaArtifacts(nextArtifacts);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Camera snapshot failed');
+    } finally {
+      setIsCameraBusy(false);
     }
   }
 
@@ -1142,6 +1186,12 @@ export default function App() {
               <Activity size={15} /> {status?.status === 'ok' ? 'Connected' : status?.status ?? 'Offline'}
             </span>
             <span className="status-pill"><Cpu size={15} /> {status?.gpu_devices.length ?? 0} GPUs</span>
+            <span className={hardwareSummary.hailoReady ? 'status-pill ok' : 'status-pill'}>
+              <Zap size={15} /> Hailo {hardwareSummary.hailoLabel}
+            </span>
+            <span className={hardwareSummary.readyCameras > 0 ? 'status-pill ok' : 'status-pill'}>
+              <Camera size={15} /> {hardwareSummary.readyCameras} cameras
+            </span>
             <span className="status-pill"><Fan size={15} /> {fanControls?.controllers.length ?? 0} fan controls</span>
             <button
               className="icon-button"
@@ -1241,7 +1291,9 @@ export default function App() {
             activeView={activeView}
             groupedModels={groupedModels}
             fanControls={fanControls}
+            hardwareStatus={hardwareStatus}
             artifacts={mediaArtifacts}
+            isCameraBusy={isCameraBusy}
             isMediaBusy={isMediaBusy}
             isWorkspaceBusy={isWorkspaceBusy}
             isKnowledgeBusy={isKnowledgeBusy}
@@ -1267,6 +1319,7 @@ export default function App() {
             onRefreshKnowledge={refreshKnowledgeSurface}
             onRefreshMedia={refreshMediaSurface}
             onRefreshSystem={refreshSystemSurface}
+            onCaptureCameraSnapshot={captureCameraSnapshot}
             onUpdateFanControl={updateFanControl}
             onUseArtifactInChat={useArtifactInChat}
             onRefreshWorkspace={() => refreshWorkspaceSurface(workspacePath)}
@@ -2047,6 +2100,8 @@ function WorkbenchView({
   artifacts,
   fanControls,
   groupedModels,
+  hardwareStatus,
+  isCameraBusy,
   isMediaBusy,
   isWorkspaceBusy,
   isKnowledgeBusy,
@@ -2059,6 +2114,7 @@ function WorkbenchView({
   mediaStatus,
   models,
   onCreateMediaJob,
+  onCaptureCameraSnapshot,
   onOpenCompareConversation,
   onRefreshConversations,
   onIngestKnowledgeLocal,
@@ -2100,6 +2156,8 @@ function WorkbenchView({
   artifacts: ArtifactRecord[];
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
+  hardwareStatus: HardwareStatus | null;
+  isCameraBusy: boolean;
   isMediaBusy: boolean;
   isWorkspaceBusy: boolean;
   isKnowledgeBusy: boolean;
@@ -2112,6 +2170,7 @@ function WorkbenchView({
   mediaStatus: MediaSystemStatus | null;
   models: ModelProfile[];
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
+  onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
   onRefreshConversations: () => Promise<void>;
   onIngestKnowledgeLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
@@ -2244,7 +2303,10 @@ function WorkbenchView({
       <SystemView
         fanControls={fanControls}
         groupedModels={groupedModels}
+        hardwareStatus={hardwareStatus}
+        isCameraBusy={isCameraBusy}
         models={models}
+        onCaptureCameraSnapshot={onCaptureCameraSnapshot}
         onRefresh={onRefreshSystem}
         onUpdateFanControl={onUpdateFanControl}
         status={status}
@@ -4087,18 +4149,27 @@ function MediaView({
 function SystemView({
   fanControls,
   groupedModels,
+  hardwareStatus,
+  isCameraBusy,
   models,
+  onCaptureCameraSnapshot,
   onRefresh,
   onUpdateFanControl,
   status,
 }: {
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
+  hardwareStatus: HardwareStatus | null;
+  isCameraBusy: boolean;
   models: ModelProfile[];
+  onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
   onRefresh: () => Promise<void>;
   onUpdateFanControl: (gpuIndex: number, mode: GPUFanMode, manualSpeed: number) => Promise<void>;
   status: SystemStatus | null;
 }) {
+  const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
+  const cameras = hardwareStatus?.cameras ?? [];
+
   return (
     <section className="workbench-view" aria-label="System Status">
       <div className="view-heading">
@@ -4127,6 +4198,113 @@ function SystemView({
           <dd>{status?.gpu_devices.length ?? 0}</dd>
         </div>
       </dl>
+      <section className="hardware-panel" aria-label="AI accelerator and camera">
+        <div className="section-heading">
+          <Zap size={18} />
+          <h3>AI Accelerator & Camera</h3>
+        </div>
+        <div className="hardware-device-grid">
+          {hailo ? (
+            <article className="hardware-device-card">
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">PCIe accelerator</span>
+                  <strong>{hailo.name}</strong>
+                </div>
+                <span className={`backend-status ${statusClassName(hailo.status)}`}>
+                  {hailo.status.replace('_', ' ')}
+                </span>
+              </div>
+              <p>{hailo.detail}</p>
+              <dl className="device-meta-list">
+                <div>
+                  <dt>PCIe</dt>
+                  <dd>{hailo.pci_address ?? 'Not detected'}</dd>
+                </div>
+                <div>
+                  <dt>Driver</dt>
+                  <dd>{hailo.driver_loaded ? 'Loaded' : 'Missing'}</dd>
+                </div>
+                <div>
+                  <dt>Runtime</dt>
+                  <dd>{hailo.runtime_available ? hailo.runtime_version ?? 'Installed' : 'Missing'}</dd>
+                </div>
+                <div>
+                  <dt>Nodes</dt>
+                  <dd>{hailo.device_nodes.length ? hailo.device_nodes.join(', ') : 'None'}</dd>
+                </div>
+              </dl>
+            </article>
+          ) : (
+            <article className="hardware-device-card">
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">PCIe accelerator</span>
+                  <strong>Hailo-8 AI Accelerator</strong>
+                </div>
+                <span className="backend-status offline">Not checked</span>
+              </div>
+              <p>Hardware status has not loaded yet.</p>
+            </article>
+          )}
+
+          {cameras.map((cameraDevice) => (
+            <article className="hardware-device-card" key={cameraDevice.id}>
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">USB camera</span>
+                  <strong>{cameraDevice.name}</strong>
+                </div>
+                <span className={`backend-status ${statusClassName(cameraDevice.status)}`}>
+                  {cameraDevice.status.replace('_', ' ')}
+                </span>
+              </div>
+              <p>{cameraDevice.detail}</p>
+              <dl className="device-meta-list">
+                <div>
+                  <dt>Capture</dt>
+                  <dd>{cameraDevice.capture_path ?? 'Unavailable'}</dd>
+                </div>
+                <div>
+                  <dt>USB ID</dt>
+                  <dd>{cameraDevice.vendor_id && cameraDevice.product_id ? `${cameraDevice.vendor_id}:${cameraDevice.product_id}` : 'Unknown'}</dd>
+                </div>
+                <div>
+                  <dt>Video Nodes</dt>
+                  <dd>{cameraDevice.device_paths.join(', ') || 'None'}</dd>
+                </div>
+                <div>
+                  <dt>Formats</dt>
+                  <dd>{cameraDevice.formats.slice(0, 3).join(' / ') || 'Not listed'}</dd>
+                </div>
+              </dl>
+              <div className="device-card-actions">
+                <button
+                  className="apply-button icon-text-button"
+                  disabled={isCameraBusy || !cameraDevice.capture_path || cameraDevice.status !== 'ready'}
+                  onClick={() => void onCaptureCameraSnapshot(cameraDevice.capture_path)}
+                  type="button"
+                >
+                  <Camera size={16} />
+                  Snapshot
+                </button>
+              </div>
+            </article>
+          ))}
+          {cameras.length === 0 && (
+            <article className="hardware-device-card">
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">USB camera</span>
+                  <strong>Logitech Brio</strong>
+                </div>
+                <span className="backend-status offline">Offline</span>
+              </div>
+              <p>No camera was detected by Edison.</p>
+            </article>
+          )}
+        </div>
+      </section>
       <section className="fan-control-panel" aria-label="Multi GPU fan control">
         <div className="section-heading">
           <Fan size={18} />
@@ -4626,6 +4804,16 @@ function formatMaybeNumber(value: number | null | undefined, unit: string) {
     return '--';
   }
   return `${Math.round(value)}${unit}`;
+}
+
+function statusClassName(status: string) {
+  if (status === 'ready') {
+    return 'ready';
+  }
+  if (['detected', 'driver_missing', 'runtime_missing', 'permission_required', 'setup_required'].includes(status)) {
+    return 'setup_required';
+  }
+  return 'offline';
 }
 
 function formatCompareDuration(run: CompareRun) {

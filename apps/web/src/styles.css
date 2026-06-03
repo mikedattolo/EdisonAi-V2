@@ -1016,6 +1016,91 @@ button {
   justify-self: start;
 }
 
+.hardware-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.hardware-device-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.hardware-device-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.device-card-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.device-card-header div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.device-card-header strong {
+  overflow: hidden;
+  color: #1f2937;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hardware-device-card p {
+  margin: 0;
+  color: #536278;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.device-meta-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.device-meta-list div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f6f8fb;
+}
+
+.device-meta-list dt {
+  color: #697487;
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.device-meta-list dd {
+  margin: 0;
+  overflow: hidden;
+  color: #293548;
+  font-size: 0.83rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-card-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .memory-view {
   gap: 16px;
 }
@@ -2614,6 +2699,7 @@ button {
   .media-status-row,
   .settings-stack,
   .fan-controller-grid,
+  .hardware-device-grid,
   .wide-metric-grid {
     grid-template-columns: 1fr;
   }

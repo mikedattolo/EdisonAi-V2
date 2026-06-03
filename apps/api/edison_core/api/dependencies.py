@@ -5,6 +5,7 @@ from fastapi import Request
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
 from edison_core.services.generation_store import GenerationStore
+from edison_core.services.hardware_devices import HardwareDeviceService
 from edison_core.services.invokeai_client import InvokeAIClient
 from edison_core.services.model_gateway import ModelGateway
 from edison_core.services.media_orchestrator import MediaOrchestrator
@@ -32,6 +33,10 @@ def get_personal_workspace_store(request: Request) -> PersonalWorkspaceStore:
 
 def get_generation_store(request: Request) -> GenerationStore:
     return request.app.state.generation_store
+
+
+def get_hardware_device_service(request: Request) -> HardwareDeviceService:
+    return request.app.state.hardware_device_service
 
 
 def get_model_registry(request: Request) -> ModelRegistry:
