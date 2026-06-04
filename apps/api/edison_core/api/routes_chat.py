@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from edison_core.api.dependencies import (
+    get_agent_run_store,
     get_conversation_store,
     get_knowledge_store,
     get_model_gateway,
@@ -13,6 +14,12 @@ from edison_core.api.dependencies import (
     get_workspace_tools,
 )
 from edison_core.schemas import (
+    AgentRunCreate,
+    AgentRunEventCreate,
+    AgentRunEventKind,
+    AgentRunStatus,
+    AgentRunStatusUpdate,
+    AgentRunWithEvents,
     ChatMode,
     ChatRequest,
     ChatResponse,
@@ -23,6 +30,7 @@ from edison_core.schemas import (
     OrganizerStatus,
     WorkspaceIndexSearchRequest,
 )
+from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.conversation_store import ConversationNotFoundError, ConversationStore
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_gateway import ModelGateway
@@ -41,6 +49,7 @@ def create_chat_turn(
     workspace: WorkspaceTools = Depends(get_workspace_tools),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
+    agent_runs: AgentRunStore = Depends(get_agent_run_store),
 ) -> ChatResponse:
     resolved_payload, intent_metadata = _resolve_chat_payload(payload)
     try:
@@ -49,6 +58,14 @@ def create_chat_turn(
         knowledge_messages, knowledge_metadata = _build_knowledge_context(resolved_payload, knowledge)
         personal_messages, personal_metadata = _build_personal_context(resolved_payload, personal)
         context_messages = workspace_messages + knowledge_messages + personal_messages
+        agent_run = _create_agent_run_if_needed(
+            resolved_payload,
+            payload,
+            conversation_id,
+            intent_metadata,
+            agent_runs,
+        )
+        _record_agent_context_event(agent_run, agent_runs, workspace_metadata, knowledge_metadata, personal_metadata)
         user_message = conversations.add_message(
             conversation_id,
             MessageCreate(
@@ -67,6 +84,7 @@ def create_chat_turn(
                         + knowledge_metadata["warnings"]
                         + personal_metadata["warnings"]
                     ),
+                    "agent_run_id": agent_run.id if agent_run else None,
                 },
             ),
         )
@@ -87,9 +105,11 @@ def create_chat_turn(
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
                 "personal_context": personal_metadata,
+                "agent_run_id": agent_run.id if agent_run else None,
             },
         )
     )
+    _complete_agent_run_if_needed(agent_run, agent_runs, inference.finish_reason)
     assistant_message = conversations.add_message(
         conversation_id,
         MessageCreate(
@@ -107,6 +127,7 @@ def create_chat_turn(
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
                 "personal_context": personal_metadata,
+                "agent_run_id": agent_run.id if agent_run else None,
             },
         ),
     )
@@ -127,6 +148,7 @@ def stream_chat_turn(
     workspace: WorkspaceTools = Depends(get_workspace_tools),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
+    agent_runs: AgentRunStore = Depends(get_agent_run_store),
 ) -> StreamingResponse:
     resolved_payload, intent_metadata = _resolve_chat_payload(payload)
     try:
@@ -135,6 +157,14 @@ def stream_chat_turn(
         knowledge_messages, knowledge_metadata = _build_knowledge_context(resolved_payload, knowledge)
         personal_messages, personal_metadata = _build_personal_context(resolved_payload, personal)
         context_messages = workspace_messages + knowledge_messages + personal_messages
+        agent_run = _create_agent_run_if_needed(
+            resolved_payload,
+            payload,
+            conversation_id,
+            intent_metadata,
+            agent_runs,
+        )
+        _record_agent_context_event(agent_run, agent_runs, workspace_metadata, knowledge_metadata, personal_metadata)
         user_message = conversations.add_message(
             conversation_id,
             MessageCreate(
@@ -154,6 +184,7 @@ def stream_chat_turn(
                         + personal_metadata["warnings"]
                     ),
                     "streamed": True,
+                    "agent_run_id": agent_run.id if agent_run else None,
                 },
             ),
         )
@@ -174,6 +205,7 @@ def stream_chat_turn(
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
                 "personal_context": personal_metadata,
+                "agent_run_id": agent_run.id if agent_run else None,
             },
         )
     )
@@ -185,6 +217,7 @@ def stream_chat_turn(
                 "conversation_id": conversation_id,
                 "user_message": user_message.model_dump(mode="json"),
                 "model_selection": selection.model_dump(mode="json"),
+                "agent_run": agent_run.model_dump(mode="json") if agent_run else None,
             },
         )
         final_inference = None
@@ -197,9 +230,11 @@ def stream_chat_turn(
                 break
 
         if final_inference is None:
+            _fail_agent_run_if_needed(agent_run, agent_runs, "Chat stream ended without a final response.")
             yield _sse("error", {"detail": "Chat stream ended without a final response."})
             return
 
+        _complete_agent_run_if_needed(agent_run, agent_runs, final_inference.finish_reason)
         assistant_message = conversations.add_message(
             conversation_id,
             MessageCreate(
@@ -218,6 +253,7 @@ def stream_chat_turn(
                     "knowledge_context": knowledge_metadata,
                     "personal_context": personal_metadata,
                     "streamed": True,
+                    "agent_run_id": agent_run.id if agent_run else None,
                 },
             ),
         )
@@ -234,6 +270,128 @@ def stream_chat_turn(
         event_source(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _create_agent_run_if_needed(
+    resolved_payload: ChatRequest,
+    original_payload: ChatRequest,
+    conversation_id: str,
+    intent_metadata: dict,
+    agent_runs: AgentRunStore,
+) -> AgentRunWithEvents | None:
+    if resolved_payload.mode != ChatMode.AGENT:
+        return None
+    return agent_runs.create_run(
+        AgentRunCreate(
+            title=_title_from_message(resolved_payload.message),
+            prompt=resolved_payload.message,
+            mode=resolved_payload.mode,
+            conversation_id=conversation_id,
+            metadata={
+                "requested_mode": original_payload.mode.value,
+                "agent_enabled": original_payload.agent_enabled,
+                "intent_router": intent_metadata,
+                "source": "chat",
+            },
+        )
+    )
+
+
+def _record_agent_context_event(
+    agent_run: AgentRunWithEvents | None,
+    agent_runs: AgentRunStore,
+    workspace_metadata: dict,
+    knowledge_metadata: dict,
+    personal_metadata: dict,
+) -> None:
+    if agent_run is None:
+        return
+    warnings = (
+        workspace_metadata.get("warnings", [])
+        + knowledge_metadata.get("warnings", [])
+        + personal_metadata.get("warnings", [])
+    )
+    agent_runs.add_event(
+        agent_run.id,
+        AgentRunEventCreate(
+            kind=AgentRunEventKind.TOOL_RESULT,
+            title="Context assembled",
+            body=(
+                f"Workspace focus: {len(workspace_metadata.get('focus_paths', []))}; "
+                f"knowledge matches: {len(knowledge_metadata.get('matches', []))}; "
+                f"personal items: {len(personal_metadata.get('items', []))}; "
+                f"warnings: {len(warnings)}."
+            ),
+            metadata={
+                "workspace_context": workspace_metadata,
+                "knowledge_context": knowledge_metadata,
+                "personal_context": personal_metadata,
+            },
+        ),
+    )
+    agent_runs.update_run_status(
+        agent_run.id,
+        AgentRunStatusUpdate(
+            status=AgentRunStatus.RUNNING,
+            current_step="Model is responding with assembled context",
+            progress_percent=38,
+        ),
+    )
+
+
+def _complete_agent_run_if_needed(
+    agent_run: AgentRunWithEvents | None,
+    agent_runs: AgentRunStore,
+    finish_reason: str,
+) -> None:
+    if agent_run is None:
+        return
+    if finish_reason == "error":
+        _fail_agent_run_if_needed(agent_run, agent_runs, "The model gateway returned an error finish reason.")
+        return
+    agent_runs.add_event(
+        agent_run.id,
+        AgentRunEventCreate(
+            kind=AgentRunEventKind.STATUS,
+            title="Response saved",
+            body=f"Assistant response finished with {finish_reason}.",
+            metadata={"finish_reason": finish_reason},
+        ),
+    )
+    agent_runs.update_run_status(
+        agent_run.id,
+        AgentRunStatusUpdate(
+            status=AgentRunStatus.COMPLETED,
+            current_step="Response saved to chat",
+            progress_percent=100,
+            metadata={"finish_reason": finish_reason},
+        ),
+    )
+
+
+def _fail_agent_run_if_needed(
+    agent_run: AgentRunWithEvents | None,
+    agent_runs: AgentRunStore,
+    detail: str,
+) -> None:
+    if agent_run is None:
+        return
+    agent_runs.add_event(
+        agent_run.id,
+        AgentRunEventCreate(
+            kind=AgentRunEventKind.ERROR,
+            title="Run failed",
+            body=detail,
+        ),
+    )
+    agent_runs.update_run_status(
+        agent_run.id,
+        AgentRunStatusUpdate(
+            status=AgentRunStatus.FAILED,
+            current_step=detail,
+            progress_percent=100,
+        ),
     )
 
 

@@ -9,6 +9,10 @@ from edison_core.schemas import (
     ChatMode,
     CameraSnapshotRequest,
     CameraVisionStatus,
+    GPUDevice,
+    GPUFanControlSnapshot,
+    GPUFanControlState,
+    GPUFanPolicy,
     HardwareAcceleratorRecord,
     HardwareStatus,
     InferenceResponse,
@@ -16,6 +20,7 @@ from edison_core.schemas import (
     ModelProfile,
     ModelSelection,
     ModelStatus,
+    SystemStatus,
 )
 from edison_core.services.hardware_devices import CapturedCameraSnapshot
 
@@ -65,6 +70,24 @@ def test_camera_vision_route_reports_setup_state(tmp_path):
     assert response.json()["status"] == "setup_required"
     assert response.json()["camera"]["id"] == "logitech-brio"
     assert response.json()["backend"] == "hailo8"
+
+
+def test_hardware_control_center_summarizes_machine_actions(tmp_path):
+    app = create_app(_settings(tmp_path))
+    app.state.hardware_device_service = _FakeHardwareDeviceService(tmp_path / "artifacts")
+    app.state.status_service = _FakeStatusService(tmp_path)
+    app.state.fan_control_service = _FakeFanControlService()
+    client = TestClient(app)
+
+    response = client.get("/api/v1/hardware/control-center")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["overall_status"] == "attention"
+    assert body["gpu_count"] == 1
+    assert body["fan_backend"] == "monitor"
+    assert body["hailo_status"] == "runtime_missing"
+    assert {action["id"] for action in body["actions"]} >= {"fan-monitor-mode", "hailo-readiness"}
 
 
 def test_camera_analyze_route_captures_artifact_and_uses_vision_gateway(tmp_path):
@@ -174,6 +197,60 @@ class _FakeVisionGateway:
                 content="A desk, a monitor, and a camera are visible.",
                 finish_reason="stop",
             ),
+        )
+
+
+class _FakeStatusService:
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = tmp_path
+
+    def snapshot(self):
+        return SystemStatus(
+            service="edison-core-api",
+            version="0.1.0",
+            environment="test",
+            database_path=str(self.tmp_path / "edison.sqlite3"),
+            model_count=1,
+            configured_model_count=0,
+            gpu_devices=[
+                GPUDevice(
+                    index=0,
+                    name="NVIDIA GeForce RTX 3090",
+                    fan_speed_percent=42,
+                    temperature_c=51,
+                )
+            ],
+            storage_roots={
+                "artifacts": str(self.tmp_path / "artifacts"),
+                "logs": str(self.tmp_path / "logs"),
+                "projects": str(self.tmp_path / "projects"),
+            },
+        )
+
+
+class _FakeFanControlService:
+    def snapshot(self):
+        gpu = GPUDevice(
+            index=0,
+            name="NVIDIA GeForce RTX 3090",
+            fan_speed_percent=42,
+            temperature_c=51,
+        )
+        return GPUFanControlSnapshot(
+            hardware_control_enabled=False,
+            backend="monitor",
+            controllers=[
+                GPUFanControlState(
+                    gpu=gpu,
+                    policy=GPUFanPolicy(mode="manual", manual_speed_percent=55),
+                    target_speed_percent=55,
+                    target_fan_ids=[],
+                    hardware_control_enabled=False,
+                    backend="monitor",
+                    applied=False,
+                    detail="Fan controller is in monitor mode.",
+                )
+            ],
         )
 
 

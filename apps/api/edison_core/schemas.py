@@ -148,6 +148,77 @@ class ChatResponse(BaseModel):
     model_selection: ModelSelection
 
 
+class AgentRunStatus(str, Enum):
+    QUEUED = "queued"
+    PLANNING = "planning"
+    RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class AgentRunEventKind(str, Enum):
+    STATUS = "status"
+    PLAN = "plan"
+    THOUGHT = "thought"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    APPROVAL = "approval"
+    ARTIFACT = "artifact"
+    ERROR = "error"
+
+
+class AgentRunCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=180)
+    prompt: str = Field(min_length=1)
+    mode: ChatMode = ChatMode.AGENT
+    conversation_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunStatusUpdate(BaseModel):
+    status: AgentRunStatus
+    current_step: str | None = Field(default=None, max_length=240)
+    progress_percent: int | None = Field(default=None, ge=0, le=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunEventCreate(BaseModel):
+    kind: AgentRunEventKind = AgentRunEventKind.STATUS
+    title: str = Field(min_length=1, max_length=180)
+    body: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunRecord(BaseModel):
+    id: str
+    title: str
+    prompt: str
+    mode: ChatMode
+    status: AgentRunStatus
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    current_step: str | None = None
+    conversation_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentRunEventRecord(BaseModel):
+    id: str
+    run_id: str
+    kind: AgentRunEventKind
+    title: str
+    body: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AgentRunWithEvents(AgentRunRecord):
+    events: list[AgentRunEventRecord] = Field(default_factory=list)
+
+
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=160)
     mode: ChatMode = ChatMode.CHAT
@@ -722,6 +793,31 @@ class HardwareStatus(BaseModel):
     accelerators: list[HardwareAcceleratorRecord] = Field(default_factory=list)
     cameras: list[CameraDeviceRecord] = Field(default_factory=list)
     checked_at: datetime = Field(default_factory=utc_now)
+
+
+class HardwareControlAction(BaseModel):
+    id: str
+    title: str
+    detail: str
+    severity: Literal["info", "warning", "critical"] = "info"
+    action_label: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HardwareControlCenter(BaseModel):
+    service: str = "hardware-control-center"
+    overall_status: Literal["ready", "attention", "setup_required", "offline"]
+    gpu_count: int = 0
+    fan_controller_count: int = 0
+    writable_fan_target_count: int = 0
+    fan_backend: str = "monitor"
+    fan_writes_enabled: bool = False
+    hailo_status: str = "not_checked"
+    camera_status: str = "not_checked"
+    storage_roots: dict[str, str] = Field(default_factory=dict)
+    actions: list[HardwareControlAction] = Field(default_factory=list)
+    checked_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CameraSnapshotRequest(BaseModel):

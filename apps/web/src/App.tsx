@@ -41,6 +41,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 import { edisonApi } from './api';
 import type {
+  AgentRunRecord,
+  AgentRunWithEvents,
   ArtifactRecord,
   CapabilityStatus,
   ChatMode,
@@ -51,6 +53,7 @@ import type {
   DocumentRecord,
   GPUFanControlSnapshot,
   GPUFanMode,
+  HardwareControlCenter,
   HardwareStatus,
   JobRecord,
   JobType,
@@ -232,8 +235,11 @@ export default function App() {
   const [mediaStatus, setMediaStatus] = useState<MediaSystemStatus | null>(null);
   const [fanControls, setFanControls] = useState<GPUFanControlSnapshot | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
+  const [hardwareControlCenter, setHardwareControlCenter] = useState<HardwareControlCenter | null>(null);
   const [cameraVisionStatus, setCameraVisionStatus] = useState<CameraVisionStatus | null>(null);
   const [cameraAnalysis, setCameraAnalysis] = useState<CameraFrameAnalysisResponse | null>(null);
+  const [agentRuns, setAgentRuns] = useState<AgentRunRecord[]>([]);
+  const [activeAgentRun, setActiveAgentRun] = useState<AgentRunWithEvents | null>(null);
   const [mediaJobs, setMediaJobs] = useState<JobRecord[]>([]);
   const [mediaArtifacts, setMediaArtifacts] = useState<ArtifactRecord[]>([]);
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
@@ -420,6 +426,8 @@ export default function App() {
         nextCapabilities,
         nextFanControls,
         nextHardwareStatus,
+        nextHardwareControlCenter,
+        nextAgentRuns,
         nextModels,
         nextConversations,
         nextSession,
@@ -430,6 +438,8 @@ export default function App() {
         edisonApi.getCapabilities(),
         edisonApi.getFanControls(),
         edisonApi.getHardwareStatus(),
+        edisonApi.getHardwareControlCenter(),
+        edisonApi.listAgentRuns(),
         edisonApi.listModels(),
         edisonApi.listConversations(),
         edisonApi.getSession(SESSION_ID),
@@ -440,6 +450,11 @@ export default function App() {
       setCapabilityStatus(nextCapabilities);
       setFanControls(nextFanControls);
       setHardwareStatus(nextHardwareStatus);
+      setHardwareControlCenter(nextHardwareControlCenter);
+      setAgentRuns(nextAgentRuns);
+      if (nextAgentRuns[0]) {
+        setActiveAgentRun(await edisonApi.getAgentRun(nextAgentRuns[0].id));
+      }
       setModels(nextModels);
       setConversations(nextConversations);
       setSessionState(nextSession);
@@ -528,6 +543,10 @@ export default function App() {
       const response = await edisonApi.streamChatTurn(payload, {
         onStart: (start) => {
           setModelSelection(start.model_selection);
+          if (start.agent_run) {
+            setActiveAgentRun(start.agent_run);
+            void refreshAgentRuns(start.agent_run.id);
+          }
           setActiveConversation((current) =>
             replaceDraftMessage(current, draftUserId, start.user_message, start.conversation_id),
           );
@@ -546,6 +565,10 @@ export default function App() {
       setModelSelection(response.model_selection);
       setActiveMode(response.model_selection.mode);
       setConversations(await edisonApi.listConversations());
+      const runId = agentRunIdFromConversation(response.conversation);
+      if (runId) {
+        await refreshAgentRuns(runId);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Message failed');
     } finally {
@@ -786,19 +809,44 @@ export default function App() {
     }
   }
 
+  async function refreshAgentRuns(selectedRunId?: string | null) {
+    try {
+      const runs = await edisonApi.listAgentRuns();
+      setAgentRuns(runs);
+      const runId = selectedRunId ?? activeAgentRun?.id ?? runs[0]?.id;
+      if (runId) {
+        setActiveAgentRun(await edisonApi.getAgentRun(runId));
+      } else {
+        setActiveAgentRun(null);
+      }
+    } catch {
+      setAgentRuns([]);
+      setActiveAgentRun(null);
+    }
+  }
+
   async function refreshSystemSurface() {
     try {
-      const [nextStatus, nextCapabilities, nextFanControls, nextHardwareStatus, nextVisionStatus] = await Promise.all([
+      const [
+        nextStatus,
+        nextCapabilities,
+        nextFanControls,
+        nextHardwareStatus,
+        nextHardwareControlCenter,
+        nextVisionStatus,
+      ] = await Promise.all([
         edisonApi.getStatus(),
         edisonApi.getCapabilities(),
         edisonApi.getFanControls(),
         edisonApi.getHardwareStatus(),
+        edisonApi.getHardwareControlCenter(),
         edisonApi.getCameraVisionStatus(),
       ]);
       setStatus(nextStatus);
       setCapabilityStatus(nextCapabilities);
       setFanControls(nextFanControls);
       setHardwareStatus(nextHardwareStatus);
+      setHardwareControlCenter(nextHardwareControlCenter);
       setCameraVisionStatus(nextVisionStatus);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'System status failed');
@@ -883,7 +931,12 @@ export default function App() {
           controllers: nextControllers,
         };
       });
-      setStatus(await edisonApi.getStatus());
+      const [nextStatus, nextControlCenter] = await Promise.all([
+        edisonApi.getStatus(),
+        edisonApi.getHardwareControlCenter(),
+      ]);
+      setStatus(nextStatus);
+      setHardwareControlCenter(nextControlCenter);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Fan control update failed');
     }
@@ -1369,6 +1422,8 @@ export default function App() {
         {activeView === 'chat' ? (
           <ChatView
             activeConversation={activeConversation}
+            activeAgentRun={activeAgentRun}
+            agentRuns={agentRuns}
             composer={composer}
             handleSend={handleSend}
             isSending={isSending}
@@ -1431,12 +1486,17 @@ export default function App() {
             }}
             recentArtifacts={mediaArtifacts.slice(0, 4)}
             onUseArtifactInChat={useArtifactInChat}
+            onSelectAgentRun={async (runId) => {
+              setActiveAgentRun(await edisonApi.getAgentRun(runId));
+              await refreshAgentRuns(runId);
+            }}
           />
         ) : (
           <WorkbenchView
             activeView={activeView}
             groupedModels={groupedModels}
             fanControls={fanControls}
+            hardwareControlCenter={hardwareControlCenter}
             hardwareStatus={hardwareStatus}
             cameraVisionStatus={cameraVisionStatus}
             cameraAnalysis={cameraAnalysis}
@@ -1512,7 +1572,9 @@ export default function App() {
 
 function ChatView({
   activeConversation,
+  activeAgentRun,
   agentModeEnabled,
+  agentRuns,
   composer,
   handleSend,
   isSending,
@@ -1550,9 +1612,12 @@ function ChatView({
   resetWorkspaceContextPreferences,
   recentArtifacts,
   onUseArtifactInChat,
+  onSelectAgentRun,
 }: {
   activeConversation: ConversationWithMessages | null;
+  activeAgentRun: AgentRunWithEvents | null;
   agentModeEnabled: boolean;
+  agentRuns: AgentRunRecord[];
   composer: string;
   handleSend: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   isSending: boolean;
@@ -1590,6 +1655,7 @@ function ChatView({
   resetWorkspaceContextPreferences: () => void;
   recentArtifacts: ArtifactRecord[];
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
+  onSelectAgentRun: (runId: string) => Promise<void>;
 }) {
   const selectedModelName = modelSelection?.model.display_name ?? 'Model lane';
   const intentLabel = modelSelection?.mode
@@ -1833,6 +1899,11 @@ function ChatView({
       )}
         </div>
       </details>
+      <AgentRunDock
+        activeRun={activeAgentRun}
+        runs={agentRuns}
+        onSelectRun={onSelectAgentRun}
+      />
       <section className="chat-surface" aria-label="Conversation messages">
         {activeConversation?.messages.map((message) => {
           const parsedContext =
@@ -1980,6 +2051,76 @@ function ChatView({
         </form>
       </section>
     </>
+  );
+}
+
+function AgentRunDock({
+  activeRun,
+  runs,
+  onSelectRun,
+}: {
+  activeRun: AgentRunWithEvents | null;
+  runs: AgentRunRecord[];
+  onSelectRun: (runId: string) => Promise<void>;
+}) {
+  const visibleRuns = runs.slice(0, 4);
+  return (
+    <section className="agent-run-dock" aria-label="Agent run dashboard">
+      <div className="agent-run-dock-header">
+        <div>
+          <span className="section-label">Agent runs</span>
+          <strong>{activeRun?.title ?? 'No tracked run selected'}</strong>
+        </div>
+        <span className={`run-status ${activeRun?.status ?? 'queued'}`}>
+          {activeRun ? formatRunStatus(activeRun.status) : `${runs.length} total`}
+        </span>
+      </div>
+      <div className="agent-run-dock-grid">
+        <div className="agent-run-list">
+          {visibleRuns.map((run) => (
+            <button
+              className={activeRun?.id === run.id ? 'agent-run-list-item active' : 'agent-run-list-item'}
+              key={run.id}
+              onClick={() => void onSelectRun(run.id)}
+              type="button"
+            >
+              <span>{run.title}</span>
+              <small>{formatRunStatus(run.status)} / {run.progress_percent}%</small>
+            </button>
+          ))}
+          {visibleRuns.length === 0 && (
+            <div className="empty-line">Toggle Agent in the composer to start a tracked run.</div>
+          )}
+        </div>
+        <div className="agent-run-detail">
+          {activeRun ? (
+            <>
+              <div className="run-progress-line">
+                <progress max={100} value={activeRun.progress_percent} />
+                <span>{activeRun.current_step ?? 'Working'}</span>
+              </div>
+              <div className="agent-run-events">
+                {activeRun.events.slice(-5).map((event) => (
+                  <article className={`agent-run-event ${event.kind}`} key={event.id}>
+                    <div>
+                      <span>{event.kind.replace('_', ' ')}</span>
+                      <small>{formatDateTime(event.created_at)}</small>
+                    </div>
+                    <strong>{event.title}</strong>
+                    {event.body && <p>{event.body}</p>}
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="agent-run-empty">
+              <Waypoints size={20} />
+              <span>Agent run timelines will appear here.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -2339,6 +2480,7 @@ function WorkbenchView({
   capabilityStatus,
   fanControls,
   groupedModels,
+  hardwareControlCenter,
   hardwareStatus,
   cameraVisionStatus,
   cameraAnalysis,
@@ -2404,6 +2546,7 @@ function WorkbenchView({
   capabilityStatus: CapabilityStatus | null;
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
+  hardwareControlCenter: HardwareControlCenter | null;
   hardwareStatus: HardwareStatus | null;
   cameraVisionStatus: CameraVisionStatus | null;
   cameraAnalysis: CameraFrameAnalysisResponse | null;
@@ -2563,6 +2706,7 @@ function WorkbenchView({
         fanControls={fanControls}
         capabilityStatus={capabilityStatus}
         groupedModels={groupedModels}
+        hardwareControlCenter={hardwareControlCenter}
         hardwareStatus={hardwareStatus}
         cameraVisionStatus={cameraVisionStatus}
         cameraAnalysis={cameraAnalysis}
@@ -4492,6 +4636,7 @@ function SystemView({
   capabilityStatus,
   fanControls,
   groupedModels,
+  hardwareControlCenter,
   hardwareStatus,
   isCameraBusy,
   isCameraFeedPaused,
@@ -4507,6 +4652,7 @@ function SystemView({
   capabilityStatus: CapabilityStatus | null;
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
+  hardwareControlCenter: HardwareControlCenter | null;
   hardwareStatus: HardwareStatus | null;
   isCameraBusy: boolean;
   isCameraFeedPaused: boolean;
@@ -4552,6 +4698,7 @@ function SystemView({
           <dd>{status?.gpu_devices.length ?? 0}</dd>
         </div>
       </dl>
+      <HardwareControlCenterPanel controlCenter={hardwareControlCenter} />
       <section className="capability-panel" aria-label="MCP servers and plugins">
         <div className="section-heading">
           <Waypoints size={18} />
@@ -4820,6 +4967,73 @@ function SystemView({
             <span className={`model-status ${model.status}`}>{model.status.replace('_', ' ')}</span>
           </article>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function HardwareControlCenterPanel({ controlCenter }: { controlCenter: HardwareControlCenter | null }) {
+  const actions = controlCenter?.actions ?? [];
+  return (
+    <section className="hardware-command-center" aria-label="Hardware command center">
+      <div className="section-heading">
+        <Cpu size={18} />
+        <h3>Hardware Command Center</h3>
+      </div>
+      <div className="command-center-grid">
+        <article className="command-center-status">
+          <div>
+            <span className="section-label">Machine state</span>
+            <strong>{controlCenter?.overall_status.replace('_', ' ') ?? 'checking'}</strong>
+          </div>
+          <span className={`backend-status ${statusClassName(controlCenter?.overall_status ?? 'offline')}`}>
+            {controlCenter?.overall_status ?? 'offline'}
+          </span>
+        </article>
+        <dl className="command-center-metrics">
+          <div>
+            <dt>GPUs</dt>
+            <dd>{controlCenter?.gpu_count ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Fan cards</dt>
+            <dd>{controlCenter?.fan_controller_count ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Fan targets</dt>
+            <dd>{controlCenter?.writable_fan_target_count ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Fan backend</dt>
+            <dd>{controlCenter?.fan_backend ?? 'monitor'}</dd>
+          </div>
+          <div>
+            <dt>Hailo</dt>
+            <dd>{controlCenter?.hailo_status.replace('_', ' ') ?? 'not checked'}</dd>
+          </div>
+          <div>
+            <dt>Camera</dt>
+            <dd>{controlCenter?.camera_status.replace('_', ' ') ?? 'not checked'}</dd>
+          </div>
+        </dl>
+        <div className="command-center-actions">
+          {(actions.length ? actions : [{
+            id: 'loading',
+            title: 'Loading hardware checks',
+            detail: 'Edison is waiting for the next hardware snapshot.',
+            severity: 'info' as const,
+            action_label: null,
+            metadata: {},
+          }]).map((action) => (
+            <article className={`command-center-action ${action.severity}`} key={action.id}>
+              <div>
+                <strong>{action.title}</strong>
+                <p>{action.detail}</p>
+              </div>
+              {action.action_label && <span>{action.action_label}</span>}
+            </article>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -5371,13 +5585,41 @@ function formatMaybeNumber(value: number | null | undefined, unit: string) {
 }
 
 function statusClassName(status: string) {
-  if (status === 'ready') {
+  if (['ready', 'completed', 'ok'].includes(status)) {
     return 'ready';
   }
-  if (['detected', 'driver_missing', 'runtime_missing', 'permission_required', 'setup_required', 'staged'].includes(status)) {
+  if ([
+    'attention',
+    'detected',
+    'driver_missing',
+    'runtime_missing',
+    'permission_required',
+    'planning',
+    'queued',
+    'running',
+    'setup_required',
+    'staged',
+    'waiting_for_approval',
+    'warning',
+  ].includes(status)) {
     return 'setup_required';
   }
   return 'offline';
+}
+
+function formatRunStatus(status: AgentRunRecord['status']) {
+  return status.replace(/_/g, ' ');
+}
+
+function agentRunIdFromConversation(conversation: ConversationWithMessages | null): string | null {
+  const messages = conversation?.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const value = messages[index].metadata.agent_run_id;
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function formatCompareDuration(run: CompareRun) {

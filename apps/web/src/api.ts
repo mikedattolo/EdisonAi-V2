@@ -1,4 +1,6 @@
 import type {
+  AgentRunRecord,
+  AgentRunWithEvents,
   ArtifactRecord,
   CapabilityStatus,
   ChatMode,
@@ -13,6 +15,7 @@ import type {
   GPUFanControlSnapshot,
   GPUFanControlState,
   GPUFanMode,
+  HardwareControlCenter,
   HardwareStatus,
   JobRecord,
   JobType,
@@ -67,7 +70,12 @@ export interface ChatTurnPayload {
 }
 
 interface ChatStreamHandlers {
-  onStart?: (event: { conversation_id: string; user_message: MessageRecord; model_selection: ModelSelection }) => void;
+  onStart?: (event: {
+    conversation_id: string;
+    user_message: MessageRecord;
+    model_selection: ModelSelection;
+    agent_run?: AgentRunWithEvents | null;
+  }) => void;
   onToken?: (delta: string) => void;
   onDone?: (response: ChatTurnResponse) => void;
   onError?: (detail: string) => void;
@@ -106,6 +114,7 @@ export const edisonApi = {
   getStatus: () => request<SystemStatus>('/api/v1/status'),
   getCapabilities: () => request<CapabilityStatus>('/api/v1/capabilities'),
   getHardwareStatus: () => request<HardwareStatus>('/api/v1/hardware/status'),
+  getHardwareControlCenter: () => request<HardwareControlCenter>('/api/v1/hardware/control-center'),
   getCameraVisionStatus: (devicePath?: string | null) =>
     request<CameraVisionStatus>(withQuery('/api/v1/hardware/cameras/vision', { device_path: devicePath ?? undefined })),
   cameraFeedUrl: (params: { device_path?: string | null; width?: number; height?: number; input_format?: 'mjpeg' | 'yuyv422' } = {}) =>
@@ -141,6 +150,8 @@ export const edisonApi = {
   listModels: () => request<ModelProfile[]>('/api/v1/models'),
   selectModel: (mode: ChatMode) => request<ModelSelection>(`/api/v1/models/select?mode=${mode}`),
   listConversations: () => request<ConversationRecord[]>('/api/v1/conversations'),
+  listAgentRuns: (limit = 24) => request<AgentRunRecord[]>(withQuery('/api/v1/agents/runs', { limit })),
+  getAgentRun: (runId: string) => request<AgentRunWithEvents>(`/api/v1/agents/runs/${runId}`),
   createConversation: (payload: { title: string; mode: ChatMode; memory_enabled: boolean }) =>
     request<ConversationRecord>('/api/v1/conversations', {
       method: 'POST',

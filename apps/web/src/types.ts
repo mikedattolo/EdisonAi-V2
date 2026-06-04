@@ -133,6 +133,31 @@ export interface HardwareStatus {
   checked_at: string;
 }
 
+export interface HardwareControlAction {
+  id: string;
+  title: string;
+  detail: string;
+  severity: 'info' | 'warning' | 'critical';
+  action_label?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface HardwareControlCenter {
+  service: string;
+  overall_status: 'ready' | 'attention' | 'setup_required' | 'offline';
+  gpu_count: number;
+  fan_controller_count: number;
+  writable_fan_target_count: number;
+  fan_backend: string;
+  fan_writes_enabled: boolean;
+  hailo_status: string;
+  camera_status: string;
+  storage_roots: Record<string, string>;
+  actions: HardwareControlAction[];
+  checked_at: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface CameraSnapshotResponse {
   camera: CameraDeviceRecord;
   artifact: ArtifactRecord;
@@ -197,6 +222,53 @@ export interface ChatTurnResponse {
     metadata: Record<string, unknown>;
   };
   model_selection: ModelSelection;
+}
+
+export type AgentRunStatus =
+  | 'queued'
+  | 'planning'
+  | 'running'
+  | 'waiting_for_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type AgentRunEventKind =
+  | 'status'
+  | 'plan'
+  | 'thought'
+  | 'tool_call'
+  | 'tool_result'
+  | 'approval'
+  | 'artifact'
+  | 'error';
+
+export interface AgentRunRecord {
+  id: string;
+  title: string;
+  prompt: string;
+  mode: ChatMode;
+  status: AgentRunStatus;
+  progress_percent: number;
+  current_step?: string | null;
+  conversation_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRunEventRecord {
+  id: string;
+  run_id: string;
+  kind: AgentRunEventKind;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AgentRunWithEvents extends AgentRunRecord {
+  events: AgentRunEventRecord[];
 }
 
 export interface SessionStateRecord {
@@ -451,7 +523,7 @@ export interface WorkspaceCommandRunResult {
 
 export interface KnowledgeSourceRecord {
   id: string;
-  kind: 'text' | 'url' | 'wikipedia' | 'local_file';
+  kind: 'text' | 'url' | 'wikipedia' | 'local_file' | 'preset';
   title: string;
   uri?: string | null;
   language?: string | null;

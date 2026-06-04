@@ -306,7 +306,7 @@ class WorkspaceTools:
         preview = self.preview_patch(request)
         path = self._resolve_writable(preview.path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(request.proposed_content, encoding="utf-8")
+        path.write_text(request.proposed_content, encoding="utf-8", newline="\n")
         file_record = self.read_file(preview.path)
 
         return WorkspacePatchApplyResult(

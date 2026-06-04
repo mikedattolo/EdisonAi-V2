@@ -1021,6 +1021,129 @@ button {
   gap: 12px;
 }
 
+.hardware-command-center {
+  display: grid;
+  gap: 12px;
+}
+
+.command-center-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(0, 1.2fr) minmax(240px, 1.35fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.command-center-status,
+.command-center-metrics,
+.command-center-actions {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.command-center-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-center-status div {
+  display: grid;
+  gap: 6px;
+}
+
+.command-center-status strong {
+  color: #1f2937;
+  font-size: 1.15rem;
+  text-transform: capitalize;
+}
+
+.command-center-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.command-center-metrics div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f6f8fb;
+}
+
+.command-center-metrics dt {
+  color: #697487;
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.command-center-metrics dd {
+  margin: 0;
+  overflow: hidden;
+  color: #243041;
+  font-weight: 790;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.command-center-actions {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.command-center-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid #e1e6ee;
+  border-left: 3px solid #9fb2ca;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.command-center-action.warning {
+  border-left-color: #d7a845;
+  background: #fffaf0;
+}
+
+.command-center-action.critical {
+  border-left-color: #d16d42;
+  background: #fff4ef;
+}
+
+.command-center-action strong {
+  color: #26313f;
+  font-size: 0.88rem;
+}
+
+.command-center-action p {
+  margin: 3px 0 0;
+  color: #5a6678;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.command-center-action > span {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: #eef2f7;
+  color: #526073;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .capability-panel {
   display: grid;
   gap: 12px;
@@ -3265,6 +3388,199 @@ button {
   color: #202a38;
 }
 
+.agent-run-dock {
+  display: grid;
+  gap: 12px;
+  width: min(calc(100% - 44px), 920px);
+  margin: 12px auto 0;
+  padding: 14px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.agent-run-dock-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-run-dock-header div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-run-dock-header strong {
+  overflow: hidden;
+  color: #1f2937;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: #eef2f7;
+  color: #4b5870;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.run-status.running,
+.run-status.planning,
+.run-status.waiting_for_approval {
+  background: #fff5dc;
+  color: #8a5a05;
+}
+
+.run-status.completed {
+  background: #e7f6ef;
+  color: #176a58;
+}
+
+.run-status.failed,
+.run-status.cancelled {
+  background: #fff0eb;
+  color: #a4461b;
+}
+
+.agent-run-dock-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.6fr);
+  gap: 12px;
+}
+
+.agent-run-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.agent-run-list-item {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid #d7dde7;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #243041;
+  text-align: left;
+}
+
+.agent-run-list-item.active {
+  border-color: #91c9bd;
+  background: #f1faf6;
+}
+
+.agent-run-list-item span,
+.agent-run-list-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-run-list-item span {
+  font-weight: 780;
+}
+
+.agent-run-list-item small {
+  color: #667286;
+}
+
+.agent-run-detail {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.run-progress-line {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.run-progress-line progress {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+}
+
+.run-progress-line span {
+  overflow: hidden;
+  color: #526073;
+  font-size: 0.82rem;
+  font-weight: 740;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-run-events {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-run-event {
+  display: grid;
+  gap: 5px;
+  padding: 8px 9px;
+  border-left: 3px solid #b9c5d6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.agent-run-event.tool_result {
+  border-left-color: #5fb7a4;
+}
+
+.agent-run-event.error {
+  border-left-color: #d16d42;
+}
+
+.agent-run-event div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #6c7788;
+  font-size: 0.75rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.agent-run-event strong {
+  color: #253041;
+  font-size: 0.88rem;
+}
+
+.agent-run-event p {
+  margin: 0;
+  color: #566274;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.agent-run-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #647084;
+  font-weight: 720;
+}
+
 .chat-surface {
   align-content: start;
   gap: 20px;
@@ -4012,5 +4328,25 @@ button {
 
   .composer button {
     width: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  .agent-run-dock,
+  .hardware-command-center {
+    width: calc(100% - 24px);
+  }
+
+  .agent-run-dock-grid,
+  .command-center-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .command-center-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .run-progress-line {
+    grid-template-columns: 1fr;
   }
 }

@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.background import BackgroundTask
 from fastapi.responses import StreamingResponse
 
-from edison_core.api.dependencies import get_generation_store, get_hardware_device_service, get_model_gateway
+from edison_core.api.dependencies import (
+    get_fan_control_service,
+    get_generation_store,
+    get_hardware_device_service,
+    get_model_gateway,
+    get_status_service,
+)
 from edison_core.schemas import (
     ArtifactCreate,
     ArtifactKind,
@@ -21,11 +27,14 @@ from edison_core.schemas import (
     CameraSnapshotResponse,
     CameraVisionStatus,
     HardwareAcceleratorRecord,
+    HardwareControlAction,
+    HardwareControlCenter,
     HardwareStatus,
 )
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import CameraCaptureError, CapturedCameraSnapshot, HardwareDeviceService
 from edison_core.services.model_gateway import ModelGateway
+from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 
 
 router = APIRouter(prefix="/api/v1/hardware", tags=["hardware"])
@@ -38,6 +47,47 @@ def hardware_status(
     hardware: HardwareDeviceService = Depends(get_hardware_device_service),
 ) -> HardwareStatus:
     return hardware.snapshot()
+
+
+@router.get("/control-center", response_model=HardwareControlCenter)
+def hardware_control_center(
+    hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+    status_service: SystemStatusService = Depends(get_status_service),
+    fan_control_service: GPUFanControlService = Depends(get_fan_control_service),
+) -> HardwareControlCenter:
+    hardware_snapshot = hardware.snapshot()
+    system_snapshot = status_service.snapshot()
+    fan_snapshot = fan_control_service.snapshot()
+    hailo = next((item for item in hardware_snapshot.accelerators if item.kind == "hailo8"), None)
+    ready_camera = next((camera for camera in hardware_snapshot.cameras if camera.status == "ready"), None)
+    writable_targets = sum(len(controller.target_fan_ids) for controller in fan_snapshot.controllers)
+    actions = _hardware_actions(
+        gpu_count=len(system_snapshot.gpu_devices),
+        fan_control_enabled=fan_snapshot.hardware_control_enabled,
+        writable_targets=writable_targets,
+        hailo=hailo,
+        camera_ready=ready_camera is not None,
+    )
+    return HardwareControlCenter(
+        overall_status=_hardware_overall_status(actions, len(system_snapshot.gpu_devices)),
+        gpu_count=len(system_snapshot.gpu_devices),
+        fan_controller_count=len(fan_snapshot.controllers),
+        writable_fan_target_count=writable_targets,
+        fan_backend=fan_snapshot.backend,
+        fan_writes_enabled=fan_snapshot.hardware_control_enabled,
+        hailo_status=hailo.status if hailo else "not_detected",
+        camera_status=ready_camera.status if ready_camera else (
+            hardware_snapshot.cameras[0].status if hardware_snapshot.cameras else "offline"
+        ),
+        storage_roots=system_snapshot.storage_roots,
+        actions=actions,
+        metadata={
+            "gpus": [gpu.model_dump(mode="json") for gpu in system_snapshot.gpu_devices],
+            "fan_controllers": [controller.model_dump(mode="json") for controller in fan_snapshot.controllers],
+            "hailo": hailo.model_dump(mode="json") if hailo else None,
+            "cameras": [camera.model_dump(mode="json") for camera in hardware_snapshot.cameras],
+        },
+    )
 
 
 @router.get("/accelerators", response_model=list[HardwareAcceleratorRecord])
@@ -304,3 +354,86 @@ def _wait_for_finished_process(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=0)
     except subprocess.TimeoutExpired:
         return
+
+
+def _hardware_actions(
+    gpu_count: int,
+    fan_control_enabled: bool,
+    writable_targets: int,
+    hailo: HardwareAcceleratorRecord | None,
+    camera_ready: bool,
+) -> list[HardwareControlAction]:
+    actions: list[HardwareControlAction] = []
+    if gpu_count == 0:
+        actions.append(
+            HardwareControlAction(
+                id="gpu-detection",
+                title="NVIDIA GPUs are not visible",
+                detail="nvidia-smi did not return any GPUs, so model routing and fan control need driver checks.",
+                severity="critical",
+                action_label="Check driver",
+            )
+        )
+    if gpu_count > 0 and not fan_control_enabled:
+        actions.append(
+            HardwareControlAction(
+                id="fan-monitor-mode",
+                title="Fan writes are in monitor mode",
+                detail="Edison can read fan state, but changing fan speeds requires the NVIDIA fan backend and display helper to be enabled.",
+                severity="warning",
+                action_label="Enable fan backend",
+            )
+        )
+    if fan_control_enabled and writable_targets == 0:
+        actions.append(
+            HardwareControlAction(
+                id="fan-targets",
+                title="No writable fan targets detected",
+                detail="The fan backend is enabled, but nvidia-settings did not expose writable fan IDs.",
+                severity="warning",
+                action_label="Probe fans",
+            )
+        )
+    if hailo is None or hailo.status != "ready":
+        detail = hailo.detail if hailo else "Hailo-8 has not been detected."
+        severity = "warning" if hailo and hailo.status in {"driver_missing", "runtime_missing", "detected"} else "critical"
+        actions.append(
+            HardwareControlAction(
+                id="hailo-readiness",
+                title="Hailo object detection needs setup",
+                detail=detail,
+                severity=severity,
+                action_label="Finish Hailo setup",
+                metadata={"hailo_status": hailo.status if hailo else "not_detected"},
+            )
+        )
+    if not camera_ready:
+        actions.append(
+            HardwareControlAction(
+                id="camera-readiness",
+                title="Camera feed is not ready",
+                detail="No capture-capable camera is currently available to Edison.",
+                severity="warning",
+                action_label="Check camera",
+            )
+        )
+    if not actions:
+        actions.append(
+            HardwareControlAction(
+                id="hardware-ready",
+                title="Hardware control surface is ready",
+                detail="GPUs, camera feed, fan control, and accelerator checks are reporting without blockers.",
+                severity="info",
+            )
+        )
+    return actions
+
+
+def _hardware_overall_status(actions: list[HardwareControlAction], gpu_count: int) -> str:
+    if gpu_count == 0:
+        return "offline"
+    if any(action.severity == "critical" for action in actions):
+        return "setup_required"
+    if any(action.severity == "warning" for action in actions):
+        return "attention"
+    return "ready"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
@@ -23,6 +24,10 @@ from edison_core.services.workspace_tools import WorkspaceTools
 
 def get_conversation_store(request: Request) -> ConversationStore:
     return request.app.state.conversation_store
+
+
+def get_agent_run_store(request: Request) -> AgentRunStore:
+    return request.app.state.agent_run_store
 
 
 def get_session_state_store(request: Request) -> SessionStateStore:

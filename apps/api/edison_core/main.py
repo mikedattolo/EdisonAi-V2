@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from edison_core.api import (
+    routes_agents,
     routes_capabilities,
     routes_chat,
     routes_conversations,
@@ -19,6 +20,7 @@ from edison_core.api import (
 )
 from edison_core.config import EdisonSettings, load_settings
 from edison_core.database import SQLiteDatabase
+from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
@@ -41,11 +43,13 @@ from edison_core.services.workspace_tools import WorkspaceTools
 def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     resolved_settings = settings or load_settings()
     database = SQLiteDatabase(resolved_settings.database_path)
+    agent_run_store = AgentRunStore(database)
     conversation_store = ConversationStore(database)
     session_state_store = SessionStateStore(database)
     generation_store = GenerationStore(database)
     knowledge_store = KnowledgeStore(database, resolved_settings.workspace_roots[0])
     personal_workspace_store = PersonalWorkspaceStore(database)
+    agent_run_store.initialize()
     conversation_store.initialize()
     session_state_store.initialize()
     generation_store.initialize()
@@ -106,6 +110,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     )
 
     app.state.settings = resolved_settings
+    app.state.agent_run_store = agent_run_store
     app.state.conversation_store = conversation_store
     app.state.session_state_store = session_state_store
     app.state.generation_store = generation_store
@@ -127,6 +132,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.capability_registry = capability_registry
 
     app.include_router(routes_health.router)
+    app.include_router(routes_agents.router)
     app.include_router(routes_capabilities.router)
     app.include_router(routes_hardware.router)
     app.include_router(routes_models.router)
