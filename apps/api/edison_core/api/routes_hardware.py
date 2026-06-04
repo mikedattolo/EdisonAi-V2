@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterator
+from threading import Lock
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -28,6 +29,8 @@ from edison_core.services.model_gateway import ModelGateway
 
 
 router = APIRouter(prefix="/api/v1/hardware", tags=["hardware"])
+_camera_feed_lock = Lock()
+_camera_feed_processes: dict[str, list[subprocess.Popen[bytes]]] = {}
 
 
 @router.get("/status", response_model=HardwareStatus)
@@ -58,6 +61,7 @@ def capture_camera_snapshot(
     store: GenerationStore = Depends(get_generation_store),
 ) -> CameraSnapshotResponse:
     try:
+        _release_camera_feeds(payload.device_path)
         capture = hardware.capture_camera_snapshot(payload)
     except CameraCaptureError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
@@ -74,6 +78,7 @@ def analyze_camera_frame(
     gateway: ModelGateway = Depends(get_model_gateway),
 ) -> CameraFrameAnalysisResponse:
     try:
+        _release_camera_feeds(payload.device_path)
         capture = hardware.capture_camera_snapshot(payload)
     except CameraCaptureError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
@@ -128,14 +133,16 @@ def camera_feed(
         input_format=input_format,
     )
     try:
-        _camera, command, boundary = hardware.camera_feed_command(payload)
+        camera, command, boundary = hardware.camera_feed_command(payload)
     except CameraCaptureError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    feed_key = camera.capture_path or device_path or "default"
+    _register_camera_feed(feed_key, process)
     return StreamingResponse(
-        _stream_process(process),
+        _stream_process(feed_key, process),
         media_type=f"multipart/x-mixed-replace; boundary={boundary}",
-        background=BackgroundTask(_terminate_process, process),
+        background=BackgroundTask(_cleanup_camera_feed, feed_key, process),
     )
 
 
@@ -224,7 +231,33 @@ def _extract_detection_labels(content: str) -> list[str]:
     return labels
 
 
-def _stream_process(process: subprocess.Popen[bytes]) -> Iterator[bytes]:
+def _register_camera_feed(feed_key: str, process: subprocess.Popen[bytes]) -> None:
+    with _camera_feed_lock:
+        _camera_feed_processes.setdefault(feed_key, []).append(process)
+
+
+def _release_camera_feeds(device_path: str | None) -> None:
+    with _camera_feed_lock:
+        if device_path:
+            processes = _camera_feed_processes.pop(device_path, [])
+        else:
+            processes = [process for items in _camera_feed_processes.values() for process in items]
+            _camera_feed_processes.clear()
+    for process in processes:
+        _terminate_process(process)
+
+
+def _cleanup_camera_feed(feed_key: str, process: subprocess.Popen[bytes]) -> None:
+    with _camera_feed_lock:
+        processes = _camera_feed_processes.get(feed_key, [])
+        if process in processes:
+            processes.remove(process)
+        if not processes:
+            _camera_feed_processes.pop(feed_key, None)
+    _terminate_process(process)
+
+
+def _stream_process(feed_key: str, process: subprocess.Popen[bytes]) -> Iterator[bytes]:
     try:
         if process.stdout is None:
             return
@@ -234,7 +267,7 @@ def _stream_process(process: subprocess.Popen[bytes]) -> Iterator[bytes]:
                 break
             yield chunk
     finally:
-        _terminate_process(process)
+        _cleanup_camera_feed(feed_key, process)
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
