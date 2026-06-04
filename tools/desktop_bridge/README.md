@@ -16,6 +16,16 @@ The tunnel helper exposes the bridge privately to Edison as
 `http://127.0.0.1:8765` on the Edison machine, avoiding a Windows Firewall LAN
 port rule.
 
+## Start At Windows Login
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Register-EdisonDesktopStartup.ps1
+```
+
+This registers a current-user scheduled task named `Edison Desktop Services`.
+It runs `Start-EdisonDesktopServices.ps1`, which starts the bridge first, then
+retries the Edison SSH tunnel while the network is still coming online.
+
 ## Endpoints
 
 - `GET /health` lists allowlisted apps, printers, and file roots.
