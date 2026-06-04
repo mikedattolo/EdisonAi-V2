@@ -75,6 +75,7 @@ import type {
   SearchCompareResponse,
   SearchProvider,
   SystemStatus,
+  RuntimeSettingsRecord,
   ToyBoxManagerStatus,
   WorkspaceCommand,
   WorkspaceCommandRunResult,
@@ -101,6 +102,7 @@ type ViewId =
   | 'search'
   | 'code'
   | 'media'
+  | 'gallery'
   | 'memory'
   | 'system'
   | 'settings';
@@ -139,6 +141,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'search', label: 'Search', icon: Search },
   { id: 'code', label: 'Code Space', icon: Code2 },
   { id: 'media', label: 'Media', icon: GalleryHorizontalEnd },
+  { id: 'gallery', label: 'Gallery', icon: Image },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'system', label: 'System', icon: Server },
   { id: 'settings', label: 'Settings', icon: Settings },
@@ -237,6 +240,7 @@ export default function App() {
   const [sessionState, setSessionState] = useState<SessionStateRecord | null>(null);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [mediaStatus, setMediaStatus] = useState<MediaSystemStatus | null>(null);
+  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettingsRecord | null>(null);
   const [fanControls, setFanControls] = useState<GPUFanControlSnapshot | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const [hardwareControlCenter, setHardwareControlCenter] = useState<HardwareControlCenter | null>(null);
@@ -307,8 +311,11 @@ export default function App() {
   }, [activeMode]);
 
   useEffect(() => {
-    if (activeView === 'media') {
+    if (activeView === 'media' || activeView === 'gallery') {
       void refreshMediaSurface();
+    }
+    if (activeView === 'settings') {
+      void refreshSettingsSurface();
     }
     if (activeView === 'system') {
       void refreshSystemSurface();
@@ -439,6 +446,7 @@ export default function App() {
         nextSession,
         nextKnowledgeStatus,
         nextKnowledgeSources,
+        nextRuntimeSettings,
       ] = await Promise.all([
         edisonApi.getStatus(),
         edisonApi.getCapabilities(),
@@ -451,6 +459,7 @@ export default function App() {
         edisonApi.getSession(SESSION_ID),
         edisonApi.getKnowledgeStatus(),
         edisonApi.listKnowledgeSources(50),
+        edisonApi.getRuntimeSettings(),
       ]);
       setStatus(nextStatus);
       setCapabilityStatus(nextCapabilities);
@@ -466,6 +475,7 @@ export default function App() {
       setSessionState(nextSession);
       setKnowledgeStatus(nextKnowledgeStatus);
       setKnowledgeSources(nextKnowledgeSources);
+      setRuntimeSettings(nextRuntimeSettings);
       setActiveMode(nextSession.selected_mode ?? 'auto');
       if (nextConversations[0]) {
         await loadConversation(nextConversations[0].id);
@@ -911,6 +921,33 @@ export default function App() {
       setCameraVisionStatus(nextVisionStatus);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'System status failed');
+    }
+  }
+
+  async function refreshSettingsSurface() {
+    try {
+      const [nextRuntimeSettings, nextMediaStatus, nextToyBoxStatus, nextHardwareStatus] = await Promise.all([
+        edisonApi.getRuntimeSettings(),
+        edisonApi.getMediaStatus(),
+        edisonApi.getToyBoxStatus(),
+        edisonApi.getHardwareStatus(),
+      ]);
+      setRuntimeSettings(nextRuntimeSettings);
+      setMediaStatus(nextMediaStatus);
+      setToyBoxStatus(nextToyBoxStatus);
+      setHardwareStatus(nextHardwareStatus);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Settings failed to load');
+    }
+  }
+
+  async function saveRuntimeSettings(payload: Parameters<typeof edisonApi.updateRuntimeSettings>[0]) {
+    setError(null);
+    try {
+      const saved = await edisonApi.updateRuntimeSettings(payload);
+      setRuntimeSettings(saved);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Settings failed to save');
     }
   }
 
@@ -1599,6 +1636,7 @@ export default function App() {
             mediaModes={mediaModes}
             mediaStatus={mediaStatus}
             models={models}
+            runtimeSettings={runtimeSettings}
             toyBoxStatus={toyBoxStatus}
             activeWorkspaceRootId={activeWorkspaceRootId}
             onCreateMediaJob={createMediaReadinessJob}
@@ -1617,6 +1655,7 @@ export default function App() {
             onRefreshKnowledge={refreshKnowledgeSurface}
             onRefreshMedia={refreshMediaSurface}
             onRefreshSystem={refreshSystemSurface}
+            onSaveRuntimeSettings={saveRuntimeSettings}
             onCaptureCameraSnapshot={captureCameraSnapshot}
             onAnalyzeCameraFrame={analyzeCameraFrame}
             onUpdateFanControl={updateFanControl}
@@ -2584,6 +2623,7 @@ function WorkbenchView({
   mediaModes,
   mediaStatus,
   models,
+  runtimeSettings,
   toyBoxStatus,
   onCreateWorkspaceProject,
   onCreateMediaJob,
@@ -2592,6 +2632,7 @@ function WorkbenchView({
   onAnalyzeCameraFrame,
   onOpenCompareConversation,
   onRefreshConversations,
+  onSaveRuntimeSettings,
   onIngestKnowledgeLocal,
   onIngestKnowledgePreset,
   onIngestKnowledgeText,
@@ -2653,6 +2694,7 @@ function WorkbenchView({
   mediaModes: MediaGenerationModeRecord[];
   mediaStatus: MediaSystemStatus | null;
   models: ModelProfile[];
+  runtimeSettings: RuntimeSettingsRecord | null;
   toyBoxStatus: ToyBoxManagerStatus | null;
   onCreateWorkspaceProject: (name: string, prompt: string) => Promise<void>;
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
@@ -2661,6 +2703,7 @@ function WorkbenchView({
   onAnalyzeCameraFrame: (devicePath?: string | null) => Promise<void>;
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
   onRefreshConversations: () => Promise<void>;
+  onSaveRuntimeSettings: (payload: Parameters<typeof edisonApi.updateRuntimeSettings>[0]) => Promise<void>;
   onIngestKnowledgeLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
   onIngestKnowledgePreset: (preset: KnowledgePreset) => Promise<void>;
   onIngestKnowledgeText: (payload: { title: string; text: string; uri?: string }) => Promise<void>;
@@ -2775,6 +2818,17 @@ function WorkbenchView({
       />
     );
   }
+  if (activeView === 'gallery') {
+    return (
+      <GalleryView
+        artifacts={artifacts}
+        jobs={mediaJobs}
+        onRefresh={onRefreshMedia}
+        onUseArtifactInChat={onUseArtifactInChat}
+        runtimeSettings={runtimeSettings}
+      />
+    );
+  }
   if (activeView === 'memory') {
     return (
       <MemoryView
@@ -2821,8 +2875,11 @@ function WorkbenchView({
       fanControls={fanControls}
       hardwareStatus={hardwareStatus}
       mediaStatus={mediaStatus}
+      runtimeSettings={runtimeSettings}
       sessionState={sessionState}
       status={status}
+      toyBoxStatus={toyBoxStatus}
+      onSave={onSaveRuntimeSettings}
       workspaceRoots={workspaceRoots}
     />
   );
@@ -4989,6 +5046,131 @@ function MediaOutputsPanel({
   );
 }
 
+function GalleryView({
+  artifacts,
+  jobs,
+  onRefresh,
+  onUseArtifactInChat,
+  runtimeSettings,
+}: {
+  artifacts: ArtifactRecord[];
+  jobs: JobRecord[];
+  onRefresh: () => Promise<void>;
+  onUseArtifactInChat: (artifact: ArtifactRecord) => void;
+  runtimeSettings: RuntimeSettingsRecord | null;
+}) {
+  const defaultFilter = typeof runtimeSettings?.gallery.default_filter === 'string'
+    ? runtimeSettings.gallery.default_filter
+    : 'all';
+  const [filter, setFilter] = useState(defaultFilter);
+  const [query, setQuery] = useState('');
+  useEffect(() => {
+    setFilter(defaultFilter);
+  }, [defaultFilter]);
+
+  const visibleArtifacts = artifacts.filter((artifact) => {
+    const haystack = `${artifact.title} ${artifact.kind} ${artifact.mime_type ?? ''} ${artifact.path}`.toLowerCase();
+    const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
+    if (!matchesQuery) {
+      return false;
+    }
+    if (filter === 'all') {
+      return true;
+    }
+    if (filter === 'docs') {
+      return ['document', 'code', 'data'].includes(artifact.kind);
+    }
+    return artifact.kind === filter;
+  });
+  const filters = [
+    ['all', 'All'],
+    ['image', 'Images'],
+    ['video', 'Video'],
+    ['mesh', '3D'],
+    ['audio', 'Audio'],
+    ['docs', 'Specs'],
+  ];
+
+  return (
+    <section className="workbench-view gallery-view" aria-label="Gallery">
+      <div className="view-heading">
+        <Image size={26} />
+        <h3>Gallery</h3>
+        <button className="secondary-button" onClick={() => void onRefresh()} type="button">Refresh</button>
+      </div>
+      <div className="gallery-toolbar">
+        <div className="media-panel-tabs" role="tablist" aria-label="Gallery filters">
+          {filters.map(([id, label]) => (
+            <button
+              className={filter === id ? 'mode-button active' : 'mode-button'}
+              key={id}
+              onClick={() => setFilter(id)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label>
+          <span className="section-label">Search</span>
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Find generated images, models, videos, specs..."
+            type="search"
+            value={query}
+          />
+        </label>
+      </div>
+      <div className="wide-metric-grid gallery-metrics">
+        <div><dt>Artifacts</dt><dd>{artifacts.length}</dd></div>
+        <div><dt>Images</dt><dd>{artifacts.filter((artifact) => artifact.kind === 'image').length}</dd></div>
+        <div><dt>3D / Video</dt><dd>{artifacts.filter((artifact) => ['mesh', 'video'].includes(artifact.kind)).length}</dd></div>
+        <div><dt>Jobs</dt><dd>{jobs.length}</dd></div>
+      </div>
+      <div className="gallery-shell">
+        <div className="gallery-card-grid">
+          {visibleArtifacts.map((artifact) => {
+            const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
+            return (
+              <article className={`artifact-card gallery-artifact-card ${artifact.kind}`} key={artifact.id}>
+                <ArtifactPreview artifact={artifact} url={downloadUrl} />
+                <div className="artifact-card-meta">
+                  <strong>{artifact.title}</strong>
+                  <span>{artifact.kind} / {artifact.mime_type ?? 'file'}</span>
+                  <small>{new Date(artifact.created_at).toLocaleString()}</small>
+                </div>
+                <div className="artifact-card-actions">
+                  <button className="secondary-button" onClick={() => onUseArtifactInChat(artifact)} type="button">Use in chat</button>
+                  <a className="secondary-button" href={downloadUrl} rel="noreferrer" target="_blank">Open</a>
+                </div>
+              </article>
+            );
+          })}
+          {visibleArtifacts.length === 0 && <div className="empty-line">No generated media matches this view yet.</div>}
+        </div>
+        <aside className="gallery-job-rail">
+          <div className="section-heading">
+            <Activity size={18} />
+            <h3>Recent Generation Jobs</h3>
+          </div>
+          <div className="job-list">
+            {jobs.slice(0, 10).map((job) => (
+              <article className="job-row" key={job.id}>
+                <div>
+                  <strong>{job.title}</strong>
+                  <span>{job.job_type} / {job.backend}</span>
+                </div>
+                <span className={`job-status ${job.status}`}>{job.status}</span>
+              </article>
+            ))}
+            {jobs.length === 0 && <div className="empty-line">No generation jobs yet.</div>}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 function fallbackMediaModes(): MediaGenerationModeRecord[] {
   return [
     ['image', 'Image', 'core', 'image', 'comfyui', 'General Edison image generation.', true, 'Image artifact', 'Describe the image.'],
@@ -5638,17 +5820,25 @@ function SettingsView({
   fanControls,
   hardwareStatus,
   mediaStatus,
+  runtimeSettings,
   sessionState,
   status,
+  toyBoxStatus,
+  onSave,
   workspaceRoots,
 }: {
   fanControls: GPUFanControlSnapshot | null;
   hardwareStatus: HardwareStatus | null;
   mediaStatus: MediaSystemStatus | null;
+  runtimeSettings: RuntimeSettingsRecord | null;
   sessionState: SessionStateRecord | null;
   status: SystemStatus | null;
+  toyBoxStatus: ToyBoxManagerStatus | null;
+  onSave: (payload: Parameters<typeof edisonApi.updateRuntimeSettings>[0]) => Promise<void>;
   workspaceRoots: WorkspaceRootRecord[];
 }) {
+  const [draft, setDraft] = useState<RuntimeSettingsRecord>(() => defaultRuntimeSettings());
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
   const cameras = hardwareStatus?.cameras ?? [];
   const mediaBackends = [
@@ -5657,14 +5847,46 @@ function SettingsView({
     ['WAN 2.2', mediaStatus?.wan22.status, mediaStatus?.wan22.base_url],
     ['Modly', mediaStatus?.modly.status, mediaStatus?.modly.base_url],
   ];
+  const toyboxReady = toyBoxStatus?.lanes.filter((lane) => lane.status === 'ready').length ?? 0;
+  const notificationChannels = toyBoxStatus?.notification_channels ?? [];
+
+  useEffect(() => {
+    setDraft(runtimeSettings ?? defaultRuntimeSettings());
+  }, [runtimeSettings]);
+
+  function updateSetting(section: keyof RuntimeSettingsEditableSections, key: string, value: unknown) {
+    setDraft((current) => ({
+      ...current,
+      [section]: {
+        ...current[section],
+        [key]: value,
+      },
+    }));
+    setSaveMessage(null);
+  }
+
+  async function saveSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onSave({
+      media: draft.media,
+      integrations: draft.integrations,
+      toybox: draft.toybox,
+      notifications: draft.notifications,
+      gallery: draft.gallery,
+      hardware: draft.hardware,
+    });
+    setSaveMessage('Saved locally. Some service-level changes may need a restart before backend workers use them.');
+  }
 
   return (
     <section className="workbench-view" aria-label="Settings">
       <div className="view-heading">
         <Settings size={26} />
         <h3>Settings</h3>
+        <button className="apply-button" form="runtime-settings-form" type="submit">Save Changes</button>
       </div>
-      <div className="settings-stack">
+      <form className="settings-stack settings-form" id="runtime-settings-form" onSubmit={(event) => void saveSettings(event)}>
+        {saveMessage && <div className="settings-save-message">{saveMessage}</div>}
         <article className="settings-panel">
           <div className="section-heading">
             <Database size={18} />
@@ -5687,6 +5909,52 @@ function SettingsView({
             </div>
           </dl>
         </article>
+        <article className="settings-panel settings-edit-panel">
+          <div className="section-heading">
+            <SlidersHorizontal size={18} />
+            <h3>Media Defaults</h3>
+          </div>
+          <label>
+            <span>Preferred mode</span>
+            <select
+              onChange={(event) => updateSetting('media', 'preferred_image_mode', event.target.value)}
+              value={settingString(draft.media, 'preferred_image_mode', 'image')}
+            >
+              <option value="image">Image</option>
+              <option value="minecraft_texture">Minecraft Texture</option>
+              <option value="product_render">Product Render</option>
+              <option value="social_media_content">Social Media Content</option>
+            </select>
+          </label>
+          <label>
+            <span>Default width</span>
+            <input
+              min={256}
+              max={2048}
+              onChange={(event) => updateSetting('media', 'default_width', Number(event.target.value))}
+              type="number"
+              value={settingNumber(draft.media, 'default_width', 1024)}
+            />
+          </label>
+          <label>
+            <span>Default height</span>
+            <input
+              min={256}
+              max={2048}
+              onChange={(event) => updateSetting('media', 'default_height', Number(event.target.value))}
+              type="number"
+              value={settingNumber(draft.media, 'default_height', 1024)}
+            />
+          </label>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.media, 'show_outputs_in_chat', true)}
+              onChange={(event) => updateSetting('media', 'show_outputs_in_chat', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Show generated outputs directly in chat</span>
+          </label>
+        </article>
         <article className="settings-panel">
           <div className="section-heading">
             <GalleryHorizontalEnd size={18} />
@@ -5700,6 +5968,171 @@ function SettingsView({
               </div>
             ))}
           </dl>
+        </article>
+        <article className="settings-panel settings-edit-panel">
+          <div className="section-heading">
+            <Network size={18} />
+            <h3>Desktop Bridge</h3>
+          </div>
+          <label>
+            <span>Bridge URL</span>
+            <input
+              onChange={(event) => updateSetting('integrations', 'desktop_bridge_url', event.target.value)}
+              placeholder="http://main-pc.local:8765"
+              value={settingString(draft.integrations, 'desktop_bridge_url', '')}
+            />
+          </label>
+          {[
+            ['fusion360_enabled', 'Fusion 360 CAD automation'],
+            ['blockbench_enabled', 'Blockbench Minecraft assets'],
+            ['slicer_bridge_enabled', 'Bambu / Orca / Cura slicer bridge'],
+          ].map(([key, label]) => (
+            <label className="settings-toggle-row" key={key}>
+              <input
+                checked={settingBoolean(draft.integrations, key, true)}
+                onChange={(event) => updateSetting('integrations', key, event.target.checked)}
+                type="checkbox"
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+          <p className="settings-hint">The bridge should run on your main PC and expose only allowlisted folders, commands, app launchers, and artifact return paths.</p>
+        </article>
+        <article className="settings-panel settings-edit-panel">
+          <div className="section-heading">
+            <Server size={18} />
+            <h3>ToyBox3D / Shopify</h3>
+          </div>
+          <label>
+            <span>Shopify store URL</span>
+            <input
+              onChange={(event) => updateSetting('toybox', 'shopify_store_url', event.target.value)}
+              placeholder="https://your-store.myshopify.com"
+              value={settingString(draft.toybox, 'shopify_store_url', '')}
+            />
+          </label>
+          <label>
+            <span>Default slicer</span>
+            <select
+              onChange={(event) => updateSetting('toybox', 'default_slicer', event.target.value)}
+              value={settingString(draft.toybox, 'default_slicer', 'Bambu Studio')}
+            >
+              <option>Bambu Studio</option>
+              <option>OrcaSlicer</option>
+              <option>Cura</option>
+            </select>
+          </label>
+          <label>
+            <span>DYMO printer name</span>
+            <input
+              onChange={(event) => updateSetting('toybox', 'dymo_printer_name', event.target.value)}
+              value={settingString(draft.toybox, 'dymo_printer_name', "Mike's shipping label printer")}
+            />
+          </label>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.toybox, 'order_polling_enabled', false)}
+              onChange={(event) => updateSetting('toybox', 'order_polling_enabled', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Enable Shopify order polling when credentials are configured</span>
+          </label>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.toybox, 'auto_print_labels', false)}
+              onChange={(event) => updateSetting('toybox', 'auto_print_labels', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Auto-print shipping labels after QA approval</span>
+          </label>
+          <p className="settings-hint">{toyboxReady} ToyBox lanes are ready. Secret tokens still belong in local env/settings, not source control.</p>
+        </article>
+        <article className="settings-panel settings-edit-panel">
+          <div className="section-heading">
+            <Zap size={18} />
+            <h3>Notifications</h3>
+          </div>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.notifications, 'enabled', false)}
+              onChange={(event) => updateSetting('notifications', 'enabled', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Enable production alerts</span>
+          </label>
+          <label>
+            <span>Provider</span>
+            <select
+              onChange={(event) => updateSetting('notifications', 'provider', event.target.value)}
+              value={settingString(draft.notifications, 'provider', 'ntfy')}
+            >
+              <option value="ntfy">ntfy</option>
+              <option value="pushover">Pushover</option>
+              <option value="twilio">Twilio SMS</option>
+              <option value="email">Email SMTP</option>
+              <option value="desktop">Desktop bridge</option>
+            </select>
+          </label>
+          <label>
+            <span>Target</span>
+            <input
+              onChange={(event) => updateSetting('notifications', 'target', event.target.value)}
+              placeholder="topic, phone number, email, or desktop"
+              value={settingString(draft.notifications, 'target', '')}
+            />
+          </label>
+          {[
+            ['notify_on_print_error', 'Print errors'],
+            ['notify_on_label_error', 'Label errors'],
+            ['notify_on_order_exception', 'Order exceptions'],
+          ].map(([key, label]) => (
+            <label className="settings-toggle-row" key={key}>
+              <input
+                checked={settingBoolean(draft.notifications, key, true)}
+                onChange={(event) => updateSetting('notifications', key, event.target.checked)}
+                type="checkbox"
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+          <div className="chip-list">
+            {notificationChannels.map((channel) => <span key={channel.id}>{channel.name}: {channel.status}</span>)}
+          </div>
+        </article>
+        <article className="settings-panel settings-edit-panel">
+          <div className="section-heading">
+            <Image size={18} />
+            <h3>Gallery</h3>
+          </div>
+          <label>
+            <span>Default filter</span>
+            <select
+              onChange={(event) => updateSetting('gallery', 'default_filter', event.target.value)}
+              value={settingString(draft.gallery, 'default_filter', 'all')}
+            >
+              <option value="all">All</option>
+              <option value="image">Images</option>
+              <option value="video">Video</option>
+              <option value="mesh">3D</option>
+              <option value="docs">Specs</option>
+            </select>
+          </label>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.gallery, 'show_documents', true)}
+              onChange={(event) => updateSetting('gallery', 'show_documents', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Show documents and specs in Gallery</span>
+          </label>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.gallery, 'show_code_specs', true)}
+              onChange={(event) => updateSetting('gallery', 'show_code_specs', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Show code/model specs in Gallery</span>
+          </label>
         </article>
         <article className="settings-panel">
           <div className="section-heading">
@@ -5717,13 +6150,21 @@ function SettingsView({
             </div>
             <div>
               <dt>Hailo-8</dt>
-              <dd>{hailo ? `${hailo.status.replace('_', ' ')} / ${hailo.pci_address ?? 'no PCIe address'}` : 'not checked'}</dd>
+              <dd>{hailo ? `${hailo.status.replace('_', ' ')} / ${hailo.pci_address ?? 'no PCIe address'}` : 'not checked'} / {settingString(draft.hardware, 'hailo_driver_action', 'mok_enrollment_required')}</dd>
             </div>
             <div>
               <dt>Cameras</dt>
               <dd>{cameras.map((cameraDevice) => `${cameraDevice.name} ${cameraDevice.capture_path ?? ''}`.trim()).join(' / ') || 'none'}</dd>
             </div>
           </dl>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.hardware, 'allow_reboot_when_confirmed', false)}
+              onChange={(event) => updateSetting('hardware', 'allow_reboot_when_confirmed', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Allow Edison to reboot after explicit confirmation</span>
+          </label>
         </article>
         <article className="settings-panel">
           <div className="section-heading">
@@ -5745,9 +6186,73 @@ function SettingsView({
             </div>
           </dl>
         </article>
-      </div>
+      </form>
     </section>
   );
+}
+
+type RuntimeSettingsEditableSections = Pick<
+  RuntimeSettingsRecord,
+  'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'
+>;
+
+function defaultRuntimeSettings(): RuntimeSettingsRecord {
+  return {
+    service: 'runtime-settings',
+    updated_at: new Date().toISOString(),
+    media: {
+      preferred_image_mode: 'image',
+      default_width: 1024,
+      default_height: 1024,
+      show_outputs_in_chat: true,
+    },
+    integrations: {
+      desktop_bridge_url: '',
+      fusion360_enabled: true,
+      blockbench_enabled: true,
+      slicer_bridge_enabled: true,
+    },
+    toybox: {
+      shopify_store_url: '',
+      order_polling_enabled: false,
+      default_slicer: 'Bambu Studio',
+      dymo_printer_name: "Mike's shipping label printer",
+      auto_print_labels: false,
+    },
+    notifications: {
+      enabled: false,
+      provider: 'ntfy',
+      target: '',
+      notify_on_print_error: true,
+      notify_on_label_error: true,
+      notify_on_order_exception: true,
+    },
+    gallery: {
+      default_filter: 'all',
+      show_documents: true,
+      show_code_specs: true,
+    },
+    hardware: {
+      hailo_driver_action: 'mok_enrollment_required',
+      allow_reboot_when_confirmed: false,
+    },
+    detail: 'Runtime settings are stored locally and are not committed to the repository.',
+  };
+}
+
+function settingString(section: Record<string, unknown>, key: string, fallback: string) {
+  const value = section[key];
+  return typeof value === 'string' ? value : fallback;
+}
+
+function settingNumber(section: Record<string, unknown>, key: string, fallback: number) {
+  const value = section[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function settingBoolean(section: Record<string, unknown>, key: string, fallback: boolean) {
+  const value = section[key];
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function agentItems(): Array<[string, string]> {

@@ -16,6 +16,7 @@ from edison_core.services.modly_client import ModlyClient
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_registry import ModelRegistry, ModelRouter
 from edison_core.services.personal_workspace import PersonalWorkspaceStore
+from edison_core.services.runtime_settings import RuntimeSettingsStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.wan22_client import Wan22Client
@@ -37,6 +38,10 @@ def get_session_state_store(request: Request) -> SessionStateStore:
 
 def get_personal_workspace_store(request: Request) -> PersonalWorkspaceStore:
     return request.app.state.personal_workspace_store
+
+
+def get_runtime_settings_store(request: Request) -> RuntimeSettingsStore:
+    return request.app.state.runtime_settings_store
 
 
 def get_generation_store(request: Request) -> GenerationStore:

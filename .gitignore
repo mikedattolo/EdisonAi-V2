@@ -4,6 +4,7 @@
 config/edison.local.toml
 config/model-registry.local.json
 config/integration-discovery.local.json
+config/runtime-settings.local.json
 
 __pycache__/
 *.py[cod]

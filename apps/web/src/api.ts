@@ -36,6 +36,7 @@ import type {
   SearchCompareResponse,
   SearchProvider,
   SystemStatus,
+  RuntimeSettingsRecord,
   ToyBoxManagerStatus,
   WorkspaceCommandRunResult,
   WorkspaceEntry,
@@ -250,6 +251,12 @@ export const edisonApi = {
   getMediaStatus: () => request<MediaSystemStatus>('/api/v1/media/status'),
   listMediaModes: () => request<MediaGenerationModeRecord[]>('/api/v1/media/modes'),
   getToyBoxStatus: () => request<ToyBoxManagerStatus>('/api/v1/toybox/status'),
+  getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
+  updateRuntimeSettings: (payload: Partial<Pick<RuntimeSettingsRecord, 'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'>>) =>
+    request<RuntimeSettingsRecord>('/api/v1/settings/runtime', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   listArtifacts: (limit = 24) => request<ArtifactRecord[]>(`/api/v1/artifacts?limit=${limit}`),
   uploadArtifact: async (file: File) => {
     const formData = new FormData();

@@ -500,6 +500,18 @@ export interface ToyBoxManagerStatus {
   detail: string;
 }
 
+export interface RuntimeSettingsRecord {
+  service: string;
+  updated_at: string;
+  media: Record<string, unknown>;
+  integrations: Record<string, unknown>;
+  toybox: Record<string, unknown>;
+  notifications: Record<string, unknown>;
+  gallery: Record<string, unknown>;
+  hardware: Record<string, unknown>;
+  detail: string;
+}
+
 export interface CapabilityStatus {
   service: string;
   mcp_servers: MCPServerRecord[];

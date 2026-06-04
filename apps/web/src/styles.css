@@ -3203,6 +3203,80 @@ button {
   text-decoration: none;
 }
 
+.gallery-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.35fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.gallery-toolbar label,
+.settings-edit-panel label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #536278;
+  font-size: 0.86rem;
+  font-weight: 740;
+}
+
+.gallery-toolbar input,
+.settings-edit-panel input:not([type="checkbox"]),
+.settings-edit-panel select {
+  min-height: 40px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 11px;
+  border: 1px solid #cdd5e0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e2632;
+  outline: none;
+}
+
+.gallery-toolbar input:focus,
+.settings-edit-panel input:not([type="checkbox"]):focus,
+.settings-edit-panel select:focus {
+  border-color: #55baa8;
+  box-shadow: 0 0 0 3px #dff6f0;
+}
+
+.gallery-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.28fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.gallery-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.gallery-artifact-card {
+  align-content: start;
+  min-height: 320px;
+}
+
+.gallery-artifact-card .artifact-preview-media,
+.gallery-artifact-card .mesh-artifact-viewer,
+.gallery-artifact-card .artifact-file-preview,
+.gallery-artifact-card .artifact-audio-preview {
+  aspect-ratio: 1 / 1;
+}
+
+.gallery-job-rail {
+  display: grid;
+  gap: 12px;
+  position: sticky;
+  top: 12px;
+  padding: 14px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 .job-row {
   display: flex;
   align-items: center;
@@ -3275,11 +3349,47 @@ button {
   gap: 14px;
 }
 
+.settings-form {
+  align-items: start;
+}
+
+.settings-save-message {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  border: 1px solid #bfe3d9;
+  border-radius: 8px;
+  background: #eef9f5;
+  color: #176a58;
+  font-weight: 760;
+}
+
 .settings-panel {
   display: grid;
   align-content: start;
   gap: 14px;
   padding: 14px;
+}
+
+.settings-edit-panel {
+  background: #fbfcfd;
+}
+
+.settings-toggle-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.settings-toggle-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: #17806e;
+}
+
+.settings-hint {
+  margin: 0;
+  color: #697487;
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .settings-list {
@@ -3329,6 +3439,8 @@ button {
   .toybox-ops-grid,
   .toybox-live-grid,
   .media-output-grid,
+  .gallery-toolbar,
+  .gallery-shell,
   .settings-stack,
   .fan-controller-grid,
   .capability-grid,
@@ -4552,6 +4664,10 @@ button {
 
   .toybox-device-row {
     grid-template-columns: 1fr;
+  }
+
+  .gallery-job-rail {
+    position: static;
   }
 
   .chat-surface {

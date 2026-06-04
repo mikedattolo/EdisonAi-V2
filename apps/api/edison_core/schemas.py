@@ -757,6 +757,27 @@ class ToyBoxManagerStatus(BaseModel):
     detail: str
 
 
+class RuntimeSettingsRecord(BaseModel):
+    service: str = "runtime-settings"
+    updated_at: datetime = Field(default_factory=utc_now)
+    media: dict[str, Any] = Field(default_factory=dict)
+    integrations: dict[str, Any] = Field(default_factory=dict)
+    toybox: dict[str, Any] = Field(default_factory=dict)
+    notifications: dict[str, Any] = Field(default_factory=dict)
+    gallery: dict[str, Any] = Field(default_factory=dict)
+    hardware: dict[str, Any] = Field(default_factory=dict)
+    detail: str = "Runtime settings are stored locally and are not committed to the repository."
+
+
+class RuntimeSettingsUpdate(BaseModel):
+    media: dict[str, Any] | None = None
+    integrations: dict[str, Any] | None = None
+    toybox: dict[str, Any] | None = None
+    notifications: dict[str, Any] | None = None
+    gallery: dict[str, Any] | None = None
+    hardware: dict[str, Any] | None = None
+
+
 class CapabilityStatus(BaseModel):
     service: str = "capabilities"
     mcp_servers: list[MCPServerRecord] = Field(default_factory=list)
