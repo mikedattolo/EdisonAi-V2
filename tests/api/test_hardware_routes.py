@@ -84,6 +84,8 @@ def test_camera_analyze_route_captures_artifact_and_uses_vision_gateway(tmp_path
     assert response.json()["status"] == "complete"
     assert response.json()["model_id"] == "local-vision"
     assert "desk" in response.json()["summary"].lower()
+    assert "desk" in response.json()["detections"]
+    assert "monitor" in response.json()["detections"]
     assert downloaded.content.startswith(b"\xff\xd8")
 
 

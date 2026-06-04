@@ -170,7 +170,32 @@ def _save_camera_artifact(
 
 
 def _extract_detection_labels(content: str) -> list[str]:
+    known_labels = (
+        ("person", "person"),
+        ("people", "people"),
+        ("dual monitor", "dual monitors"),
+        ("monitor", "monitor"),
+        ("screen", "screen"),
+        ("camera", "camera"),
+        ("webcam", "webcam"),
+        ("desk", "desk"),
+        ("tool", "tools"),
+        ("chair", "chair"),
+        ("door", "door"),
+        ("computer", "computer"),
+        ("keyboard", "keyboard"),
+        ("microphone", "microphone"),
+        ("light", "lighting"),
+        ("workbench", "workbench"),
+    )
     labels: list[str] = []
+    lowered_content = content.lower()
+    for needle, label in known_labels:
+        if needle in lowered_content and label not in labels:
+            labels.append(label)
+        if len(labels) >= 8:
+            return labels
+
     for raw_line in content.splitlines():
         line = raw_line.strip(" -•\t")
         if not line or len(line) > 80:
