@@ -1,5 +1,6 @@
 import type {
   ArtifactRecord,
+  CapabilityStatus,
   ChatMode,
   ChatTurnResponse,
   ConversationRecord,
@@ -22,6 +23,7 @@ import type {
   OrganizerItemRecord,
   OrganizerKind,
   OrganizerStatus,
+  KnowledgePreset,
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
@@ -51,6 +53,7 @@ export interface ChatTurnPayload {
   conversation_id?: string | null;
   mode: ChatMode;
   preferred_model?: string | null;
+  agent_enabled?: boolean;
   memory_enabled?: boolean;
   workspace_path?: string;
   workspace_context_paths?: string[];
@@ -101,6 +104,7 @@ function withQuery(path: string, params: Record<string, string | number | boolea
 export const edisonApi = {
   apiBase: API_BASE,
   getStatus: () => request<SystemStatus>('/api/v1/status'),
+  getCapabilities: () => request<CapabilityStatus>('/api/v1/capabilities'),
   getHardwareStatus: () => request<HardwareStatus>('/api/v1/hardware/status'),
   getCameraVisionStatus: (devicePath?: string | null) =>
     request<CameraVisionStatus>(withQuery('/api/v1/hardware/cameras/vision', { device_path: devicePath ?? undefined })),
@@ -339,7 +343,7 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  ingestKnowledgePreset: (payload: { preset: 'coding-core' | 'ai-foundations' }) =>
+  ingestKnowledgePreset: (payload: { preset: KnowledgePreset }) =>
     request<KnowledgeSourceRecord[]>('/api/v1/knowledge/ingest/preset', {
       method: 'POST',
       body: JSON.stringify(payload),

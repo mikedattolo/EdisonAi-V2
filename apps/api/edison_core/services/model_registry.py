@@ -74,6 +74,7 @@ class ModelRouter:
 
 def capabilities_for_mode(mode: ChatMode) -> list[ModelCapability]:
     mapping = {
+        ChatMode.AUTO: [ModelCapability.CHAT],
         ChatMode.INSTANT: [ModelCapability.CHAT, ModelCapability.FAST_CHAT],
         ChatMode.CHAT: [ModelCapability.CHAT],
         ChatMode.REASONING: [ModelCapability.CHAT, ModelCapability.REASONING],
@@ -122,7 +123,7 @@ def _selection_sort_key(profile: ModelProfile, mode: ChatMode) -> tuple[int, int
 
 
 def _mode_specialization_penalty(profile: ModelProfile, mode: ChatMode) -> int:
-    if mode != ChatMode.CHAT:
+    if mode not in {ChatMode.AUTO, ChatMode.CHAT}:
         return 0
     specialist_capabilities = {
         ModelCapability.REASONING,

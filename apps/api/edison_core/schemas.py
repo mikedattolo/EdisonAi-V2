@@ -12,6 +12,7 @@ def utc_now() -> datetime:
 
 
 class ChatMode(str, Enum):
+    AUTO = "auto"
     INSTANT = "instant"
     CHAT = "chat"
     REASONING = "reasoning"
@@ -124,8 +125,9 @@ class InferenceResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     conversation_id: str | None = None
-    mode: ChatMode = ChatMode.CHAT
+    mode: ChatMode = ChatMode.AUTO
     preferred_model: str | None = None
+    agent_enabled: bool = False
     memory_enabled: bool = True
     workspace_path: str | None = None
     workspace_context_paths: list[str] = Field(default_factory=list, max_length=12)
@@ -476,7 +478,7 @@ class WorkspaceCommandRunResult(BaseModel):
 
 class KnowledgeSourceRecord(BaseModel):
     id: str
-    kind: Literal["text", "url", "wikipedia", "local_file"]
+    kind: Literal["text", "url", "wikipedia", "local_file", "preset"]
     title: str
     uri: str | None = None
     language: str | None = None
@@ -532,7 +534,49 @@ class KnowledgeIngestLocalRequest(BaseModel):
 
 
 class KnowledgeIngestPresetRequest(BaseModel):
-    preset: Literal["coding-core", "ai-foundations"]
+    preset: Literal[
+        "coding-core",
+        "ai-foundations",
+        "edison-ops",
+        "odysseus-features",
+        "mcp-agents",
+        "local-ai-hardware",
+    ]
+
+
+class MCPServerRecord(BaseModel):
+    id: str
+    name: str
+    status: Literal["ready", "staged", "missing", "disabled"]
+    transport: Literal["stdio", "http", "sse"]
+    description: str
+    tools: list[str] = Field(default_factory=list)
+    command: str | None = None
+    source: str | None = None
+    enabled: bool = True
+    detail: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PluginIntegrationRecord(BaseModel):
+    id: str
+    name: str
+    status: Literal["ready", "staged", "missing", "disabled"]
+    target: Literal["codex", "claude-code", "generic"]
+    description: str
+    setup_commands: list[str] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list)
+    detail: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CapabilityStatus(BaseModel):
+    service: str = "capabilities"
+    mcp_servers: list[MCPServerRecord] = Field(default_factory=list)
+    plugins: list[PluginIntegrationRecord] = Field(default_factory=list)
+    knowledge_presets: list[str] = Field(default_factory=list)
+    attribution: list[str] = Field(default_factory=list)
+    detail: str
 
 
 class KnowledgeSearchRequest(BaseModel):

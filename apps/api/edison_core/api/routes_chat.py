@@ -42,22 +42,26 @@ def create_chat_turn(
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
 ) -> ChatResponse:
+    resolved_payload, intent_metadata = _resolve_chat_payload(payload)
     try:
-        conversation_id = _ensure_conversation(payload, conversations)
-        workspace_messages, workspace_metadata = _build_workspace_context(payload, workspace)
-        knowledge_messages, knowledge_metadata = _build_knowledge_context(payload, knowledge)
-        personal_messages, personal_metadata = _build_personal_context(payload, personal)
+        conversation_id = _ensure_conversation(resolved_payload, conversations)
+        workspace_messages, workspace_metadata = _build_workspace_context(resolved_payload, workspace)
+        knowledge_messages, knowledge_metadata = _build_knowledge_context(resolved_payload, knowledge)
+        personal_messages, personal_metadata = _build_personal_context(resolved_payload, personal)
         context_messages = workspace_messages + knowledge_messages + personal_messages
         user_message = conversations.add_message(
             conversation_id,
             MessageCreate(
                 role=MessageRole.USER,
-                content=payload.message,
-                model=payload.preferred_model,
+                content=resolved_payload.message,
+                model=resolved_payload.preferred_model,
                 metadata={
-                    "mode": payload.mode.value,
-                    "workspace_path": payload.workspace_path,
-                    "workspace_context_paths": payload.workspace_context_paths,
+                    "mode": resolved_payload.mode.value,
+                    "requested_mode": payload.mode.value,
+                    "agent_enabled": payload.agent_enabled,
+                    "intent_router": intent_metadata,
+                    "workspace_path": resolved_payload.workspace_path,
+                    "workspace_context_paths": resolved_payload.workspace_context_paths,
                     "context_warnings": (
                         workspace_metadata["warnings"]
                         + knowledge_metadata["warnings"]
@@ -73,12 +77,13 @@ def create_chat_turn(
     model_messages = context_messages + _openai_messages(conversation.messages)
     model_selection, inference = gateway.complete(
         InferenceRequest(
-            prompt=payload.message,
-            mode=payload.mode,
-            preferred_model=payload.preferred_model,
+            prompt=resolved_payload.message,
+            mode=resolved_payload.mode,
+            preferred_model=resolved_payload.preferred_model,
             metadata={
                 "conversation_id": conversation_id,
                 "messages": model_messages,
+                "intent_router": intent_metadata,
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
                 "personal_context": personal_metadata,
@@ -95,6 +100,10 @@ def create_chat_turn(
                 "finish_reason": inference.finish_reason,
                 "gateway": inference.metadata,
                 "model_selection_reason": model_selection.reason,
+                "requested_mode": payload.mode.value,
+                "resolved_mode": resolved_payload.mode.value,
+                "agent_enabled": payload.agent_enabled,
+                "intent_router": intent_metadata,
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
                 "personal_context": personal_metadata,
@@ -119,22 +128,26 @@ def stream_chat_turn(
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
 ) -> StreamingResponse:
+    resolved_payload, intent_metadata = _resolve_chat_payload(payload)
     try:
-        conversation_id = _ensure_conversation(payload, conversations)
-        workspace_messages, workspace_metadata = _build_workspace_context(payload, workspace)
-        knowledge_messages, knowledge_metadata = _build_knowledge_context(payload, knowledge)
-        personal_messages, personal_metadata = _build_personal_context(payload, personal)
+        conversation_id = _ensure_conversation(resolved_payload, conversations)
+        workspace_messages, workspace_metadata = _build_workspace_context(resolved_payload, workspace)
+        knowledge_messages, knowledge_metadata = _build_knowledge_context(resolved_payload, knowledge)
+        personal_messages, personal_metadata = _build_personal_context(resolved_payload, personal)
         context_messages = workspace_messages + knowledge_messages + personal_messages
         user_message = conversations.add_message(
             conversation_id,
             MessageCreate(
                 role=MessageRole.USER,
-                content=payload.message,
-                model=payload.preferred_model,
+                content=resolved_payload.message,
+                model=resolved_payload.preferred_model,
                 metadata={
-                    "mode": payload.mode.value,
-                    "workspace_path": payload.workspace_path,
-                    "workspace_context_paths": payload.workspace_context_paths,
+                    "mode": resolved_payload.mode.value,
+                    "requested_mode": payload.mode.value,
+                    "agent_enabled": payload.agent_enabled,
+                    "intent_router": intent_metadata,
+                    "workspace_path": resolved_payload.workspace_path,
+                    "workspace_context_paths": resolved_payload.workspace_context_paths,
                     "context_warnings": (
                         workspace_metadata["warnings"]
                         + knowledge_metadata["warnings"]
@@ -151,12 +164,13 @@ def stream_chat_turn(
     model_messages = context_messages + _openai_messages(conversation.messages)
     selection, stream = gateway.stream_complete(
         InferenceRequest(
-            prompt=payload.message,
-            mode=payload.mode,
-            preferred_model=payload.preferred_model,
+            prompt=resolved_payload.message,
+            mode=resolved_payload.mode,
+            preferred_model=resolved_payload.preferred_model,
             metadata={
                 "conversation_id": conversation_id,
                 "messages": model_messages,
+                "intent_router": intent_metadata,
                 "workspace_context": workspace_metadata,
                 "knowledge_context": knowledge_metadata,
                 "personal_context": personal_metadata,
@@ -196,6 +210,10 @@ def stream_chat_turn(
                     "finish_reason": final_inference.finish_reason,
                     "gateway": final_inference.metadata,
                     "model_selection_reason": selection.reason,
+                    "requested_mode": payload.mode.value,
+                    "resolved_mode": resolved_payload.mode.value,
+                    "agent_enabled": payload.agent_enabled,
+                    "intent_router": intent_metadata,
                     "workspace_context": workspace_metadata,
                     "knowledge_context": knowledge_metadata,
                     "personal_context": personal_metadata,
@@ -217,6 +235,107 @@ def stream_chat_turn(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _resolve_chat_payload(payload: ChatRequest) -> tuple[ChatRequest, dict]:
+    resolved_mode, reason = _infer_intent_mode(payload)
+    metadata = {
+        "requested_mode": payload.mode.value,
+        "resolved_mode": resolved_mode.value,
+        "agent_enabled": payload.agent_enabled,
+        "reason": reason,
+    }
+    if resolved_mode == payload.mode:
+        return payload, metadata
+    return payload.model_copy(update={"mode": resolved_mode}), metadata
+
+
+def _infer_intent_mode(payload: ChatRequest) -> tuple[ChatMode, str]:
+    if payload.mode != ChatMode.AUTO:
+        return payload.mode, "explicit mode selected"
+    if payload.agent_enabled:
+        return ChatMode.AGENT, "agent toggle enabled"
+    if payload.workspace_path or payload.workspace_context_paths:
+        return ChatMode.CODING, "workspace context attached"
+
+    message = payload.message.lower()
+    words = message.split()
+    code_terms = {
+        "bug",
+        "build",
+        "code",
+        "commit",
+        "css",
+        "debug",
+        "deploy",
+        "fix",
+        "function",
+        "git",
+        "implementation",
+        "javascript",
+        "patch",
+        "python",
+        "react",
+        "repo",
+        "script",
+        "typescript",
+        "ui",
+    }
+    if _has_intent_term(message, words, code_terms):
+        return ChatMode.CODING, "coding or workspace intent detected"
+
+    research_terms = {
+        "compare",
+        "deep research",
+        "investigate",
+        "research",
+        "sources",
+        "study",
+        "summarize",
+        "whitepaper",
+    }
+    reasoning_terms = {
+        "analyze",
+        "calculate",
+        "diagnose",
+        "explain why",
+        "optimize",
+        "plan",
+        "reason",
+        "solve",
+        "troubleshoot",
+        "why",
+    }
+    if _has_intent_term(message, words, research_terms | reasoning_terms):
+        return ChatMode.REASONING, "analysis or research intent detected"
+
+    creative_terms = {
+        "brainstorm",
+        "compose",
+        "copywrite",
+        "design",
+        "draft",
+        "rewrite",
+        "story",
+        "tone",
+    }
+    if _has_intent_term(message, words, creative_terms):
+        return ChatMode.CREATIVE, "creative writing intent detected"
+
+    if len(words) <= 8 and message.endswith("?"):
+        return ChatMode.CHAT, "short direct question"
+    return ChatMode.CHAT, "general conversation intent"
+
+
+def _has_intent_term(message: str, words: list[str], terms: set[str]) -> bool:
+    token_set = {word.strip(".,;:!?()[]{}\"'`").lower() for word in words}
+    for term in terms:
+        if " " in term:
+            if term in message:
+                return True
+        elif term in token_set:
+            return True
+    return False
 
 
 def _ensure_conversation(payload: ChatRequest, conversations: ConversationStore) -> str:

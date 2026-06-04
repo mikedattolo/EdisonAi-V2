@@ -61,6 +61,26 @@ def test_chat_mode_prefers_general_profile_over_specialist_profile():
     assert selection.model.id == "general-chat"
 
 
+def test_auto_mode_uses_general_chat_capabilities():
+    registry = ModelRegistry(
+        [
+            ModelProfile(
+                id="general-chat",
+                display_name="General Chat",
+                provider="local",
+                status=ModelStatus.READY,
+                capabilities=[ModelCapability.CHAT],
+            )
+        ]
+    )
+
+    selection = ModelRouter(registry).select_model(ChatMode.AUTO)
+
+    assert selection.mode == ChatMode.AUTO
+    assert selection.required_capabilities == [ModelCapability.CHAT]
+    assert selection.model.id == "general-chat"
+
+
 def test_router_raises_when_no_profile_supports_mode():
     registry = ModelRegistry(
         [

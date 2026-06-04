@@ -25,6 +25,25 @@ def test_health_and_status_routes(tmp_path):
     assert status.json()["model_count"] >= 1
 
 
+def test_capability_registry_lists_mcp_servers_and_plugins(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        artifact_root=tmp_path / "artifacts",
+        log_root=tmp_path / "logs",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.get("/api/v1/capabilities")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert {server["id"] for server in body["mcp_servers"]} >= {"edison-knowledge", "edison-workspace"}
+    assert {plugin["target"] for plugin in body["plugins"]} >= {"codex", "claude-code"}
+    assert "mcp-agents" in body["knowledge_presets"]
+
+
 def test_gpu_fan_control_routes_are_safe_by_default(tmp_path):
     settings = EdisonSettings(
         database_path=tmp_path / "edison.sqlite3",
@@ -146,6 +165,62 @@ def test_chat_route_creates_conversation_and_assistant_message(tmp_path):
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "assistant"
     assert messages[1]["model"] == "local-general-chat"
+
+
+def test_chat_auto_mode_routes_to_coding_with_workspace_context(tmp_path):
+    (tmp_path / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Refactor this Python entrypoint",
+            "mode": "auto",
+            "workspace_path": "main.py",
+            "memory_enabled": True,
+        },
+    )
+
+    body = response.json()
+    assistant_metadata = body["assistant_message"]["metadata"]
+
+    assert response.status_code == 201
+    assert body["model_selection"]["mode"] == "coding"
+    assert assistant_metadata["requested_mode"] == "auto"
+    assert assistant_metadata["resolved_mode"] == "coding"
+    assert assistant_metadata["workspace_context"]["enabled"] is True
+
+
+def test_chat_auto_mode_routes_to_agent_when_toggle_enabled(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Plan the next three Edison setup steps",
+            "mode": "auto",
+            "agent_enabled": True,
+            "memory_enabled": True,
+        },
+    )
+
+    body = response.json()
+    assistant_metadata = body["assistant_message"]["metadata"]
+
+    assert response.status_code == 201
+    assert body["model_selection"]["mode"] == "agent"
+    assert assistant_metadata["agent_enabled"] is True
+    assert assistant_metadata["intent_router"]["reason"] == "agent toggle enabled"
 
 
 def test_chat_stream_route_persists_streamed_turn(tmp_path):

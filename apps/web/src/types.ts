@@ -1,4 +1,5 @@
 export type ChatMode =
+  | 'auto'
   | 'instant'
   | 'chat'
   | 'reasoning'
@@ -285,6 +286,49 @@ export interface WorkspaceFile {
   language?: string | null;
   content: string;
   truncated: boolean;
+}
+
+export type KnowledgePreset =
+  | 'coding-core'
+  | 'ai-foundations'
+  | 'edison-ops'
+  | 'odysseus-features'
+  | 'mcp-agents'
+  | 'local-ai-hardware';
+
+export interface MCPServerRecord {
+  id: string;
+  name: string;
+  status: 'ready' | 'staged' | 'missing' | 'disabled';
+  transport: 'stdio' | 'http' | 'sse';
+  description: string;
+  tools: string[];
+  command?: string | null;
+  source?: string | null;
+  enabled: boolean;
+  detail: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface PluginIntegrationRecord {
+  id: string;
+  name: string;
+  status: 'ready' | 'staged' | 'missing' | 'disabled';
+  target: 'codex' | 'claude-code' | 'generic';
+  description: string;
+  setup_commands: string[];
+  scopes: string[];
+  detail: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CapabilityStatus {
+  service: string;
+  mcp_servers: MCPServerRecord[];
+  plugins: PluginIntegrationRecord[];
+  knowledge_presets: KnowledgePreset[];
+  attribution: string[];
+  detail: string;
 }
 
 export interface WorkspaceRootRecord {

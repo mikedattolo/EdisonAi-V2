@@ -262,6 +262,63 @@ class KnowledgeStore:
                     self.ingest_url("https://huggingface.co/docs/transformers/index", title="Transformers Documentation"),
                 ]
             )
+        elif preset == "edison-ops":
+            records.append(
+                self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title="Edison Operations Playbook",
+                        text=EDISON_OPS_KNOWLEDGE,
+                        uri="edison:preset/operations",
+                        metadata={"source": "preset", "preset": preset},
+                    ),
+                    kind="preset",
+                )
+            )
+            try:
+                records.extend(
+                    self.ingest_local(
+                        KnowledgeIngestLocalRequest(path="docs", glob="**/*.md", max_files=80)
+                    )
+                )
+            except KnowledgeIngestError:
+                pass
+        elif preset == "odysseus-features":
+            records.append(
+                self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title="Odysseus Feature Map for Edison",
+                        text=ODYSSEUS_FEATURE_KNOWLEDGE,
+                        uri="edison:preset/odysseus-features",
+                        license="MIT-derived feature notes",
+                        metadata={"source": "preset", "preset": preset},
+                    ),
+                    kind="preset",
+                )
+            )
+        elif preset == "mcp-agents":
+            records.append(
+                self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title="MCP and Agent Integration Notes",
+                        text=MCP_AGENT_KNOWLEDGE,
+                        uri="edison:preset/mcp-agents",
+                        metadata={"source": "preset", "preset": preset},
+                    ),
+                    kind="preset",
+                )
+            )
+        elif preset == "local-ai-hardware":
+            records.append(
+                self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title="Local AI Hardware Operations",
+                        text=LOCAL_AI_HARDWARE_KNOWLEDGE,
+                        uri="edison:preset/local-ai-hardware",
+                        metadata={"source": "preset", "preset": preset},
+                    ),
+                    kind="preset",
+                )
+            )
         else:
             raise KnowledgeIngestError(f"Unknown preset: {preset}")
         return records
@@ -357,6 +414,85 @@ class KnowledgeStore:
         tail = url.rstrip("/").split("/")[-1]
         return tail or url
 
+
+EDISON_OPS_KNOWLEDGE = """
+Edison V2 is a local AI PC control surface. Treat the chat as the primary workflow
+and keep advanced controls discoverable without forcing the user to pick technical
+modes. Requests should be routed by intent into chat, reasoning, coding, agent, or
+media paths. Media results should be delivered inline in chat whenever artifacts
+exist, with download links as a backup rather than the main experience.
+
+Core operating priorities:
+- Prefer local model and media services when they are healthy.
+- Surface setup-required states with direct next actions instead of generic failure text.
+- Keep workspace coding projects separate from the Edison application repository.
+- Use hardware status, storage status, camera readiness, and knowledge availability
+  as context for planning.
+- Report fan and accelerator state as operational status, not decorative telemetry.
+- Use the knowledge base for Edison docs, hardware setup, MCP capabilities, model
+  install notes, and feature implementation details.
+""".strip()
+
+
+ODYSSEUS_FEATURE_KNOWLEDGE = """
+Useful Odysseus ideas for Edison, adapted under the MIT license as product and
+architecture notes:
+
+- A chat-first home where model choice, memory, tools, and attachments are available
+  near the composer rather than scattered across many tabs.
+- An agent capability that can use workspace files, web/search tools, shell tools,
+  MCP servers, skills, and memory, but is enabled as an explicit toggle for side
+  effect-heavy work.
+- A memory and skills layer where reusable knowledge can be saved, searched, and
+  injected into future prompts.
+- Built-in MCP servers for files, browser/web, memory, workspace, and local tools,
+  plus integration bundles for clients such as Codex and Claude Code.
+- Deep research and document workflows that produce synthesized responses with
+  sources rather than raw dumps.
+- PWA/mobile-friendly UI patterns, session history, file uploads, theme controls,
+  and response streaming.
+
+For Edison, the useful implementation direction is not copying every Odysseus tab.
+It is consolidating the best capabilities into Edison chat, knowledge, media,
+camera, hardware, and workspace surfaces.
+""".strip()
+
+
+MCP_AGENT_KNOWLEDGE = """
+MCP support in Edison should expose capabilities as tools with clear scopes:
+
+- Knowledge MCP: search, ingest text, ingest local files, list sources, and summarize.
+- Workspace MCP: search indexed repositories, read approved files, create project
+  folders outside the Edison app, preview patches, and run approved commands.
+- Media MCP: create and monitor image, video, audio, and 3D jobs; return artifacts.
+- Camera MCP: capture a Brio frame, inspect live-feed readiness, and run VLM analysis.
+- Hardware MCP: report GPUs, fan policy, storage, Hailo-8 state, camera state, and
+  service health.
+- Organizer MCP: create and search tasks, notes, calendar items, and documents.
+
+External clients such as Codex and Claude Code should use scoped endpoints and
+tokens. Edison should keep the registry visible in settings/system surfaces so the
+user can see which servers are ready, staged, or missing.
+""".strip()
+
+
+LOCAL_AI_HARDWARE_KNOWLEDGE = """
+Local AI hardware notes for Edison V2:
+
+- NVIDIA GPUs should be detected with driver/runtime checks, memory status, and fan
+  control readiness. Fan setting failures should show the underlying service or
+  permission issue.
+- Hailo-8 PCIe accelerators need the kernel PCIe driver and HailoRT userland
+  runtime before `hailortcli` can identify the device. Some Hailo packages are
+  distributed through the Hailo Developer Zone and may need to be supplied by the
+  owner before installation can complete.
+- Logitech Brio camera support should expose a live MJPEG feed, snapshots, and
+  VLM/object-recognition analysis. If local accelerator inference is unavailable,
+  Edison can still use CPU/GPU VLM analysis with a clear degraded status.
+- Storage should favor the largest available data volume for model, dataset, media,
+  cache, and workspace directories, while keeping Edison app code and user-created
+  code spaces separated.
+""".strip()
 
 
 def _chunk_text(text: str, chunk_size: int = 1400, overlap: int = 180) -> list[str]:

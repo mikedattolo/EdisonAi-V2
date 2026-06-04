@@ -65,3 +65,28 @@ def test_knowledge_ingest_local_indexes_workspace_files(tmp_path):
     assert search.status_code == 200
     assert search.json()[0]["source_kind"] == "local_file"
     assert search.json()[0]["path"] == "docs/guide.md"
+
+
+def test_extended_knowledge_presets_ingest_local_reference_notes(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    for preset in ["odysseus-features", "mcp-agents", "local-ai-hardware"]:
+        ingested = client.post("/api/v1/knowledge/ingest/preset", json={"preset": preset})
+        assert ingested.status_code == 201
+        assert len(ingested.json()) == 1
+
+    search = client.post(
+        "/api/v1/knowledge/search",
+        json={"query": "Hailo MCP Odysseus", "max_results": 10},
+    )
+
+    assert search.status_code == 200
+    titles = {match["source_title"] for match in search.json()}
+    assert "Odysseus Feature Map for Edison" in titles
+    assert "MCP and Agent Integration Notes" in titles
+    assert "Local AI Hardware Operations" in titles

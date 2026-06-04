@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
 from edison_core.services.generation_store import GenerationStore
@@ -90,3 +91,7 @@ def get_status_service(request: Request) -> SystemStatusService:
 
 def get_fan_control_service(request: Request) -> GPUFanControlService:
     return request.app.state.fan_control_service
+
+
+def get_capability_registry(request: Request) -> CapabilityRegistry:
+    return request.app.state.capability_registry

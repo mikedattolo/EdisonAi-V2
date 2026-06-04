@@ -21,8 +21,6 @@ import {
   Link2,
   MessageSquare,
   Network,
-  PanelRightClose,
-  PanelRightOpen,
   RefreshCw,
   Search,
   Send,
@@ -44,6 +42,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { edisonApi } from './api';
 import type {
   ArtifactRecord,
+  CapabilityStatus,
   ChatMode,
   ConversationRecord,
   ConversationWithMessages,
@@ -55,6 +54,7 @@ import type {
   HardwareStatus,
   JobRecord,
   JobType,
+  KnowledgePreset,
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
@@ -124,20 +124,8 @@ const CHAT_CONTEXT_PATHS_STORAGE_KEY = 'edison-chat-context-paths';
 const CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY = 'edison-chat-knowledge-enabled';
 const CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY = 'edison-chat-knowledge-matches';
 
-const modes: Array<{ value: ChatMode; label: string; description: string }> = [
-  { value: 'instant', label: 'Quick', description: 'Fast replies' },
-  { value: 'chat', label: 'Chat', description: 'Everyday help' },
-  { value: 'reasoning', label: 'Think', description: 'Harder problems' },
-  { value: 'coding', label: 'Code', description: 'Repo-aware edits' },
-  { value: 'agent', label: 'Agent', description: 'Multi-step work' },
-  { value: 'swarm', label: 'Swarm', description: 'Parallel lanes' },
-  { value: 'creative', label: 'Create', description: 'Images and ideas' },
-];
-
 const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
-  { id: 'agent', label: 'Agent', icon: Waypoints },
-  { id: 'compare', label: 'Compare', icon: Network },
   { id: 'research', label: 'Research', icon: BookOpen },
   { id: 'organizer', label: 'Organizer', icon: CheckSquare2 },
   { id: 'documents', label: 'Docs', icon: FileText },
@@ -235,8 +223,8 @@ const promptSuggestions: Array<{ title: string; subtitle: string; prompt: string
 
 export default function App() {
   const [activeView, setActiveView] = useState<ViewId>('chat');
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus | null>(null);
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
   const [sessionState, setSessionState] = useState<SessionStateRecord | null>(null);
@@ -266,7 +254,8 @@ export default function App() {
   const [knowledgeSearchResults, setKnowledgeSearchResults] = useState<KnowledgeSearchMatch[]>([]);
   const [knowledgeNotice, setKnowledgeNotice] = useState<string | null>(null);
   const [activeConversation, setActiveConversation] = useState<ConversationWithMessages | null>(null);
-  const [activeMode, setActiveMode] = useState<ChatMode>('chat');
+  const [activeMode, setActiveMode] = useState<ChatMode>('auto');
+  const [agentModeEnabled, setAgentModeEnabled] = useState(false);
   const [showWorkspaceContext, setShowWorkspaceContext] =
     useState<boolean>(() => readStoredBoolean(CONTEXT_VISIBILITY_STORAGE_KEY, true));
   const [workspaceContextFilter, setWorkspaceContextFilter] =
@@ -399,7 +388,8 @@ export default function App() {
     if (!chatAutoPreviewEnabled || activeView !== 'chat') {
       return;
     }
-    if (!['coding', 'agent', 'swarm'].includes(activeMode)) {
+    const hasWorkspaceFocus = Boolean(chatWorkspacePath.trim() || workspaceFile?.path || chatContextPaths.length);
+    if (!agentModeEnabled && !hasWorkspaceFocus && !['coding', 'agent', 'swarm'].includes(activeMode)) {
       return;
     }
 
@@ -414,9 +404,12 @@ export default function App() {
     chatAutoPreviewEnabled,
     activeView,
     activeMode,
+    agentModeEnabled,
     chatWorkspacePath,
+    chatContextPaths.length,
     chatContextMatches,
     composer,
+    workspaceFile?.path,
   ]);
 
   async function bootstrap() {
@@ -424,6 +417,7 @@ export default function App() {
       setError(null);
       const [
         nextStatus,
+        nextCapabilities,
         nextFanControls,
         nextHardwareStatus,
         nextModels,
@@ -433,6 +427,7 @@ export default function App() {
         nextKnowledgeSources,
       ] = await Promise.all([
         edisonApi.getStatus(),
+        edisonApi.getCapabilities(),
         edisonApi.getFanControls(),
         edisonApi.getHardwareStatus(),
         edisonApi.listModels(),
@@ -442,6 +437,7 @@ export default function App() {
         edisonApi.listKnowledgeSources(50),
       ]);
       setStatus(nextStatus);
+      setCapabilityStatus(nextCapabilities);
       setFanControls(nextFanControls);
       setHardwareStatus(nextHardwareStatus);
       setModels(nextModels);
@@ -449,7 +445,7 @@ export default function App() {
       setSessionState(nextSession);
       setKnowledgeStatus(nextKnowledgeStatus);
       setKnowledgeSources(nextKnowledgeSources);
-      setActiveMode(nextSession.selected_mode ?? 'chat');
+      setActiveMode(nextSession.selected_mode ?? 'auto');
       if (nextConversations[0]) {
         await loadConversation(nextConversations[0].id);
       }
@@ -483,6 +479,7 @@ export default function App() {
   function startNewConversation() {
     setActiveConversation(null);
     setComposer('');
+    setActiveMode('auto');
     setActiveView('chat');
   }
 
@@ -496,20 +493,23 @@ export default function App() {
     setIsSending(true);
     setError(null);
     try {
-      if (activeMode === 'media' || isMediaGenerationPrompt(content)) {
+      if (isMediaGenerationPrompt(content)) {
         await handleMediaChatSend(content);
         return;
       }
 
+      const workspaceTargetPath = chatWorkspacePath.trim() || workspaceFile?.path;
+      const hasWorkspaceFocus = Boolean(workspaceTargetPath || chatContextPaths.length > 0);
       const payload = {
         conversation_id: activeConversation?.id ?? null,
         message: content,
-        mode: activeMode,
+        mode: 'auto' as ChatMode,
         preferred_model: modelSelection?.model.id ?? null,
+        agent_enabled: agentModeEnabled,
         memory_enabled: true,
-        workspace_path: chatWorkspacePath.trim() || workspaceFile?.path,
+        workspace_path: workspaceTargetPath,
         workspace_context_paths: chatContextPaths,
-        include_workspace_context: ['coding', 'agent', 'swarm'].includes(activeMode),
+        include_workspace_context: agentModeEnabled || hasWorkspaceFocus,
         max_workspace_context_matches: chatContextMatches,
         include_knowledge_context: chatKnowledgeEnabled,
         knowledge_query: chatKnowledgeQuery.trim() || undefined,
@@ -521,7 +521,7 @@ export default function App() {
       const draftAssistantId = `draft-assistant-${Date.now()}`;
       let streamedContent = '';
       setActiveConversation((current) =>
-        appendDraftChatTurn(current, activeMode, content, draftUserId, draftAssistantId),
+        appendDraftChatTurn(current, agentModeEnabled ? 'agent' : 'auto', content, draftUserId, draftAssistantId),
       );
       setComposer('');
 
@@ -544,6 +544,7 @@ export default function App() {
       });
       setActiveConversation(response.conversation);
       setModelSelection(response.model_selection);
+      setActiveMode(response.model_selection.mode);
       setConversations(await edisonApi.listConversations());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Message failed');
@@ -787,13 +788,15 @@ export default function App() {
 
   async function refreshSystemSurface() {
     try {
-      const [nextStatus, nextFanControls, nextHardwareStatus, nextVisionStatus] = await Promise.all([
+      const [nextStatus, nextCapabilities, nextFanControls, nextHardwareStatus, nextVisionStatus] = await Promise.all([
         edisonApi.getStatus(),
+        edisonApi.getCapabilities(),
         edisonApi.getFanControls(),
         edisonApi.getHardwareStatus(),
         edisonApi.getCameraVisionStatus(),
       ]);
       setStatus(nextStatus);
+      setCapabilityStatus(nextCapabilities);
       setFanControls(nextFanControls);
       setHardwareStatus(nextHardwareStatus);
       setCameraVisionStatus(nextVisionStatus);
@@ -1209,7 +1212,7 @@ export default function App() {
     }
   }
 
-  async function ingestKnowledgePreset(preset: 'coding-core' | 'ai-foundations') {
+  async function ingestKnowledgePreset(preset: KnowledgePreset) {
     setIsKnowledgeBusy(true);
     setError(null);
     try {
@@ -1283,7 +1286,7 @@ export default function App() {
   }
 
   return (
-    <div className={inspectorCollapsed ? 'app-shell inspector-collapsed' : 'app-shell'}>
+    <div className="app-shell">
       <aside className="sidebar" aria-label="Primary navigation">
         <div className="brand-block">
           <div className="brand-mark"><Sparkles size={20} /></div>
@@ -1358,32 +1361,8 @@ export default function App() {
               <Camera size={15} /> {hardwareSummary.readyCameras} cameras
             </span>
             <span className="status-pill"><Fan size={15} /> {fanControls?.controllers.length ?? 0} fan controls</span>
-            <button
-              className="icon-button"
-              onClick={() => setInspectorCollapsed((current) => !current)}
-              title={inspectorCollapsed ? 'Show system panel' : 'Hide system panel'}
-              type="button"
-            >
-              {inspectorCollapsed ? <PanelRightOpen size={18} /> : <PanelRightClose size={18} />}
-            </button>
           </div>
         </header>
-
-        {activeView === 'chat' && (
-          <section className="mode-strip" aria-label="Mode selector">
-            {modes.map((mode) => (
-              <button
-                className={mode.value === activeMode ? 'mode-button active' : 'mode-button'}
-                key={mode.value}
-                onClick={() => setActiveMode(mode.value)}
-                type="button"
-              >
-                <span>{mode.label}</span>
-                <small>{mode.description}</small>
-              </button>
-            ))}
-          </section>
-        )}
 
         {error && <div className="error-banner">{friendlyError(error)}</div>}
 
@@ -1393,8 +1372,10 @@ export default function App() {
             composer={composer}
             handleSend={handleSend}
             isSending={isSending}
+            agentModeEnabled={agentModeEnabled}
             modelSelection={modelSelection}
             setComposer={setComposer}
+            setAgentModeEnabled={setAgentModeEnabled}
             showWorkspaceContext={showWorkspaceContext}
             setShowWorkspaceContext={setShowWorkspaceContext}
             workspaceContextFilter={workspaceContextFilter}
@@ -1460,6 +1441,7 @@ export default function App() {
             cameraVisionStatus={cameraVisionStatus}
             cameraAnalysis={cameraAnalysis}
             artifacts={mediaArtifacts}
+            capabilityStatus={capabilityStatus}
             isCameraBusy={isCameraBusy}
             isCameraFeedPaused={isCameraFeedPaused}
             isMediaBusy={isMediaBusy}
@@ -1524,84 +1506,19 @@ export default function App() {
           />
         )}
       </main>
-
-      <aside className={inspectorCollapsed ? 'inspector collapsed' : 'inspector'} aria-label="System inspector">
-        <section className="inspector-section inspector-header">
-          <div className="section-heading">
-            <Server size={18} />
-            <h3>Edison</h3>
-          </div>
-          <button className="icon-button" onClick={() => setInspectorCollapsed(true)} title="Collapse panel" type="button">
-            <PanelRightClose size={18} />
-          </button>
-        </section>
-
-        <section className="inspector-section">
-          <dl className="metric-grid">
-            <div>
-              <dt>Core</dt>
-              <dd>{status?.status === 'ok' ? 'Online' : status?.status ?? 'Offline'}</dd>
-            </div>
-            <div>
-              <dt>Models</dt>
-              <dd>{status?.model_count ?? models.length}</dd>
-            </div>
-            <div>
-              <dt>GPUs</dt>
-              <dd>{status?.gpu_devices.length ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Mode</dt>
-              <dd>{sessionState?.selected_mode ?? activeMode}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="inspector-section">
-          <div className="section-heading">
-            <Brain size={18} />
-            <h3>Selected Model</h3>
-          </div>
-          {modelSelection ? (
-            <div className="lane-card">
-              <strong>{modelSelection.model.display_name}</strong>
-              <span>{modelSelection.model.status.replace('_', ' ')}</span>
-              <p>{modelSelection.required_capabilities.join(' / ')}</p>
-            </div>
-          ) : (
-            <div className="empty-line">No lane for {activeMode}</div>
-          )}
-        </section>
-
-        <section className="inspector-section">
-          <div className="section-heading">
-            <Network size={18} />
-            <h3>Model Lanes</h3>
-          </div>
-          <div className="model-list">
-            {models.map((model) => (
-              <article className="model-row" key={model.id}>
-                <div>
-                  <strong>{model.display_name}</strong>
-                  <span>{model.capabilities.slice(0, 3).join(' / ')}</span>
-                </div>
-                <small className={`model-status ${model.status}`}>{model.status.replace('_', ' ')}</small>
-              </article>
-            ))}
-          </div>
-        </section>
-      </aside>
     </div>
   );
 }
 
 function ChatView({
   activeConversation,
+  agentModeEnabled,
   composer,
   handleSend,
   isSending,
   modelSelection,
   setComposer,
+  setAgentModeEnabled,
   showWorkspaceContext,
   setShowWorkspaceContext,
   workspaceContextFilter,
@@ -1635,11 +1552,13 @@ function ChatView({
   onUseArtifactInChat,
 }: {
   activeConversation: ConversationWithMessages | null;
+  agentModeEnabled: boolean;
   composer: string;
   handleSend: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   isSending: boolean;
   modelSelection: ModelSelection | null;
   setComposer: (value: string) => void;
+  setAgentModeEnabled: (value: boolean) => void;
   showWorkspaceContext: boolean;
   setShowWorkspaceContext: (value: boolean) => void;
   workspaceContextFilter: ContextFilter;
@@ -1673,6 +1592,9 @@ function ChatView({
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
 }) {
   const selectedModelName = modelSelection?.model.display_name ?? 'Model lane';
+  const intentLabel = modelSelection?.mode
+    ? `Intent ${modelSelection.mode.replace('_', ' ')}`
+    : 'Intent auto';
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const lastMessage = activeConversation?.messages[activeConversation.messages.length - 1];
   const contextSummary = chatContextPaths.length > 0
@@ -2024,8 +1946,18 @@ function ChatView({
 
       <section className="composer-panel" aria-label="Message composer">
         <div className="composer-meta">
+          <span>{intentLabel}</span>
           <span>{selectedModelName}</span>
           <span>{modelSelection?.model.status.replace('_', ' ') ?? 'Select a lane'}</span>
+          <button
+            className={agentModeEnabled ? 'composer-toggle active' : 'composer-toggle'}
+            onClick={() => setAgentModeEnabled(!agentModeEnabled)}
+            title="Let Edison plan and use tool-capable agent workflows"
+            type="button"
+          >
+            <Waypoints size={14} />
+            <span>Agent</span>
+          </button>
         </div>
         <form className="composer" onSubmit={(event) => void handleSend(event)}>
           <textarea
@@ -2404,6 +2336,7 @@ function WorkbenchView({
   activeWorkspaceRootId,
   activeView,
   artifacts,
+  capabilityStatus,
   fanControls,
   groupedModels,
   hardwareStatus,
@@ -2468,6 +2401,7 @@ function WorkbenchView({
   activeWorkspaceRootId: string;
   activeView: ViewId;
   artifacts: ArtifactRecord[];
+  capabilityStatus: CapabilityStatus | null;
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   hardwareStatus: HardwareStatus | null;
@@ -2493,7 +2427,7 @@ function WorkbenchView({
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
   onRefreshConversations: () => Promise<void>;
   onIngestKnowledgeLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
-  onIngestKnowledgePreset: (preset: 'coding-core' | 'ai-foundations') => Promise<void>;
+  onIngestKnowledgePreset: (preset: KnowledgePreset) => Promise<void>;
   onIngestKnowledgeText: (payload: { title: string; text: string; uri?: string }) => Promise<void>;
   onIngestKnowledgeUrl: (payload: { url: string; title?: string }) => Promise<void>;
   onIngestKnowledgeWikipedia: (payload: { title: string; language?: string }) => Promise<void>;
@@ -2627,6 +2561,7 @@ function WorkbenchView({
     return (
       <SystemView
         fanControls={fanControls}
+        capabilityStatus={capabilityStatus}
         groupedModels={groupedModels}
         hardwareStatus={hardwareStatus}
         cameraVisionStatus={cameraVisionStatus}
@@ -4163,7 +4098,7 @@ function MemoryView({
   isBusy: boolean;
   notice: string | null;
   onIngestLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
-  onIngestPreset: (preset: 'coding-core' | 'ai-foundations') => Promise<void>;
+  onIngestPreset: (preset: KnowledgePreset) => Promise<void>;
   onIngestText: (payload: { title: string; text: string; uri?: string }) => Promise<void>;
   onIngestUrl: (payload: { url: string; title?: string }) => Promise<void>;
   onIngestWikipedia: (payload: { title: string; language?: string }) => Promise<void>;
@@ -4185,6 +4120,14 @@ function MemoryView({
   const [textTitle, setTextTitle] = useState('');
   const [textUri, setTextUri] = useState('');
   const [textBody, setTextBody] = useState('');
+  const presetButtons: Array<{ preset: KnowledgePreset; label: string }> = [
+    { preset: 'ai-foundations', label: 'AI Foundations' },
+    { preset: 'coding-core', label: 'Coding Core' },
+    { preset: 'edison-ops', label: 'Edison Ops' },
+    { preset: 'odysseus-features', label: 'Odysseus Map' },
+    { preset: 'mcp-agents', label: 'MCP Agents' },
+    { preset: 'local-ai-hardware', label: 'Local Hardware' },
+  ];
 
   return (
     <section className="workbench-view memory-view" aria-label="Memory Center">
@@ -4363,12 +4306,17 @@ function MemoryView({
           </form>
 
           <div className="preset-row">
-            <button className="secondary-button" disabled={isBusy} onClick={() => void onIngestPreset('ai-foundations')} type="button">
-              AI Foundations
-            </button>
-            <button className="secondary-button" disabled={isBusy} onClick={() => void onIngestPreset('coding-core')} type="button">
-              Coding Core
-            </button>
+            {presetButtons.map((button) => (
+              <button
+                className="secondary-button"
+                disabled={isBusy}
+                key={button.preset}
+                onClick={() => void onIngestPreset(button.preset)}
+                type="button"
+              >
+                {button.label}
+              </button>
+            ))}
           </div>
         </section>
       </div>
@@ -4541,6 +4489,7 @@ function MediaView({
 function SystemView({
   cameraAnalysis,
   cameraVisionStatus,
+  capabilityStatus,
   fanControls,
   groupedModels,
   hardwareStatus,
@@ -4555,6 +4504,7 @@ function SystemView({
 }: {
   cameraAnalysis: CameraFrameAnalysisResponse | null;
   cameraVisionStatus: CameraVisionStatus | null;
+  capabilityStatus: CapabilityStatus | null;
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   hardwareStatus: HardwareStatus | null;
@@ -4602,6 +4552,51 @@ function SystemView({
           <dd>{status?.gpu_devices.length ?? 0}</dd>
         </div>
       </dl>
+      <section className="capability-panel" aria-label="MCP servers and plugins">
+        <div className="section-heading">
+          <Waypoints size={18} />
+          <h3>MCP & Plugins</h3>
+        </div>
+        <div className="capability-grid">
+          {(capabilityStatus?.mcp_servers ?? []).map((server) => (
+            <article className="capability-card" key={server.id}>
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">{server.transport} MCP</span>
+                  <strong>{server.name}</strong>
+                </div>
+                <span className={`backend-status ${statusClassName(server.status)}`}>
+                  {server.status}
+                </span>
+              </div>
+              <p>{server.description}</p>
+              <small>{server.detail}</small>
+              <div className="chip-list">
+                {server.tools.slice(0, 4).map((tool) => <span key={tool}>{tool}</span>)}
+              </div>
+            </article>
+          ))}
+          {(capabilityStatus?.plugins ?? []).map((plugin) => (
+            <article className="capability-card" key={plugin.id}>
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">{plugin.target}</span>
+                  <strong>{plugin.name}</strong>
+                </div>
+                <span className={`backend-status ${statusClassName(plugin.status)}`}>
+                  {plugin.status}
+                </span>
+              </div>
+              <p>{plugin.description}</p>
+              <small>{plugin.detail}</small>
+              <div className="chip-list">
+                {plugin.scopes.slice(0, 5).map((scope) => <span key={scope}>{scope}</span>)}
+              </div>
+            </article>
+          ))}
+          {!capabilityStatus && <div className="empty-line">Capability registry has not loaded yet.</div>}
+        </div>
+      </section>
       <section className="hardware-panel" aria-label="AI accelerator and camera">
         <div className="section-heading">
           <Zap size={18} />
@@ -5379,7 +5374,7 @@ function statusClassName(status: string) {
   if (status === 'ready') {
     return 'ready';
   }
-  if (['detected', 'driver_missing', 'runtime_missing', 'permission_required', 'setup_required'].includes(status)) {
+  if (['detected', 'driver_missing', 'runtime_missing', 'permission_required', 'setup_required', 'staged'].includes(status)) {
     return 'setup_required';
   }
   return 'offline';
