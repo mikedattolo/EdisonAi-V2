@@ -842,7 +842,7 @@ export default function App() {
         height: 720,
         input_format: 'mjpeg',
         title: 'Brio camera AI frame',
-        prompt: 'Describe this Edison camera frame. Identify visible objects, people, screens, tools, safety concerns, and what action Edison should offer next.',
+        prompt: 'Analyze this Edison camera frame in under 90 words. Start with one scene sentence, then list the most important objects and one useful next action.',
       });
       setCameraAnalysis(analysis);
       const [nextHardwareStatus, nextVisionStatus, nextArtifacts] = await Promise.all([

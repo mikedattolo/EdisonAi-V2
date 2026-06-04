@@ -1187,6 +1187,12 @@ button {
   line-height: 1.45;
 }
 
+.camera-analysis-card p {
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .camera-ai-actions {
   display: flex;
   flex-wrap: wrap;
