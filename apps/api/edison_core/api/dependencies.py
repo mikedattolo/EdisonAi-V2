@@ -6,6 +6,7 @@ from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
+from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import HardwareDeviceService
 from edison_core.services.integration_discovery import IntegrationDiscoveryService
@@ -19,6 +20,7 @@ from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.runtime_settings import RuntimeSettingsStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
+from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
@@ -42,6 +44,14 @@ def get_personal_workspace_store(request: Request) -> PersonalWorkspaceStore:
 
 def get_runtime_settings_store(request: Request) -> RuntimeSettingsStore:
     return request.app.state.runtime_settings_store
+
+
+def get_desktop_bridge_client(request: Request) -> DesktopBridgeClient:
+    return request.app.state.desktop_bridge_client
+
+
+def get_toybox_store(request: Request) -> ToyBoxStore:
+    return request.app.state.toybox_store
 
 
 def get_generation_store(request: Request) -> GenerationStore:

@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 config/edison.local.toml
+config/desktop-bridge.local.json
 config/model-registry.local.json
 config/integration-discovery.local.json
 config/runtime-settings.local.json

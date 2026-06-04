@@ -8,6 +8,7 @@ from edison_core.api import (
     routes_capabilities,
     routes_chat,
     routes_conversations,
+    routes_desktop_bridge,
     routes_hardware,
     routes_health,
     routes_jobs,
@@ -26,6 +27,7 @@ from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
+from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import HardwareDeviceService
 from edison_core.services.integration_discovery import IntegrationDiscoveryService
@@ -39,6 +41,7 @@ from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.runtime_settings import RuntimeSettingsStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
+from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
@@ -54,12 +57,15 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     knowledge_store = KnowledgeStore(database, resolved_settings.workspace_roots[0])
     personal_workspace_store = PersonalWorkspaceStore(database)
     runtime_settings_store = RuntimeSettingsStore(resolved_settings)
+    desktop_bridge_client = DesktopBridgeClient(runtime_settings_store)
+    toybox_store = ToyBoxStore(database)
     agent_run_store.initialize()
     conversation_store.initialize()
     session_state_store.initialize()
     generation_store.initialize()
     knowledge_store.initialize()
     personal_workspace_store.initialize()
+    toybox_store.initialize()
 
     model_registry = ModelRegistry.from_file(resolved_settings.model_registry_path)
     model_router = ModelRouter(model_registry)
@@ -124,6 +130,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.knowledge_store = knowledge_store
     app.state.personal_workspace_store = personal_workspace_store
     app.state.runtime_settings_store = runtime_settings_store
+    app.state.desktop_bridge_client = desktop_bridge_client
+    app.state.toybox_store = toybox_store
     app.state.model_registry = model_registry
     app.state.model_router = model_router
     app.state.model_gateway = model_gateway
@@ -144,6 +152,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.include_router(routes_agents.router)
     app.include_router(routes_capabilities.router)
     app.include_router(routes_hardware.router)
+    app.include_router(routes_desktop_bridge.router)
     app.include_router(routes_models.router)
     app.include_router(routes_chat.router)
     app.include_router(routes_jobs.router)

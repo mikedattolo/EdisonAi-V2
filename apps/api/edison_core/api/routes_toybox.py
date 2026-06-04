@@ -1,17 +1,38 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from edison_core.api.dependencies import get_integration_discovery_service
+from edison_core.api.dependencies import (
+    get_desktop_bridge_client,
+    get_integration_discovery_service,
+    get_runtime_settings_store,
+    get_toybox_store,
+)
 from edison_core.schemas import (
+    DesktopBridgeStatus,
     IntegrationScanReport,
     LocalIntegrationRecord,
+    RuntimeSettingsUpdate,
     ToyBoxManagerStatus,
     ToyBoxNotificationChannel,
+    ToyBoxOrderCreate,
+    ToyBoxOrderRecord,
     ToyBoxPrinterRecord,
+    ToyBoxPrinterProfileCreate,
+    ToyBoxPrinterProfileRecord,
+    ToyBoxProductMappingCreate,
+    ToyBoxProductMappingRecord,
     ToyBoxProductionLane,
+    ToyBoxQueueItemCreate,
+    ToyBoxQueueItemRecord,
+    ToyBoxQueueStatusUpdate,
+    ToyBoxSetupRequest,
+    ToyBoxSetupResult,
 )
+from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.integration_discovery import IntegrationDiscoveryService
+from edison_core.services.runtime_settings import RuntimeSettingsStore
+from edison_core.services.toybox_store import ToyBoxNotFoundError, ToyBoxStore
 
 
 router = APIRouter(prefix="/api/v1/toybox", tags=["toybox"])
@@ -46,6 +67,176 @@ def toybox_status(
             "slicer/printer handoff, DYMO labels, and notifications."
         ),
     )
+
+
+@router.post("/setup/defaults", response_model=ToyBoxSetupResult)
+def setup_toybox_defaults(
+    payload: ToyBoxSetupRequest,
+    store: ToyBoxStore = Depends(get_toybox_store),
+    runtime_settings: RuntimeSettingsStore = Depends(get_runtime_settings_store),
+    bridge: DesktopBridgeClient = Depends(get_desktop_bridge_client),
+) -> ToyBoxSetupResult:
+    runtime_record = runtime_settings.update(
+        RuntimeSettingsUpdate(
+            integrations={
+                "desktop_bridge_url": payload.desktop_bridge_url,
+                "fusion360_enabled": True,
+                "blockbench_enabled": True,
+                "slicer_bridge_enabled": True,
+            },
+            toybox={
+                "shopify_store_url": payload.shopify_store_url,
+                "order_polling_enabled": bool(payload.shopify_store_url),
+                "default_slicer": payload.default_slicer,
+                "dymo_printer_name": payload.dymo_printer_name,
+                "auto_print_labels": False,
+            },
+            notifications={
+                "enabled": True,
+                "provider": payload.notification_provider,
+                "target": payload.notification_target,
+                "notify_on_print_error": True,
+                "notify_on_label_error": True,
+                "notify_on_order_exception": True,
+            },
+        )
+    )
+    printers = [
+        store.upsert_printer(
+            ToyBoxPrinterProfileCreate(
+                name="Main PC Desktop Bridge",
+                kind="generic",
+                role="desktop_bridge",
+                bridge_tool_id="desktop-bridge",
+                status="ready" if payload.desktop_bridge_url else "staged",
+                metadata={"url": payload.desktop_bridge_url},
+            )
+        ),
+        store.upsert_printer(
+            ToyBoxPrinterProfileCreate(
+                name=payload.default_slicer,
+                kind=_slicer_kind(payload.default_slicer),
+                role="slicer",
+                bridge_tool_id=_slicer_tool_id(payload.default_slicer),
+                slicer_profile="default",
+                status="ready",
+            )
+        ),
+        store.upsert_printer(
+            ToyBoxPrinterProfileCreate(
+                name=payload.dymo_printer_name,
+                kind="dymo",
+                role="label_printer",
+                bridge_tool_id="dymo-labelwriter-5xl",
+                status="ready",
+            )
+        ),
+    ]
+    mappings: list[ToyBoxProductMappingRecord] = []
+    if payload.seed_demo_mapping:
+        mappings.append(
+            store.upsert_mapping(
+                ToyBoxProductMappingCreate(
+                    sku="TOYBOX-CUSTOM-PRINT",
+                    title="ToyBox3D Custom Print",
+                    slicer_profile="default",
+                    default_printer_id=printers[1].id,
+                    material="PLA",
+                    color="assigned per order",
+                    status="draft",
+                    metadata={"setup_seed": True},
+                )
+            )
+        )
+    bridge_status = bridge.status()
+    return ToyBoxSetupResult(
+        runtime_settings=runtime_record,
+        printers=printers,
+        mappings=mappings,
+        bridge_status=bridge_status.model_dump(),
+        detail="ToyBox3D defaults were saved locally and seeded into the print-farm database.",
+    )
+
+
+@router.get("/desktop-bridge", response_model=DesktopBridgeStatus)
+def toybox_desktop_bridge_status(
+    bridge: DesktopBridgeClient = Depends(get_desktop_bridge_client),
+) -> DesktopBridgeStatus:
+    return bridge.status()
+
+
+@router.get("/printers", response_model=list[ToyBoxPrinterProfileRecord])
+def list_printer_profiles(
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> list[ToyBoxPrinterProfileRecord]:
+    return store.list_printers()
+
+
+@router.post("/printers", response_model=ToyBoxPrinterProfileRecord)
+def upsert_printer_profile(
+    payload: ToyBoxPrinterProfileCreate,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxPrinterProfileRecord:
+    return store.upsert_printer(payload)
+
+
+@router.get("/mappings", response_model=list[ToyBoxProductMappingRecord])
+def list_product_mappings(
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> list[ToyBoxProductMappingRecord]:
+    return store.list_mappings()
+
+
+@router.post("/mappings", response_model=ToyBoxProductMappingRecord)
+def upsert_product_mapping(
+    payload: ToyBoxProductMappingCreate,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxProductMappingRecord:
+    return store.upsert_mapping(payload)
+
+
+@router.get("/orders", response_model=list[ToyBoxOrderRecord])
+def list_orders(
+    limit: int = 100,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> list[ToyBoxOrderRecord]:
+    return store.list_orders(limit=limit)
+
+
+@router.post("/orders", response_model=ToyBoxOrderRecord)
+def upsert_order(
+    payload: ToyBoxOrderCreate,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxOrderRecord:
+    return store.upsert_order(payload)
+
+
+@router.get("/queue", response_model=list[ToyBoxQueueItemRecord])
+def list_queue(
+    limit: int = 100,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> list[ToyBoxQueueItemRecord]:
+    return store.list_queue(limit=limit)
+
+
+@router.post("/queue", response_model=ToyBoxQueueItemRecord)
+def create_queue_item(
+    payload: ToyBoxQueueItemCreate,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxQueueItemRecord:
+    return store.create_queue_item(payload)
+
+
+@router.post("/queue/{item_id}/status", response_model=ToyBoxQueueItemRecord)
+def update_queue_status(
+    item_id: str,
+    payload: ToyBoxQueueStatusUpdate,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxQueueItemRecord:
+    try:
+        return store.update_queue_status(item_id, payload)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Queue item not found") from error
 
 
 def _production_lanes(report: IntegrationScanReport) -> list[ToyBoxProductionLane]:
@@ -224,3 +415,25 @@ def _integration_status(integration: LocalIntegrationRecord | None) -> str:
     if integration.status == "staged":
         return "staged"
     return "missing"
+
+
+def _slicer_kind(name: str) -> str:
+    lowered = name.lower()
+    if "bambu" in lowered:
+        return "bambu"
+    if "orca" in lowered:
+        return "orca"
+    if "cura" in lowered:
+        return "cura"
+    return "generic"
+
+
+def _slicer_tool_id(name: str) -> str:
+    lowered = name.lower()
+    if "bambu" in lowered:
+        return "bambu-studio"
+    if "orca" in lowered:
+        return "orcaslicer"
+    if "cura" in lowered:
+        return "curaengine"
+    return "slicer"

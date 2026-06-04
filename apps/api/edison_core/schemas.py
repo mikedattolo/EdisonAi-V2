@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def utc_now() -> datetime:
@@ -755,6 +755,130 @@ class ToyBoxManagerStatus(BaseModel):
     notification_channels: list[ToyBoxNotificationChannel] = Field(default_factory=list)
     recommendations: list[IntegrationRecommendation] = Field(default_factory=list)
     detail: str
+
+
+class ToyBoxPrinterProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    kind: Literal["bambu", "orca", "cura", "dymo", "generic"] = "generic"
+    role: Literal["printer", "slicer", "label_printer", "camera", "desktop_bridge"] = "printer"
+    bridge_tool_id: str | None = None
+    slicer_profile: str | None = None
+    camera_url: str | None = None
+    status: Literal["ready", "staged", "missing", "disabled"] = "staged"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxPrinterProfileRecord(ToyBoxPrinterProfileCreate):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToyBoxProductMappingCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    sku: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=180)
+    model_path: str = ""
+    slicer_profile: str = ""
+    default_printer_id: str | None = None
+    material: str = ""
+    color: str = ""
+    status: Literal["ready", "draft", "disabled"] = "draft"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxProductMappingRecord(ToyBoxProductMappingCreate):
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToyBoxOrderCreate(BaseModel):
+    source: Literal["shopify", "manual", "test"] = "manual"
+    external_order_id: str = Field(min_length=1, max_length=160)
+    status: Literal["new", "mapped", "queued", "printing", "blocked", "done", "cancelled"] = "new"
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    shipping: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxOrderRecord(ToyBoxOrderCreate):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToyBoxQueueItemCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    order_id: str | None = None
+    mapping_id: str | None = None
+    printer_id: str | None = None
+    title: str = Field(min_length=1, max_length=180)
+    status: Literal["queued", "slicing", "ready_to_print", "printing", "paused", "blocked", "done", "cancelled"] = "queued"
+    model_path: str = ""
+    gcode_path: str = ""
+    label_path: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxQueueItemRecord(ToyBoxQueueItemCreate):
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToyBoxQueueStatusUpdate(BaseModel):
+    status: Literal["queued", "slicing", "ready_to_print", "printing", "paused", "blocked", "done", "cancelled"]
+    detail: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxSetupRequest(BaseModel):
+    desktop_bridge_url: str = ""
+    shopify_store_url: str = ""
+    dymo_printer_name: str = "Mike's shipping label printer"
+    default_slicer: str = "OrcaSlicer"
+    notification_provider: str = "desktop"
+    notification_target: str = "main-pc"
+    seed_demo_mapping: bool = True
+
+
+class ToyBoxSetupResult(BaseModel):
+    service: str = "toybox3d-setup"
+    runtime_settings: RuntimeSettingsRecord
+    printers: list[ToyBoxPrinterProfileRecord]
+    mappings: list[ToyBoxProductMappingRecord]
+    bridge_status: dict[str, Any] = Field(default_factory=dict)
+    detail: str
+
+
+class DesktopBridgeStatus(BaseModel):
+    service: str = "desktop-bridge"
+    configured_url: str = ""
+    reachable: bool = False
+    apps: list[dict[str, Any]] = Field(default_factory=list)
+    printers: list[dict[str, Any]] = Field(default_factory=list)
+    allowed_roots: list[str] = Field(default_factory=list)
+    detail: str
+    checked_at: datetime = Field(default_factory=utc_now)
+
+
+class DesktopBridgeActionRequest(BaseModel):
+    tool_id: str = Field(min_length=1, max_length=120)
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesktopBridgeActionResult(BaseModel):
+    ok: bool
+    action: str
+    detail: str
+    result: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuntimeSettingsRecord(BaseModel):
