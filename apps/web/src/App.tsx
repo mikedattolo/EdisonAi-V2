@@ -38,6 +38,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 import { edisonApi } from './api';
 import type {
@@ -45,6 +47,7 @@ import type {
   ChatMode,
   ConversationRecord,
   ConversationWithMessages,
+  CameraFrameAnalysisResponse,
   CameraVisionStatus,
   DocumentRecord,
   GPUFanControlSnapshot,
@@ -242,6 +245,7 @@ export default function App() {
   const [fanControls, setFanControls] = useState<GPUFanControlSnapshot | null>(null);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatus | null>(null);
   const [cameraVisionStatus, setCameraVisionStatus] = useState<CameraVisionStatus | null>(null);
+  const [cameraAnalysis, setCameraAnalysis] = useState<CameraFrameAnalysisResponse | null>(null);
   const [mediaJobs, setMediaJobs] = useState<JobRecord[]>([]);
   const [mediaArtifacts, setMediaArtifacts] = useState<ArtifactRecord[]>([]);
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
@@ -817,6 +821,34 @@ export default function App() {
       setMediaArtifacts(nextArtifacts);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Camera snapshot failed');
+    } finally {
+      setIsCameraBusy(false);
+    }
+  }
+
+  async function analyzeCameraFrame(devicePath?: string | null) {
+    setIsCameraBusy(true);
+    setError(null);
+    try {
+      const analysis = await edisonApi.analyzeCameraFrame({
+        device_path: devicePath ?? null,
+        width: 1280,
+        height: 720,
+        input_format: 'mjpeg',
+        title: 'Brio camera AI frame',
+        prompt: 'Describe this Edison camera frame. Identify visible objects, people, screens, tools, safety concerns, and what action Edison should offer next.',
+      });
+      setCameraAnalysis(analysis);
+      const [nextHardwareStatus, nextVisionStatus, nextArtifacts] = await Promise.all([
+        edisonApi.getHardwareStatus(),
+        edisonApi.getCameraVisionStatus(devicePath ?? undefined),
+        edisonApi.listArtifacts(24),
+      ]);
+      setHardwareStatus(nextHardwareStatus);
+      setCameraVisionStatus(nextVisionStatus);
+      setMediaArtifacts(nextArtifacts);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Camera analysis failed');
     } finally {
       setIsCameraBusy(false);
     }
@@ -1419,6 +1451,7 @@ export default function App() {
             fanControls={fanControls}
             hardwareStatus={hardwareStatus}
             cameraVisionStatus={cameraVisionStatus}
+            cameraAnalysis={cameraAnalysis}
             artifacts={mediaArtifacts}
             isCameraBusy={isCameraBusy}
             isMediaBusy={isMediaBusy}
@@ -1449,6 +1482,7 @@ export default function App() {
             onRefreshMedia={refreshMediaSurface}
             onRefreshSystem={refreshSystemSurface}
             onCaptureCameraSnapshot={captureCameraSnapshot}
+            onAnalyzeCameraFrame={analyzeCameraFrame}
             onUpdateFanControl={updateFanControl}
             onUseArtifactInChat={useArtifactInChat}
             onRefreshWorkspace={() => refreshWorkspaceSurface(workspacePath)}
@@ -1964,16 +1998,14 @@ function ChatView({
           <div className="artifact-dock-list">
             {recentArtifacts.map((artifact) => (
               <article className="artifact-card compact" key={artifact.id}>
+                <ArtifactPreview artifact={artifact} url={edisonApi.artifactDownloadUrl(artifact.id)} />
                 <div>
                   <strong>{artifact.title}</strong>
                   <span>{artifact.kind} / {artifact.mime_type ?? 'file'}</span>
                 </div>
                 <div className="artifact-card-actions">
-                  <a className="secondary-button" href={edisonApi.artifactDownloadUrl(artifact.id)} target="_blank" rel="noreferrer">
-                    Download
-                  </a>
                   <button className="secondary-button" onClick={() => onUseArtifactInChat(artifact)} type="button">
-                    Use In Chat
+                    View In Chat
                   </button>
                 </div>
               </article>
@@ -2051,25 +2083,159 @@ function MessageContent({ content, metadata }: { content: string; metadata: Reco
       {mediaJob && <MediaJobInlineCard job={mediaJob} />}
       {artifacts.length > 0 && (
         <div className="message-artifacts">
-          {artifacts.map((artifact) => {
-            const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
-            return (
-              <article className="message-artifact-card" key={artifact.id}>
-                {artifact.kind === 'image' && <img alt={artifact.title} src={downloadUrl} />}
-                {artifact.kind === 'video' && <video controls src={downloadUrl} />}
-                {artifact.kind === 'audio' && <audio controls src={downloadUrl} />}
-                <div>
-                  <strong>{artifact.title}</strong>
-                  <span>{artifact.kind} / {artifact.mime_type ?? 'file'}</span>
-                </div>
-                <a className="secondary-button" href={downloadUrl} target="_blank" rel="noreferrer">
-                  Open
-                </a>
-              </article>
-            );
-          })}
+          {artifacts.map((artifact) => <MediaArtifactInlineCard artifact={artifact} key={artifact.id} />)}
         </div>
       )}
+    </div>
+  );
+}
+
+function MediaArtifactInlineCard({ artifact }: { artifact: ArtifactRecord }) {
+  const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
+  return (
+    <article className={`message-artifact-card ${artifact.kind}`}>
+      <ArtifactPreview artifact={artifact} url={downloadUrl} />
+      <div className="message-artifact-meta">
+        <span className="section-label">{artifact.kind}</span>
+        <strong>{artifact.title}</strong>
+        <span>{artifact.mime_type ?? 'generated file'}</span>
+      </div>
+      <div className="message-artifact-actions">
+        <a className="secondary-button" href={downloadUrl} target="_blank" rel="noreferrer">
+          Open
+        </a>
+        <a className="secondary-button" download href={downloadUrl}>
+          Download
+        </a>
+      </div>
+    </article>
+  );
+}
+
+function ArtifactPreview({ artifact, url }: { artifact: ArtifactRecord; url: string }) {
+  if (artifact.kind === 'image') {
+    return <img alt={artifact.title} className="artifact-preview-media" src={url} />;
+  }
+  if (artifact.kind === 'video') {
+    return <video className="artifact-preview-media" controls preload="metadata" src={url} />;
+  }
+  if (artifact.kind === 'audio') {
+    return (
+      <div className="artifact-audio-preview">
+        <Activity size={22} />
+        <audio controls src={url} />
+      </div>
+    );
+  }
+  if (artifact.kind === 'mesh') {
+    return <MeshArtifactViewer title={artifact.title} url={url} />;
+  }
+  return (
+    <div className="artifact-file-preview">
+      <FileText size={24} />
+      <span>{artifact.kind}</span>
+    </div>
+  );
+}
+
+function MeshArtifactViewer({ title, url }: { title: string; url: string }) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [viewerState, setViewerState] = useState('Loading 3D preview');
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) {
+      return undefined;
+    }
+    const mountElement = mount;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf7f8f7);
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+    camera.position.set(0, 0.35, 3.1);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    mountElement.innerHTML = '';
+    mountElement.appendChild(renderer.domElement);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.8);
+    keyLight.position.set(3, 4, 4);
+    scene.add(keyLight);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x8da19b, 1.8));
+
+    const grid = new THREE.GridHelper(3, 12, 0xc9d2cf, 0xe2e7e4);
+    grid.position.y = -0.82;
+    scene.add(grid);
+
+    let modelRoot: THREE.Object3D | null = null;
+    let frameId = 0;
+    const loader = new GLTFLoader();
+
+    function resize() {
+      const width = Math.max(260, mountElement.clientWidth);
+      const height = Math.max(220, mountElement.clientHeight);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(mountElement);
+    resize();
+
+    loader.load(
+      url,
+      (gltf) => {
+        modelRoot = gltf.scene;
+        const bounds = new THREE.Box3().setFromObject(modelRoot);
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        bounds.getSize(size);
+        bounds.getCenter(center);
+        const largestAxis = Math.max(size.x, size.y, size.z) || 1;
+        modelRoot.position.sub(center);
+        modelRoot.scale.setScalar(1.7 / largestAxis);
+        scene.add(modelRoot);
+        setViewerState('Drag-free orbit preview');
+      },
+      undefined,
+      () => setViewerState('3D preview could not load'),
+    );
+
+    const animate = () => {
+      frameId = window.requestAnimationFrame(animate);
+      if (modelRoot) {
+        modelRoot.rotation.y += 0.008;
+      }
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver.disconnect();
+      scene.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        mesh.geometry?.dispose();
+        const material = mesh.material;
+        if (Array.isArray(material)) {
+          material.forEach((item) => item.dispose());
+        } else {
+          material?.dispose();
+        }
+      });
+      renderer.dispose();
+      if (renderer.domElement.parentNode === mountElement) {
+        mountElement.removeChild(renderer.domElement);
+      }
+    };
+  }, [url]);
+
+  return (
+    <div className="mesh-artifact-viewer" aria-label={`3D preview of ${title}`}>
+      <div ref={mountRef} />
+      <span>{viewerState}</span>
     </div>
   );
 }
@@ -2234,6 +2400,7 @@ function WorkbenchView({
   groupedModels,
   hardwareStatus,
   cameraVisionStatus,
+  cameraAnalysis,
   isCameraBusy,
   isMediaBusy,
   isWorkspaceBusy,
@@ -2249,6 +2416,7 @@ function WorkbenchView({
   onCreateWorkspaceProject,
   onCreateMediaJob,
   onCaptureCameraSnapshot,
+  onAnalyzeCameraFrame,
   onOpenCompareConversation,
   onRefreshConversations,
   onIngestKnowledgeLocal,
@@ -2295,6 +2463,7 @@ function WorkbenchView({
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   hardwareStatus: HardwareStatus | null;
   cameraVisionStatus: CameraVisionStatus | null;
+  cameraAnalysis: CameraFrameAnalysisResponse | null;
   isCameraBusy: boolean;
   isMediaBusy: boolean;
   isWorkspaceBusy: boolean;
@@ -2310,6 +2479,7 @@ function WorkbenchView({
   onCreateWorkspaceProject: (name: string, prompt: string) => Promise<void>;
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
   onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
+  onAnalyzeCameraFrame: (devicePath?: string | null) => Promise<void>;
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
   onRefreshConversations: () => Promise<void>;
   onIngestKnowledgeLocal: (payload: { path: string; glob: string; max_files: number }) => Promise<void>;
@@ -2450,9 +2620,11 @@ function WorkbenchView({
         groupedModels={groupedModels}
         hardwareStatus={hardwareStatus}
         cameraVisionStatus={cameraVisionStatus}
+        cameraAnalysis={cameraAnalysis}
         isCameraBusy={isCameraBusy}
         models={models}
         onCaptureCameraSnapshot={onCaptureCameraSnapshot}
+        onAnalyzeCameraFrame={onAnalyzeCameraFrame}
         onRefresh={onRefreshSystem}
         onUpdateFanControl={onUpdateFanControl}
         status={status}
@@ -4329,10 +4501,9 @@ function MediaView({
         <div className="artifact-gallery">
           {artifacts.slice(0, 8).map((artifact) => {
             const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
-            const isVisual = artifact.kind === 'image';
             return (
               <article className="artifact-card" key={artifact.id}>
-                {isVisual && <img alt={artifact.title} src={downloadUrl} />}
+                <ArtifactPreview artifact={artifact} url={downloadUrl} />
                 <div className="artifact-card-meta">
                   <strong>{artifact.title}</strong>
                   <span>{artifact.kind} / {artifact.mime_type ?? 'file'}</span>
@@ -4357,6 +4528,7 @@ function MediaView({
 }
 
 function SystemView({
+  cameraAnalysis,
   cameraVisionStatus,
   fanControls,
   groupedModels,
@@ -4364,10 +4536,12 @@ function SystemView({
   isCameraBusy,
   models,
   onCaptureCameraSnapshot,
+  onAnalyzeCameraFrame,
   onRefresh,
   onUpdateFanControl,
   status,
 }: {
+  cameraAnalysis: CameraFrameAnalysisResponse | null;
   cameraVisionStatus: CameraVisionStatus | null;
   fanControls: GPUFanControlSnapshot | null;
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
@@ -4375,6 +4549,7 @@ function SystemView({
   isCameraBusy: boolean;
   models: ModelProfile[];
   onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
+  onAnalyzeCameraFrame: (devicePath?: string | null) => Promise<void>;
   onRefresh: () => Promise<void>;
   onUpdateFanControl: (gpuIndex: number, mode: GPUFanMode, manualSpeed: number) => Promise<void>;
   status: SystemStatus | null;
@@ -4538,8 +4713,67 @@ function SystemView({
                   <strong>No live feed</strong>
                 </div>
               )}
+              <div className="camera-feed-overlay">
+                <span>Live</span>
+                <span>{liveCamera?.capture_path ?? 'No device'}</span>
+              </div>
             </div>
-            <p>{cameraVisionStatus?.detail ?? 'Vision status has not loaded yet.'}</p>
+            <div className="camera-ai-console">
+              <div>
+                <strong>Camera AI</strong>
+                <p>{cameraVisionStatus?.detail ?? 'Vision status has not loaded yet.'}</p>
+              </div>
+              <div className="camera-ai-actions">
+                <button
+                  className="secondary-button icon-text-button"
+                  disabled={isCameraBusy || !liveCamera?.capture_path}
+                  onClick={() => void onCaptureCameraSnapshot(liveCamera?.capture_path)}
+                  type="button"
+                >
+                  <Camera size={16} />
+                  Snapshot
+                </button>
+                <button
+                  className="apply-button icon-text-button"
+                  disabled={isCameraBusy || !liveCamera?.capture_path}
+                  onClick={() => void onAnalyzeCameraFrame(liveCamera?.capture_path)}
+                  type="button"
+                >
+                  <Sparkles size={16} />
+                  Analyze Frame
+                </button>
+              </div>
+            </div>
+            <div className="camera-ai-feature-grid">
+              <div>
+                <span>Scene VLM</span>
+                <strong>{cameraAnalysis?.status === 'complete' ? 'Ready' : 'On demand'}</strong>
+              </div>
+              <div>
+                <span>Object Detection</span>
+                <strong>{cameraVisionStatus?.status === 'ready' ? 'Hailo ready' : 'Hailo setup'}</strong>
+              </div>
+              <div>
+                <span>Frames</span>
+                <strong>{cameraAnalysis ? 'Saved' : 'Waiting'}</strong>
+              </div>
+            </div>
+            {cameraAnalysis && (
+              <div className={`camera-analysis-card ${cameraAnalysis.status}`}>
+                <div>
+                  <span className="section-label">Last Analysis</span>
+                  <strong>{cameraAnalysis.model_id ?? cameraAnalysis.backend ?? 'camera-ai'}</strong>
+                </div>
+                <p>{cameraAnalysis.summary}</p>
+                <div className="chip-list">
+                  {cameraAnalysis.detections.map((detection) => <span key={detection}>{detection}</span>)}
+                  {cameraAnalysis.detections.length === 0 && <span>{cameraAnalysis.status.replace('_', ' ')}</span>}
+                </div>
+                <a className="secondary-button" href={edisonApi.artifactDownloadUrl(cameraAnalysis.artifact.id)} target="_blank" rel="noreferrer">
+                  Open Frame
+                </a>
+              </div>
+            )}
             <div className="chip-list">
               {(cameraVisionStatus?.labels ?? []).map((label) => <span key={label}>{label}</span>)}
               {!cameraVisionStatus?.labels.length && <span>{cameraVisionStatus?.backend ?? 'vision backend'}</span>}

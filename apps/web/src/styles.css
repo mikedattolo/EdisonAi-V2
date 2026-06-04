@@ -1106,9 +1106,10 @@ button {
 }
 
 .camera-feed-frame {
+  position: relative;
   display: grid;
   overflow: hidden;
-  min-height: 260px;
+  min-height: 360px;
   border: 1px solid #d9dee8;
   border-radius: 8px;
   background: #0f141b;
@@ -1118,12 +1119,112 @@ button {
 .camera-feed-frame video {
   width: 100%;
   height: 100%;
-  min-height: 260px;
+  min-height: 360px;
   object-fit: cover;
 }
 
 .camera-feed-frame .empty-preview {
   color: #e7edf5;
+}
+
+.camera-feed-overlay {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.camera-feed-overlay span {
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 20, 27, 0.74);
+  color: #eef8f5;
+  font-size: 0.78rem;
+  font-weight: 780;
+}
+
+.camera-ai-console,
+.camera-analysis-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d8e1e7;
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
+.camera-ai-console {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.camera-ai-console strong,
+.camera-analysis-card strong {
+  color: #1f2937;
+}
+
+.camera-ai-console p,
+.camera-analysis-card p {
+  margin: 4px 0 0;
+  color: #536278;
+  line-height: 1.45;
+}
+
+.camera-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.camera-ai-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.camera-ai-feature-grid div {
+  display: grid;
+  gap: 4px;
+  min-height: 64px;
+  padding: 9px;
+  border: 1px solid #dce5eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.camera-ai-feature-grid span {
+  color: #697487;
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.camera-ai-feature-grid strong {
+  color: #26313f;
+  font-size: 0.92rem;
+}
+
+.camera-analysis-card.complete {
+  border-color: #b7dfd2;
+  background: #f2fbf7;
+}
+
+.camera-analysis-card.error,
+.camera-analysis-card.setup_required {
+  border-color: #efd1b7;
+  background: #fff8f1;
+}
+
+.camera-analysis-card .secondary-button {
+  justify-self: start;
 }
 
 .memory-view {
@@ -2616,16 +2717,30 @@ button {
 }
 
 .artifact-card.compact {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
   align-items: center;
 }
 
-.artifact-card img {
+.artifact-card .artifact-preview-media,
+.artifact-card .mesh-artifact-viewer,
+.artifact-card .artifact-file-preview,
+.artifact-card .artifact-audio-preview {
   width: 100%;
   aspect-ratio: 4 / 3;
-  object-fit: cover;
   border-radius: 8px;
   background: #e8edf4;
+}
+
+.artifact-card .artifact-preview-media {
+  object-fit: contain;
+}
+
+.artifact-card.compact .artifact-preview-media,
+.artifact-card.compact .mesh-artifact-viewer,
+.artifact-card.compact .artifact-file-preview,
+.artifact-card.compact .artifact-audio-preview {
+  min-height: 72px;
+  aspect-ratio: 4 / 3;
 }
 
 .artifact-card-meta {
@@ -2824,7 +2939,7 @@ button {
 /* Conversation-first UI refresh */
 .app-shell {
   grid-template-columns: 252px minmax(0, 1fr) 324px;
-  background: #f6f6f2;
+  background: #f3f6f8;
 }
 
 .app-shell.inspector-collapsed {
@@ -3103,7 +3218,9 @@ button {
   align-content: start;
   gap: 20px;
   padding: 24px 22px;
-  background: #fbfbf8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(246, 249, 250, 0.88)),
+    #f4f7f8;
 }
 
 .message {
@@ -3126,13 +3243,15 @@ button {
   width: 34px;
   height: 34px;
   border-radius: 8px;
-  background: #e8edf3;
-  color: #26313f;
+  background: #18212c;
+  color: #f4f8f7;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .message.user .message-body {
-  border-color: #d6e4fa;
-  background: #eff5ff;
+  border-color: #bed8ec;
+  background: #eef6fb;
 }
 
 .message.assistant .message-body {
@@ -3405,37 +3524,111 @@ button {
 
 .message-artifact-card {
   display: grid;
-  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1fr);
   gap: 12px;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid #d7e0e8;
+  align-items: stretch;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid #cfd9e3;
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
 }
 
-.message-artifact-card img,
-.message-artifact-card video {
+.artifact-preview-media {
   width: 100%;
-  aspect-ratio: 4 / 3;
-  border-radius: 6px;
-  object-fit: cover;
-  background: #eef1f4;
+  min-height: 220px;
+  max-height: 420px;
+  object-fit: contain;
+  background: #111820;
 }
 
-.message-artifact-card audio {
+.message-artifact-card.image .artifact-preview-media {
+  background: #f3f6f7;
+}
+
+.message-artifact-card audio,
+.artifact-audio-preview audio {
   width: 100%;
 }
 
-.message-artifact-card div {
+.message-artifact-meta,
+.message-artifact-actions {
   display: grid;
   gap: 4px;
   min-width: 0;
+  padding: 12px;
+}
+
+.message-artifact-meta {
+  align-content: center;
+}
+
+.message-artifact-actions {
+  grid-column: 2;
+  grid-template-columns: repeat(2, max-content);
+  align-content: end;
+  justify-content: start;
+  padding-top: 0;
 }
 
 .message-artifact-card strong,
 .message-artifact-card span {
   overflow-wrap: anywhere;
+}
+
+.artifact-audio-preview,
+.artifact-file-preview {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 220px;
+  padding: 14px;
+  background: #18212c;
+  color: #edf4f2;
+}
+
+.artifact-audio-preview {
+  align-content: center;
+}
+
+.artifact-file-preview span {
+  color: #cad5dd;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.mesh-artifact-viewer {
+  position: relative;
+  min-height: 260px;
+  overflow: hidden;
+  background: #f7f8f7;
+}
+
+.mesh-artifact-viewer > div {
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+}
+
+.mesh-artifact-viewer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.mesh-artifact-viewer > span {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  min-height: 26px;
+  padding: 5px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #334155;
+  font-size: 0.76rem;
+  font-weight: 740;
 }
 
 .workspace-context-card {
@@ -3530,9 +3723,10 @@ button {
   width: min(calc(100% - 44px), 920px);
   margin: 0 auto 18px;
   padding: 10px;
-  border: 1px solid #d0d5d8;
+  border: 1px solid #cbd5df;
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
 }
 
 .composer-meta {
@@ -3579,13 +3773,13 @@ button {
   min-width: 92px;
   min-height: 42px;
   border-radius: 8px;
-  background: #1f6f62;
+  background: #17212b;
 }
 
 .inspector {
   gap: 14px;
   padding: 16px;
-  background: #f3f5f4;
+  background: #eef2f3;
 }
 
 .inspector-section {
@@ -3709,6 +3903,24 @@ button {
   }
 
   .message-artifact-card {
+    grid-template-columns: 1fr;
+  }
+
+  .message-artifact-actions {
+    grid-column: auto;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .artifact-card.compact {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .artifact-card.compact .artifact-card-actions {
+    grid-column: 1 / -1;
+  }
+
+  .camera-ai-console,
+  .camera-ai-feature-grid {
     grid-template-columns: 1fr;
   }
 

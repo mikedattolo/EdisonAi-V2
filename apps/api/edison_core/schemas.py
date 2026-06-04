@@ -688,6 +688,17 @@ class CameraSnapshotRequest(BaseModel):
     title: str | None = Field(default=None, max_length=160)
 
 
+class CameraAnalyzeRequest(CameraSnapshotRequest):
+    prompt: str = Field(
+        default=(
+            "Describe the visible scene from this camera frame. Identify objects, people, screens, "
+            "tools, safety concerns, and anything Edison should pay attention to."
+        ),
+        min_length=1,
+        max_length=1200,
+    )
+
+
 class CameraSnapshotResponse(BaseModel):
     camera: CameraDeviceRecord
     artifact: ArtifactRecord
@@ -702,6 +713,19 @@ class CameraVisionStatus(BaseModel):
     feed_url: str | None = None
     detail: str
     labels: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CameraFrameAnalysisResponse(BaseModel):
+    service: str = "camera-frame-analysis"
+    status: Literal["complete", "setup_required", "error"]
+    camera: CameraDeviceRecord
+    artifact: ArtifactRecord
+    summary: str
+    model_id: str | None = None
+    backend: str | None = None
+    detections: list[str] = Field(default_factory=list)
+    detail: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

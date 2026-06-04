@@ -6,10 +6,16 @@ from edison_core.config import EdisonSettings
 from edison_core.main import create_app
 from edison_core.schemas import (
     CameraDeviceRecord,
+    ChatMode,
     CameraSnapshotRequest,
     CameraVisionStatus,
     HardwareAcceleratorRecord,
     HardwareStatus,
+    InferenceResponse,
+    ModelCapability,
+    ModelProfile,
+    ModelSelection,
+    ModelStatus,
 )
 from edison_core.services.hardware_devices import CapturedCameraSnapshot
 
@@ -59,6 +65,26 @@ def test_camera_vision_route_reports_setup_state(tmp_path):
     assert response.json()["status"] == "setup_required"
     assert response.json()["camera"]["id"] == "logitech-brio"
     assert response.json()["backend"] == "hailo8"
+
+
+def test_camera_analyze_route_captures_artifact_and_uses_vision_gateway(tmp_path):
+    app = create_app(_settings(tmp_path))
+    app.state.hardware_device_service = _FakeHardwareDeviceService(tmp_path / "artifacts")
+    app.state.model_gateway = _FakeVisionGateway()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/hardware/cameras/analyze",
+        json={"device_path": "/dev/video0", "width": 640, "height": 360, "input_format": "mjpeg", "prompt": "What is visible?"},
+    )
+    artifact_id = response.json()["artifact"]["id"]
+    downloaded = client.get(f"/api/v1/artifacts/{artifact_id}/download")
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "complete"
+    assert response.json()["model_id"] == "local-vision"
+    assert "desk" in response.json()["summary"].lower()
+    assert downloaded.content.startswith(b"\xff\xd8")
 
 
 class _FakeHardwareDeviceService:
@@ -121,6 +147,31 @@ class _FakeHardwareDeviceService:
             backend="hailo8",
             feed_url="/api/v1/hardware/cameras/feed",
             detail="Camera feed is ready, but HailoRT is missing.",
+        )
+
+
+class _FakeVisionGateway:
+    def analyze_image(self, prompt: str, image_bytes: bytes, mime_type: str):
+        profile = ModelProfile(
+            id="local-vision",
+            display_name="Local Vision",
+            provider="local-openai-compatible",
+            status=ModelStatus.READY,
+            capabilities=[ModelCapability.CHAT, ModelCapability.VISION, ModelCapability.MULTIMODAL],
+            endpoint_url="http://127.0.0.1:8005/v1",
+        )
+        return (
+            ModelSelection(
+                mode=ChatMode.CHAT,
+                required_capabilities=[ModelCapability.VISION],
+                model=profile,
+                reason="test",
+            ),
+            InferenceResponse(
+                model_id="local-vision",
+                content="A desk, a monitor, and a camera are visible.",
+                finish_reason="stop",
+            ),
         )
 
 

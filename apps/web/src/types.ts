@@ -149,6 +149,19 @@ export interface CameraVisionStatus {
   metadata: Record<string, unknown>;
 }
 
+export interface CameraFrameAnalysisResponse {
+  service: string;
+  status: 'complete' | 'setup_required' | 'error';
+  camera: CameraDeviceRecord;
+  artifact: ArtifactRecord;
+  summary: string;
+  model_id?: string | null;
+  backend?: string | null;
+  detections: string[];
+  detail: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface ConversationRecord {
   id: string;
   title: string;

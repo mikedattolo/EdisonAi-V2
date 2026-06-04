@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from edison_core.schemas import ChatMode, InferenceRequest, InferenceResponse, ModelProfile, ModelSelection, ModelStatus
+from edison_core.schemas import ChatMode, InferenceRequest, InferenceResponse, ModelCapability, ModelProfile, ModelSelection, ModelStatus
 from edison_core.services.model_registry import ModelRouter, ModelSelectionError, capabilities_for_mode
 
 
@@ -63,6 +64,77 @@ class ModelGateway:
         selection = self._select_model(request)
         profile = selection.model
         return selection, InferenceStream(self, profile, request)
+
+    def analyze_image(self, prompt: str, image_bytes: bytes, mime_type: str = "image/jpeg") -> tuple[ModelSelection, InferenceResponse]:
+        try:
+            selection = self.router.select_model(
+                mode=ChatMode.CHAT,
+                required_capabilities=[ModelCapability.VISION],
+            )
+        except ModelSelectionError:
+            fallback_profile = _fallback_profile(self.router)
+            return (
+                ModelSelection(
+                    mode=ChatMode.CHAT,
+                    required_capabilities=[ModelCapability.VISION],
+                    model=fallback_profile,
+                    reason="fallback profile used because no vision model matches requested capabilities",
+                ),
+                InferenceResponse(
+                    model_id=fallback_profile.id,
+                    content="No ready local vision model is configured for camera frame analysis.",
+                    finish_reason="not_configured",
+                    metadata={"required_capability": ModelCapability.VISION.value},
+                ),
+            )
+
+        profile = selection.model
+        unavailable = _unavailable_response(profile)
+        if unavailable is not None:
+            return selection, unavailable
+        if profile.provider != "local-openai-compatible":
+            return selection, InferenceResponse(
+                model_id=profile.id,
+                content=f"The selected vision provider '{profile.provider}' is not connected yet.",
+                finish_reason="not_configured",
+                metadata={"provider": profile.provider, "status": profile.status.value},
+            )
+
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        payload = {
+            "model": profile.id,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Edison Vision, a local camera analysis assistant. "
+                        "Be specific, concise, and honest about uncertainty. "
+                        "Return a useful scene summary and short object list."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}},
+                    ],
+                },
+            ],
+            "stream": False,
+            "max_tokens": min(profile.max_output_tokens, 900),
+        }
+        try:
+            result = self._post(_chat_completions_url(profile.endpoint_url or ""), payload)
+            result.raise_for_status()
+            body = result.json()
+        except httpx.HTTPError as error:
+            return selection, InferenceResponse(
+                model_id=profile.id,
+                content=f"The local vision endpoint could not analyze the frame: {error}",
+                finish_reason="error",
+                metadata={"provider": profile.provider, "status": profile.status.value},
+            )
+        return selection, _parse_openai_compatible_response(profile.id, body)
 
     def _select_model(self, request: InferenceRequest) -> ModelSelection:
         try:

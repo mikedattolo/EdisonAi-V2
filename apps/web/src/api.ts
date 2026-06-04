@@ -6,6 +6,7 @@ import type {
   ConversationWithMessages,
   DocumentFormat,
   DocumentRecord,
+  CameraFrameAnalysisResponse,
   CameraSnapshotResponse,
   CameraVisionStatus,
   GPUFanControlSnapshot,
@@ -112,6 +113,18 @@ export const edisonApi = {
     })}`,
   captureCameraSnapshot: (payload: { device_path?: string | null; width?: number; height?: number; input_format?: 'mjpeg' | 'yuyv422'; title?: string }) =>
     request<CameraSnapshotResponse>('/api/v1/hardware/cameras/snapshot', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  analyzeCameraFrame: (payload: {
+    device_path?: string | null;
+    width?: number;
+    height?: number;
+    input_format?: 'mjpeg' | 'yuyv422';
+    title?: string;
+    prompt?: string;
+  }) =>
+    request<CameraFrameAnalysisResponse>('/api/v1/hardware/cameras/analyze', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
