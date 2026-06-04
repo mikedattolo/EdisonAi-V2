@@ -7,10 +7,14 @@ putting secrets or broad filesystem access in the repo.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Start-EdisonDesktopBridge.ps1
+powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Start-EdisonBridgeTunnel.ps1
 ```
 
 The helper creates `config/desktop-bridge.local.json` from the local integration
 scan, starts `edison_desktop_bridge.py` on port `8765`, and verifies `/health`.
+The tunnel helper exposes the bridge privately to Edison as
+`http://127.0.0.1:8765` on the Edison machine, avoiding a Windows Firewall LAN
+port rule.
 
 ## Endpoints
 
