@@ -126,6 +126,7 @@ def camera_feed(
     input_format: Literal["mjpeg", "yuyv422"] = Query("mjpeg"),
     hardware: HardwareDeviceService = Depends(get_hardware_device_service),
 ) -> StreamingResponse:
+    _reap_finished_camera_feeds()
     payload = CameraSnapshotRequest(
         device_path=device_path,
         width=width,
@@ -237,6 +238,7 @@ def _register_camera_feed(feed_key: str, process: subprocess.Popen[bytes]) -> No
 
 
 def _release_camera_feeds(device_path: str | None) -> None:
+    _reap_finished_camera_feeds()
     with _camera_feed_lock:
         if device_path:
             processes = _camera_feed_processes.pop(device_path, [])
@@ -245,6 +247,21 @@ def _release_camera_feeds(device_path: str | None) -> None:
             _camera_feed_processes.clear()
     for process in processes:
         _terminate_process(process)
+
+
+def _reap_finished_camera_feeds() -> None:
+    with _camera_feed_lock:
+        for feed_key, processes in list(_camera_feed_processes.items()):
+            active_processes: list[subprocess.Popen[bytes]] = []
+            for process in processes:
+                if process.poll() is None:
+                    active_processes.append(process)
+                else:
+                    _wait_for_finished_process(process)
+            if active_processes:
+                _camera_feed_processes[feed_key] = active_processes
+            else:
+                _camera_feed_processes.pop(feed_key, None)
 
 
 def _cleanup_camera_feed(feed_key: str, process: subprocess.Popen[bytes]) -> None:
@@ -272,9 +289,18 @@ def _stream_process(feed_key: str, process: subprocess.Popen[bytes]) -> Iterator
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
+        _wait_for_finished_process(process)
         return
     process.terminate()
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
         process.kill()
+        _wait_for_finished_process(process)
+
+
+def _wait_for_finished_process(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        return
