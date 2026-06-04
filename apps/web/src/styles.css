@@ -2992,6 +2992,11 @@ button {
   background: #fbfcfd;
 }
 
+.toybox-architecture-panel > div {
+  display: grid;
+  gap: 4px;
+}
+
 .toybox-architecture-panel ol {
   display: grid;
   gap: 8px;
