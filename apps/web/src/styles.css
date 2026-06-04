@@ -1127,6 +1127,16 @@ button {
   color: #e7edf5;
 }
 
+.camera-feed-frame .camera-feed-paused {
+  background: linear-gradient(135deg, rgba(20, 28, 36, 0.95), rgba(38, 50, 59, 0.9));
+}
+
+.camera-feed-frame .camera-feed-paused span {
+  max-width: 280px;
+  color: #cbd6e2;
+  font-size: 0.86rem;
+}
+
 .camera-feed-overlay {
   position: absolute;
   left: 12px;

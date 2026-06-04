@@ -292,6 +292,7 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [isMediaBusy, setIsMediaBusy] = useState(false);
   const [isCameraBusy, setIsCameraBusy] = useState(false);
+  const [isCameraFeedPaused, setIsCameraFeedPaused] = useState(false);
   const [isWorkspaceBusy, setIsWorkspaceBusy] = useState(false);
   const [isKnowledgeBusy, setIsKnowledgeBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -803,8 +804,10 @@ export default function App() {
 
   async function captureCameraSnapshot(devicePath?: string | null) {
     setIsCameraBusy(true);
+    setIsCameraFeedPaused(true);
     setError(null);
     try {
+      await sleep(1200);
       await edisonApi.captureCameraSnapshot({
         device_path: devicePath ?? null,
         width: 1280,
@@ -822,14 +825,17 @@ export default function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Camera snapshot failed');
     } finally {
+      setIsCameraFeedPaused(false);
       setIsCameraBusy(false);
     }
   }
 
   async function analyzeCameraFrame(devicePath?: string | null) {
     setIsCameraBusy(true);
+    setIsCameraFeedPaused(true);
     setError(null);
     try {
+      await sleep(1200);
       const analysis = await edisonApi.analyzeCameraFrame({
         device_path: devicePath ?? null,
         width: 1280,
@@ -850,6 +856,7 @@ export default function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Camera analysis failed');
     } finally {
+      setIsCameraFeedPaused(false);
       setIsCameraBusy(false);
     }
   }
@@ -1454,6 +1461,7 @@ export default function App() {
             cameraAnalysis={cameraAnalysis}
             artifacts={mediaArtifacts}
             isCameraBusy={isCameraBusy}
+            isCameraFeedPaused={isCameraFeedPaused}
             isMediaBusy={isMediaBusy}
             isWorkspaceBusy={isWorkspaceBusy}
             isKnowledgeBusy={isKnowledgeBusy}
@@ -2402,6 +2410,7 @@ function WorkbenchView({
   cameraVisionStatus,
   cameraAnalysis,
   isCameraBusy,
+  isCameraFeedPaused,
   isMediaBusy,
   isWorkspaceBusy,
   isKnowledgeBusy,
@@ -2465,6 +2474,7 @@ function WorkbenchView({
   cameraVisionStatus: CameraVisionStatus | null;
   cameraAnalysis: CameraFrameAnalysisResponse | null;
   isCameraBusy: boolean;
+  isCameraFeedPaused: boolean;
   isMediaBusy: boolean;
   isWorkspaceBusy: boolean;
   isKnowledgeBusy: boolean;
@@ -2622,6 +2632,7 @@ function WorkbenchView({
         cameraVisionStatus={cameraVisionStatus}
         cameraAnalysis={cameraAnalysis}
         isCameraBusy={isCameraBusy}
+        isCameraFeedPaused={isCameraFeedPaused}
         models={models}
         onCaptureCameraSnapshot={onCaptureCameraSnapshot}
         onAnalyzeCameraFrame={onAnalyzeCameraFrame}
@@ -4534,6 +4545,7 @@ function SystemView({
   groupedModels,
   hardwareStatus,
   isCameraBusy,
+  isCameraFeedPaused,
   models,
   onCaptureCameraSnapshot,
   onAnalyzeCameraFrame,
@@ -4547,6 +4559,7 @@ function SystemView({
   groupedModels: { ready: ModelProfile[]; pending: ModelProfile[] };
   hardwareStatus: HardwareStatus | null;
   isCameraBusy: boolean;
+  isCameraFeedPaused: boolean;
   models: ModelProfile[];
   onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
   onAnalyzeCameraFrame: (devicePath?: string | null) => Promise<void>;
@@ -4557,7 +4570,7 @@ function SystemView({
   const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
   const cameras = hardwareStatus?.cameras ?? [];
   const liveCamera = cameraVisionStatus?.camera ?? cameras.find((cameraDevice) => cameraDevice.capture_path);
-  const liveFeedUrl = liveCamera?.capture_path
+  const liveFeedUrl = liveCamera?.capture_path && !isCameraFeedPaused
     ? edisonApi.cameraFeedUrl({ device_path: liveCamera.capture_path, width: 960, height: 540, input_format: 'mjpeg' })
     : null;
 
@@ -4708,13 +4721,14 @@ function SystemView({
               {liveFeedUrl ? (
                 <img alt={`${liveCamera?.name ?? 'Camera'} live feed`} src={liveFeedUrl} />
               ) : (
-                <div className="empty-preview">
+                <div className={`empty-preview ${isCameraFeedPaused ? 'camera-feed-paused' : ''}`}>
                   <Camera size={30} />
-                  <strong>No live feed</strong>
+                  <strong>{isCameraFeedPaused ? 'Releasing camera' : 'No live feed'}</strong>
+                  {isCameraFeedPaused && <span>Snapshot and vision analysis need the camera for a moment.</span>}
                 </div>
               )}
               <div className="camera-feed-overlay">
-                <span>Live</span>
+                <span>{isCameraFeedPaused ? 'Capturing' : 'Live'}</span>
                 <span>{liveCamera?.capture_path ?? 'No device'}</span>
               </div>
             </div>
