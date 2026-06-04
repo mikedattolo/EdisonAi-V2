@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from edison_core.api.dependencies import get_capability_registry
-from edison_core.schemas import CapabilityStatus, MCPServerRecord, PluginIntegrationRecord
+from edison_core.api.dependencies import get_capability_registry, get_integration_discovery_service
+from edison_core.schemas import CapabilityStatus, IntegrationScanReport, MCPServerRecord, PluginIntegrationRecord
 from edison_core.services.capability_registry import CapabilityRegistry
+from edison_core.services.integration_discovery import IntegrationDiscoveryService
 
 
 router = APIRouter(prefix="/api/v1/capabilities", tags=["capabilities"])
@@ -29,3 +30,10 @@ def plugin_integrations(
     registry: CapabilityRegistry = Depends(get_capability_registry),
 ) -> list[PluginIntegrationRecord]:
     return registry.snapshot().plugins
+
+
+@router.get("/integrations", response_model=IntegrationScanReport)
+def local_integrations(
+    discovery: IntegrationDiscoveryService = Depends(get_integration_discovery_service),
+) -> IntegrationScanReport:
+    return discovery.snapshot()

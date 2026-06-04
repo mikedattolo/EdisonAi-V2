@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 
 from edison_core.api.dependencies import get_generation_store
-from edison_core.schemas import ArtifactRecord, JobCreate, JobEventRecord, JobRecord, JobStatus, JobType
+from edison_core.schemas import ArtifactCreate, ArtifactKind, ArtifactRecord, JobCreate, JobEventRecord, JobRecord, JobStatus, JobType
 from edison_core.services.generation_store import GenerationStore, JobNotFoundError
 
 
@@ -30,6 +31,39 @@ def get_artifact(
         return store.get_artifact(artifact_id)
     except JobNotFoundError as error:
         raise HTTPException(status_code=404, detail="Artifact not found") from error
+
+
+@router.post("/artifacts/upload", response_model=ArtifactRecord, status_code=status.HTTP_201_CREATED)
+async def upload_artifact(
+    request: Request,
+    file: UploadFile = File(...),
+    store: GenerationStore = Depends(get_generation_store),
+) -> ArtifactRecord:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Uploaded file is too large.")
+
+    settings = request.app.state.settings
+    suffix = Path(file.filename).suffix.lower() or ".bin"
+    safe_name = f"upload-{uuid4().hex}{suffix}"
+    upload_dir = settings.artifact_root / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    output_path = upload_dir / safe_name
+    output_path.write_bytes(content)
+    mime_type = file.content_type or "application/octet-stream"
+    return store.create_artifact(
+        ArtifactCreate(
+            kind=_artifact_kind_from_mime(mime_type),
+            title=Path(file.filename).stem[:120] or "Reference upload",
+            path=output_path.relative_to(settings.artifact_root.parent).as_posix(),
+            mime_type=mime_type,
+            metadata={"source": "upload", "original_filename": file.filename},
+        )
+    )
 
 
 @router.get("/artifacts/{artifact_id}/download")
@@ -109,3 +143,13 @@ def _resolve_artifact_path(path: Path, artifact_root: Path) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _artifact_kind_from_mime(mime_type: str) -> ArtifactKind:
+    if mime_type.startswith("image/"):
+        return ArtifactKind.IMAGE
+    if mime_type.startswith("video/"):
+        return ArtifactKind.VIDEO
+    if mime_type.startswith("audio/"):
+        return ArtifactKind.AUDIO
+    return ArtifactKind.OTHER

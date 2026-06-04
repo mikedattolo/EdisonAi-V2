@@ -3,6 +3,7 @@
 !.env.example
 config/edison.local.toml
 config/model-registry.local.json
+config/integration-discovery.local.json
 
 __pycache__/
 *.py[cod]

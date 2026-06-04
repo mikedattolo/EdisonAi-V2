@@ -233,6 +233,29 @@ export type AgentRunStatus =
   | 'failed'
   | 'cancelled';
 
+export type MediaGenerationMode =
+  | 'image'
+  | 'minecraft_texture'
+  | 'minecraft_model'
+  | 'minecraft_world'
+  | 'minecraft_structure'
+  | 'minecraft_texture_pack'
+  | 'product_render'
+  | 'social_media_content';
+
+export interface MediaGenerationModeRecord {
+  id: MediaGenerationMode;
+  label: string;
+  group: 'core' | 'minecraft' | 'commerce' | 'social';
+  job_type: JobType;
+  backend: string;
+  description: string;
+  reference_supported: boolean;
+  output_hint: string;
+  prompt_hint: string;
+  metadata: Record<string, unknown>;
+}
+
 export type AgentRunEventKind =
   | 'status'
   | 'plan'
@@ -394,10 +417,95 @@ export interface PluginIntegrationRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface LocalIntegrationRecord {
+  id: string;
+  name: string;
+  category:
+    | 'mcp'
+    | 'local-ai'
+    | 'media'
+    | 'minecraft'
+    | '3d-printing'
+    | 'cad'
+    | 'commerce'
+    | 'developer'
+    | 'automation'
+    | 'hardware'
+    | 'api'
+    | 'notifications';
+  status: 'ready' | 'staged' | 'missing' | 'disabled';
+  host: string;
+  description: string;
+  detected_tools: string[];
+  paths: string[];
+  detail: string;
+  next_steps: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface IntegrationRecommendation {
+  id: string;
+  title: string;
+  priority: 'high' | 'medium' | 'low';
+  detail: string;
+  action: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface IntegrationScanReport {
+  service: string;
+  checked_at: string;
+  integrations: LocalIntegrationRecord[];
+  recommendations: IntegrationRecommendation[];
+  detail: string;
+}
+
+export interface ToyBoxProductionLane {
+  id: string;
+  title: string;
+  status: 'ready' | 'staged' | 'missing';
+  description: string;
+  connected_integrations: string[];
+  next_steps: string[];
+}
+
+export interface ToyBoxPrinterRecord {
+  id: string;
+  name: string;
+  kind: 'bambu' | 'orca' | 'cura' | 'dymo' | 'generic';
+  status: 'ready' | 'staged' | 'missing';
+  role: 'printer' | 'slicer' | 'label_printer' | 'camera' | 'desktop_bridge';
+  detail: string;
+  paths: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface ToyBoxNotificationChannel {
+  id: string;
+  name: string;
+  status: 'ready' | 'staged' | 'missing';
+  target: 'sms' | 'push' | 'email' | 'desktop';
+  detail: string;
+  setup_hint: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ToyBoxManagerStatus {
+  service: string;
+  checked_at: string;
+  lanes: ToyBoxProductionLane[];
+  printers: ToyBoxPrinterRecord[];
+  notification_channels: ToyBoxNotificationChannel[];
+  recommendations: IntegrationRecommendation[];
+  detail: string;
+}
+
 export interface CapabilityStatus {
   service: string;
   mcp_servers: MCPServerRecord[];
   plugins: PluginIntegrationRecord[];
+  integrations: LocalIntegrationRecord[];
+  recommendations: IntegrationRecommendation[];
   knowledge_presets: KnowledgePreset[];
   attribution: string[];
   detail: string;

@@ -36,6 +36,7 @@ class EdisonSettings(BaseModel):
     modly_base_url: str | None = None
     modly_timeout_seconds: float = 2.0
     workflow_root: Path = PROJECT_ROOT / "workflows"
+    integration_discovery_path: Path = PROJECT_ROOT / "config" / "integration-discovery.local.json"
     gpu_fan_control_enabled: bool = False
     gpu_fan_control_backend: str = "monitor"
     gpu_fan_control_display: str = ":99"
@@ -111,6 +112,12 @@ def load_settings(config_path: str | Path | None = None) -> EdisonSettings:
         ),
         workflow_root=_resolve_path(
             os.getenv("EDISON_WORKFLOW_ROOT", media.get("workflow_root", "workflows"))
+        ),
+        integration_discovery_path=_resolve_path(
+            os.getenv(
+                "EDISON_INTEGRATION_DISCOVERY_PATH",
+                raw.get("integrations", {}).get("discovery_path", "config/integration-discovery.local.json"),
+            )
         ),
         gpu_fan_control_enabled=_bool_env(
             "EDISON_GPU_FAN_CONTROL_ENABLED", hardware.get("gpu_fan_control_enabled", False)

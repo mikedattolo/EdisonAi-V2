@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from edison_core.api.dependencies import (
@@ -12,10 +15,16 @@ from edison_core.api.dependencies import (
     get_wan22_client,
 )
 from edison_core.schemas import (
+    ArtifactCreate,
+    ArtifactKind,
     JobCreate,
     JobRecord,
     JobStatus,
+    JobType,
     MediaJobDeliveryRequest,
+    MediaGenerationMode,
+    MediaGenerationModeRecord,
+    MediaGenerationRequest,
     MediaSystemStatus,
     MessageCreate,
     MessageRecord,
@@ -33,6 +42,11 @@ from edison_core.services.wan22_client import Wan22Client
 router = APIRouter(prefix="/api/v1/media", tags=["media"])
 
 
+@router.get("/modes", response_model=list[MediaGenerationModeRecord])
+def media_generation_modes() -> list[MediaGenerationModeRecord]:
+    return _media_modes()
+
+
 @router.get("/status", response_model=MediaSystemStatus)
 def media_status(
     comfyui: ComfyUIClient = Depends(get_comfyui_client),
@@ -48,6 +62,24 @@ def media_status(
         modly=modly.status(),
         job_counts=store.job_counts(),
     )
+
+
+@router.post("/generate", response_model=JobRecord, status_code=status.HTTP_201_CREATED)
+def generate_media(
+    payload: MediaGenerationRequest,
+    comfyui: ComfyUIClient = Depends(get_comfyui_client),
+    invokeai: InvokeAIClient = Depends(get_invokeai_client),
+    wan22: Wan22Client = Depends(get_wan22_client),
+    modly: ModlyClient = Depends(get_modly_client),
+    orchestrator: MediaOrchestrator = Depends(get_media_orchestrator),
+    store: GenerationStore = Depends(get_generation_store),
+) -> JobRecord:
+    mode = _mode_record(payload.mode)
+    if _is_planning_mode(payload.mode, payload.reference_artifact_id):
+        return _create_planning_artifact_job(payload, mode, store, orchestrator.settings.artifact_root)
+
+    job_payload = _job_from_generation_request(payload, mode)
+    return create_media_job(job_payload, comfyui, invokeai, wan22, modly, orchestrator, store)
 
 
 @router.post("/jobs", response_model=JobRecord, status_code=status.HTTP_201_CREATED)
@@ -187,3 +219,236 @@ def _backend_status(
 def _string_metadata(payload: dict, key: str) -> str | None:
     value = payload.get(key)
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _media_modes() -> list[MediaGenerationModeRecord]:
+    return [
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.IMAGE,
+            label="Image",
+            group="core",
+            job_type=JobType.IMAGE,
+            backend="comfyui",
+            description="General Edison image generation through the configured image backend.",
+            reference_supported=True,
+            output_hint="Image artifact",
+            prompt_hint="Describe the image, style, subject, and any constraints.",
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.MINECRAFT_TEXTURE,
+            label="Minecraft Texture",
+            group="minecraft",
+            job_type=JobType.IMAGE,
+            backend="comfyui",
+            description="Pixel-art texture concepts for Minecraft 1.7.10 packs.",
+            reference_supported=True,
+            output_hint="Tileable texture image",
+            prompt_hint="Name the block/item, resolution, palette, and whether it should tile.",
+            metadata={"minecraft_version": "1.7.10", "recommended_sizes": [16, 32, 64]},
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.MINECRAFT_MODEL,
+            label="Minecraft Model",
+            group="minecraft",
+            job_type=JobType.CODE,
+            backend="minecraft-suite",
+            description="Blockbench-ready model specifications and optional image-to-mesh handoff when a reference is attached.",
+            reference_supported=True,
+            output_hint="Model specification or mesh job",
+            prompt_hint="Describe entity/block shape, texture slots, scale, and 1.7.10 mod target.",
+            metadata={"minecraft_version": "1.7.10", "editor": "Blockbench"},
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.MINECRAFT_WORLD,
+            label="Minecraft World",
+            group="minecraft",
+            job_type=JobType.CODE,
+            backend="minecraft-suite",
+            description="World-generation design specs for biomes, structures, loot, and mod constraints.",
+            reference_supported=False,
+            output_hint="World design spec",
+            prompt_hint="Describe biome, progression, terrain, POIs, and modpack constraints.",
+            metadata={"minecraft_version": "1.7.10"},
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.MINECRAFT_STRUCTURE,
+            label="Minecraft Structure",
+            group="minecraft",
+            job_type=JobType.CODE,
+            backend="minecraft-suite",
+            description="Structure build specs and schematic handoff notes.",
+            reference_supported=True,
+            output_hint="Structure blueprint spec",
+            prompt_hint="Describe footprint, materials, rooms, redstone, and survival/build mode.",
+            metadata={"minecraft_version": "1.7.10"},
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.MINECRAFT_TEXTURE_PACK,
+            label="Minecraft Texture Pack",
+            group="minecraft",
+            job_type=JobType.CODE,
+            backend="minecraft-suite",
+            description="Texture-pack manifest, asset list, palette, and production plan.",
+            reference_supported=True,
+            output_hint="Texture pack production spec",
+            prompt_hint="Describe theme, blocks/items/entities, resolution, and pack tone.",
+            metadata={"minecraft_version": "1.7.10"},
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.PRODUCT_RENDER,
+            label="Product Render",
+            group="commerce",
+            job_type=JobType.IMAGE,
+            backend="comfyui",
+            description="Clean product shots for ToyBox3D listings, thumbnails, and Shopify media.",
+            reference_supported=True,
+            output_hint="Product render image",
+            prompt_hint="Describe the product, angle, material, color, and listing style.",
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.SOCIAL_MEDIA_CONTENT,
+            label="Social Media Content",
+            group="social",
+            job_type=JobType.DOCUMENT,
+            backend="media-planner",
+            description="Social post copy, creative direction, and optional image prompt plan.",
+            reference_supported=True,
+            output_hint="Campaign content spec",
+            prompt_hint="Describe platform, product/topic, tone, audience, and call to action.",
+        ),
+    ]
+
+
+def _mode_record(mode: MediaGenerationMode) -> MediaGenerationModeRecord:
+    return next(item for item in _media_modes() if item.id == mode)
+
+
+def _job_from_generation_request(payload: MediaGenerationRequest, mode: MediaGenerationModeRecord) -> JobCreate:
+    prompt = _prompt_for_mode(payload, mode)
+    metadata = {
+        **payload.metadata,
+        "generation_mode": payload.mode.value,
+        "mode_label": mode.label,
+        "reference_artifact_id": payload.reference_artifact_id,
+        "enhance_prompt": True,
+    }
+    if payload.reference_artifact_id:
+        metadata["source_artifact_id"] = payload.reference_artifact_id
+    return JobCreate(
+        job_type=mode.job_type,
+        title=payload.title or f"{mode.label}: {_title_from_prompt(payload.prompt)}",
+        prompt=prompt,
+        backend=mode.backend,
+        source_artifact_id=payload.reference_artifact_id if mode.job_type == JobType.MESH else None,
+        metadata=metadata,
+    )
+
+
+def _prompt_for_mode(payload: MediaGenerationRequest, mode: MediaGenerationModeRecord) -> str:
+    prompt = " ".join(payload.prompt.split())
+    if payload.mode == MediaGenerationMode.MINECRAFT_TEXTURE:
+        return (
+            f"Minecraft 1.7.10 pixel art texture, {prompt}. "
+            "Tileable square game texture, crisp pixels, readable silhouette, no UI text, no watermark."
+        )
+    if payload.mode == MediaGenerationMode.PRODUCT_RENDER:
+        return (
+            f"Studio product render for a ToyBox3D Shopify listing, {prompt}. "
+            "Clean background, accurate shape, printable plastic material, clear lighting, commercial thumbnail."
+        )
+    return prompt
+
+
+def _is_planning_mode(mode: MediaGenerationMode, reference_artifact_id: str | None) -> bool:
+    return mode in {
+        MediaGenerationMode.MINECRAFT_MODEL,
+        MediaGenerationMode.MINECRAFT_WORLD,
+        MediaGenerationMode.MINECRAFT_STRUCTURE,
+        MediaGenerationMode.MINECRAFT_TEXTURE_PACK,
+        MediaGenerationMode.SOCIAL_MEDIA_CONTENT,
+    }
+
+
+def _create_planning_artifact_job(
+    payload: MediaGenerationRequest,
+    mode: MediaGenerationModeRecord,
+    store: GenerationStore,
+    artifact_root: Path,
+) -> JobRecord:
+    backend = "minecraft-suite" if mode.group == "minecraft" else "media-planner"
+    job = store.create_job(
+        JobCreate(
+            job_type=mode.job_type,
+            title=payload.title or f"{mode.label}: {_title_from_prompt(payload.prompt)}",
+            prompt=payload.prompt,
+            backend=backend,
+            metadata={
+                **payload.metadata,
+                "generation_mode": payload.mode.value,
+                "mode_label": mode.label,
+                "reference_artifact_id": payload.reference_artifact_id,
+            },
+        ),
+        status=JobStatus.GENERATING,
+    )
+    content = _planning_markdown(payload, mode)
+    output_dir = artifact_root / backend / job.id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{payload.mode.value}-{uuid4().hex[:8]}.md"
+    output_path.write_text(content, encoding="utf-8", newline="\n")
+    artifact = store.create_artifact(
+        ArtifactCreate(
+            kind=ArtifactKind.DOCUMENT if mode.job_type == JobType.DOCUMENT else ArtifactKind.CODE,
+            title=f"{mode.label} spec",
+            path=output_path.relative_to(artifact_root.parent).as_posix(),
+            mime_type="text/markdown",
+            source_job_id=job.id,
+            metadata={
+                "generation_mode": payload.mode.value,
+                "mode_label": mode.label,
+                "reference_artifact_id": payload.reference_artifact_id,
+            },
+        )
+    )
+    return store.finalize_job_result(
+        job.id,
+        result_artifact_id=artifact.id,
+        status=JobStatus.COMPLETE,
+        message=f"{mode.label} planning artifact generated.",
+        metadata={"result_artifact_id": artifact.id, "generation_mode": payload.mode.value},
+    )
+
+
+def _planning_markdown(payload: MediaGenerationRequest, mode: MediaGenerationModeRecord) -> str:
+    prompt = payload.prompt.strip()
+    reference = payload.reference_artifact_id or "None attached"
+    if mode.group == "minecraft":
+        sections = [
+            f"# {mode.label} for Minecraft 1.7.10",
+            f"Prompt: {prompt}",
+            f"Reference artifact: {reference}",
+            "## Asset Targets",
+            "- Minecraft version: 1.7.10",
+            "- Keep naming lowercase with underscores.",
+            "- Prefer 16x or 32x textures unless the prompt requests otherwise.",
+            "- Produce Blockbench/resource-pack handoff notes where applicable.",
+            "## Build Notes",
+            "- Define palette, scale, collision/visual bounds, and export target.",
+            "- Track generated files in Edison artifacts before packaging.",
+        ]
+    else:
+        sections = [
+            f"# {mode.label}",
+            f"Prompt: {prompt}",
+            f"Reference artifact: {reference}",
+            "## Content Plan",
+            "- Generate the primary visual or campaign direction.",
+            "- Include caption/copy variants, thumbnail guidance, and asset checklist.",
+            "- Keep product naming and store-ready output metadata attached to the job.",
+        ]
+    return "\n\n".join(sections) + "\n"
+
+
+def _title_from_prompt(prompt: str) -> str:
+    title = " ".join(prompt.split())
+    return f"{title[:53]}..." if len(title) > 56 else title or "Untitled"

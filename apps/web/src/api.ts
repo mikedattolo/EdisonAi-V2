@@ -19,6 +19,8 @@ import type {
   HardwareStatus,
   JobRecord,
   JobType,
+  MediaGenerationMode,
+  MediaGenerationModeRecord,
   MediaSystemStatus,
   MessageRecord,
   ModelProfile,
@@ -34,6 +36,7 @@ import type {
   SearchCompareResponse,
   SearchProvider,
   SystemStatus,
+  ToyBoxManagerStatus,
   WorkspaceCommandRunResult,
   WorkspaceEntry,
   WorkspaceFile,
@@ -245,9 +248,35 @@ export const edisonApi = {
       body: JSON.stringify(payload),
     }),
   getMediaStatus: () => request<MediaSystemStatus>('/api/v1/media/status'),
+  listMediaModes: () => request<MediaGenerationModeRecord[]>('/api/v1/media/modes'),
+  getToyBoxStatus: () => request<ToyBoxManagerStatus>('/api/v1/toybox/status'),
   listArtifacts: (limit = 24) => request<ArtifactRecord[]>(`/api/v1/artifacts?limit=${limit}`),
+  uploadArtifact: async (file: File) => {
+    const formData = new FormData();
+    formData.set('file', file);
+    const response = await fetch(`${API_BASE}/api/v1/artifacts/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Upload failed with ${response.status}`);
+    }
+    return response.json() as Promise<ArtifactRecord>;
+  },
   listJobs: (jobType?: JobType) =>
     request<JobRecord[]>(jobType ? `/api/v1/jobs?job_type=${jobType}` : '/api/v1/jobs'),
+  generateMedia: (payload: {
+    mode: MediaGenerationMode;
+    prompt: string;
+    title?: string;
+    reference_artifact_id?: string | null;
+    metadata?: Record<string, unknown>;
+  }) =>
+    request<JobRecord>('/api/v1/media/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   createMediaJob: (payload: { job_type: JobType; title: string; prompt?: string; source_artifact_id?: string | null; metadata?: Record<string, unknown> }) =>
     request<JobRecord>('/api/v1/media/jobs', {
       method: 'POST',

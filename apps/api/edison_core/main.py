@@ -16,6 +16,7 @@ from edison_core.api import (
     routes_models,
     routes_personal,
     routes_sessions,
+    routes_toybox,
     routes_workspace,
 )
 from edison_core.config import EdisonSettings, load_settings
@@ -26,6 +27,7 @@ from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import HardwareDeviceService
+from edison_core.services.integration_discovery import IntegrationDiscoveryService
 from edison_core.services.invokeai_client import InvokeAIClient
 from edison_core.services.model_gateway import ModelGateway
 from edison_core.services.media_orchestrator import MediaOrchestrator
@@ -85,6 +87,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     status_service = SystemStatusService(resolved_settings, model_registry)
     fan_control_service = GPUFanControlService(resolved_settings, status_service.gpu_manager)
     hardware_device_service = HardwareDeviceService(resolved_settings)
+    integration_discovery_service = IntegrationDiscoveryService(resolved_settings)
     workspace_tools = WorkspaceTools(resolved_settings.workspace_roots[0])
     workspace_project_manager = WorkspaceProjectManager(resolved_settings)
     capability_registry = CapabilityRegistry(
@@ -94,6 +97,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
         workspace_tools,
         media_orchestrator,
         personal_workspace_store,
+        integration_discovery_service,
     )
 
     app = FastAPI(
@@ -127,6 +131,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.status_service = status_service
     app.state.fan_control_service = fan_control_service
     app.state.hardware_device_service = hardware_device_service
+    app.state.integration_discovery_service = integration_discovery_service
     app.state.workspace_tools = workspace_tools
     app.state.workspace_project_manager = workspace_project_manager
     app.state.capability_registry = capability_registry
@@ -141,6 +146,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.include_router(routes_knowledge.router)
     app.include_router(routes_personal.router)
     app.include_router(routes_media.router)
+    app.include_router(routes_toybox.router)
     app.include_router(routes_workspace.router)
     app.include_router(routes_conversations.router)
     app.include_router(routes_sessions.router)

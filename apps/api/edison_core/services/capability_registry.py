@@ -3,6 +3,7 @@ from __future__ import annotations
 from edison_core.config import EdisonSettings
 from edison_core.schemas import CapabilityStatus, MCPServerRecord, PluginIntegrationRecord
 from edison_core.services.hardware_devices import HardwareDeviceService
+from edison_core.services.integration_discovery import IntegrationDiscoveryService
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.media_orchestrator import MediaOrchestrator
 from edison_core.services.personal_workspace import PersonalWorkspaceStore
@@ -18,6 +19,7 @@ class CapabilityRegistry:
         workspace: WorkspaceTools,
         media: MediaOrchestrator,
         personal: PersonalWorkspaceStore,
+        integrations: IntegrationDiscoveryService,
     ) -> None:
         self.settings = settings
         self.hardware = hardware
@@ -25,10 +27,12 @@ class CapabilityRegistry:
         self.workspace = workspace
         self.media = media
         self.personal = personal
+        self.integrations = integrations
 
     def snapshot(self) -> CapabilityStatus:
         knowledge_status = self.knowledge.status()
         hardware_status = self.hardware.snapshot()
+        integration_report = self.integrations.snapshot()
         hailo = next((item for item in hardware_status.accelerators if item.kind == "hailo8"), None)
         camera_ready = any(camera.status == "ready" for camera in hardware_status.cameras)
 
@@ -155,6 +159,8 @@ class CapabilityRegistry:
         return CapabilityStatus(
             mcp_servers=mcp_servers,
             plugins=plugins,
+            integrations=integration_report.integrations,
+            recommendations=integration_report.recommendations,
             knowledge_presets=[
                 "coding-core",
                 "ai-foundations",

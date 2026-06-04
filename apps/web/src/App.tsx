@@ -61,7 +61,10 @@ import type {
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
+  LocalIntegrationRecord,
   MediaSystemStatus,
+  MediaGenerationMode,
+  MediaGenerationModeRecord,
   MessageRecord,
   ModelProfile,
   ModelSelection,
@@ -72,6 +75,7 @@ import type {
   SearchCompareResponse,
   SearchProvider,
   SystemStatus,
+  ToyBoxManagerStatus,
   WorkspaceCommand,
   WorkspaceCommandRunResult,
   WorkspaceEntry,
@@ -240,6 +244,8 @@ export default function App() {
   const [cameraAnalysis, setCameraAnalysis] = useState<CameraFrameAnalysisResponse | null>(null);
   const [agentRuns, setAgentRuns] = useState<AgentRunRecord[]>([]);
   const [activeAgentRun, setActiveAgentRun] = useState<AgentRunWithEvents | null>(null);
+  const [mediaModes, setMediaModes] = useState<MediaGenerationModeRecord[]>([]);
+  const [toyBoxStatus, setToyBoxStatus] = useState<ToyBoxManagerStatus | null>(null);
   const [mediaJobs, setMediaJobs] = useState<JobRecord[]>([]);
   const [mediaArtifacts, setMediaArtifacts] = useState<ArtifactRecord[]>([]);
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
@@ -577,6 +583,57 @@ export default function App() {
   }
 
   async function handleMediaChatSend(content: string) {
+    const generationMode = inferMediaGenerationMode(content);
+    if (generationMode) {
+      const conversation = await ensureChatConversation(content, 'media');
+      await edisonApi.addMessage(conversation.id, {
+        role: 'user',
+        content,
+        metadata: { mode: 'media', source: 'chat-media-request', generation_mode: generationMode },
+      });
+      const job = await edisonApi.generateMedia({
+        mode: generationMode,
+        prompt: content,
+        metadata: {
+          source: 'chat',
+          conversation_id: conversation.id,
+          deliver_to_chat: true,
+          generation_mode: generationMode,
+          width: 1024,
+          height: 1024,
+          steps: 30,
+          cfg: 6.5,
+          sampler_name: 'dpmpp_2m',
+          scheduler: 'karras',
+          enhance_prompt: true,
+        },
+      });
+      const statusMessage = await edisonApi.addMessage(conversation.id, {
+        role: 'assistant',
+        content: mediaJobStatusLine(job),
+        model: job.backend,
+        metadata: {
+          delivery_type: 'media_job_status',
+          generation_mode: generationMode,
+          media_job: job,
+        },
+      });
+      setComposer('');
+      setActiveConversation(await edisonApi.getConversation(conversation.id));
+      setConversations(await edisonApi.listConversations());
+      await refreshMediaSurface();
+      if (job.status === 'complete' && job.result_artifact_id) {
+        await edisonApi.deliverMediaJob(job.id, conversation.id);
+        setActiveConversation(await edisonApi.getConversation(conversation.id));
+        await refreshMediaSurface();
+        return;
+      }
+      if (['queued', 'loading', 'generating', 'encoding'].includes(job.status)) {
+        void pollMediaJobForChat(job.id, conversation.id, statusMessage.id);
+      }
+      return;
+    }
+
     const jobType = inferMediaJobType(content);
     let sourceArtifact = jobType === 'mesh' ? latestImageArtifactFromConversation(activeConversation) : null;
     const conversation = await ensureChatConversation(content, 'media');
@@ -773,14 +830,18 @@ export default function App() {
         await Promise.all(activeJobs.slice(0, 6).map((job) => edisonApi.syncMediaJob(job.id)));
       }
 
-      const [nextMediaStatus, nextMediaJobs, nextArtifacts] = await Promise.all([
+      const [nextMediaStatus, nextMediaModes, nextToyBoxStatus, nextMediaJobs, nextArtifacts] = await Promise.all([
         edisonApi.getMediaStatus(),
+        edisonApi.listMediaModes(),
+        edisonApi.getToyBoxStatus(),
         edisonApi.listJobs(),
         edisonApi.listArtifacts(),
       ]);
       setMediaStatus(nextMediaStatus);
-      setMediaJobs(nextMediaJobs.filter((job) => ['image', 'image_edit', 'video', 'mesh', 'audio'].includes(job.job_type)));
-      setMediaArtifacts(nextArtifacts.filter((artifact) => ['image', 'video', 'mesh', 'audio'].includes(artifact.kind)));
+      setMediaModes(nextMediaModes);
+      setToyBoxStatus(nextToyBoxStatus);
+      setMediaJobs(nextMediaJobs.filter((job) => ['image', 'image_edit', 'video', 'mesh', 'audio', 'document', 'code'].includes(job.job_type)));
+      setMediaArtifacts(nextArtifacts.filter((artifact) => ['image', 'video', 'mesh', 'audio', 'document', 'code', 'data'].includes(artifact.kind)));
       await deliverCompletedChatJobs(nextMediaJobs);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Media status failed');
@@ -985,6 +1046,28 @@ export default function App() {
       await refreshMediaSurface();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Media job failed');
+    } finally {
+      setIsMediaBusy(false);
+    }
+  }
+
+  async function createMediaGeneration(mode: MediaGenerationMode, prompt: string, referenceFile?: File | null) {
+    setIsMediaBusy(true);
+    setError(null);
+    try {
+      const referenceArtifact = referenceFile ? await edisonApi.uploadArtifact(referenceFile) : null;
+      await edisonApi.generateMedia({
+        mode,
+        prompt,
+        reference_artifact_id: referenceArtifact?.id ?? null,
+        metadata: {
+          source: 'media-studio',
+          reference_filename: referenceFile?.name,
+        },
+      });
+      await refreshMediaSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Media generation failed');
     } finally {
       setIsMediaBusy(false);
     }
@@ -1513,10 +1596,13 @@ export default function App() {
             knowledgeSources={knowledgeSources}
             knowledgeStatus={knowledgeStatus}
             mediaJobs={mediaJobs}
+            mediaModes={mediaModes}
             mediaStatus={mediaStatus}
             models={models}
+            toyBoxStatus={toyBoxStatus}
             activeWorkspaceRootId={activeWorkspaceRootId}
             onCreateMediaJob={createMediaReadinessJob}
+            onCreateMediaGeneration={createMediaGeneration}
             onCreateWorkspaceProject={createWorkspaceProject}
             onOpenCompareConversation={loadConversation}
             onRefreshConversations={async () => {
@@ -2495,10 +2581,13 @@ function WorkbenchView({
   knowledgeSources,
   knowledgeStatus,
   mediaJobs,
+  mediaModes,
   mediaStatus,
   models,
+  toyBoxStatus,
   onCreateWorkspaceProject,
   onCreateMediaJob,
+  onCreateMediaGeneration,
   onCaptureCameraSnapshot,
   onAnalyzeCameraFrame,
   onOpenCompareConversation,
@@ -2561,10 +2650,13 @@ function WorkbenchView({
   knowledgeSources: KnowledgeSourceRecord[];
   knowledgeStatus: KnowledgeStatus | null;
   mediaJobs: JobRecord[];
+  mediaModes: MediaGenerationModeRecord[];
   mediaStatus: MediaSystemStatus | null;
   models: ModelProfile[];
+  toyBoxStatus: ToyBoxManagerStatus | null;
   onCreateWorkspaceProject: (name: string, prompt: string) => Promise<void>;
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
+  onCreateMediaGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null) => Promise<void>;
   onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
   onAnalyzeCameraFrame: (devicePath?: string | null) => Promise<void>;
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
@@ -2673,8 +2765,11 @@ function WorkbenchView({
         artifacts={artifacts}
         isMediaBusy={isMediaBusy}
         jobs={mediaJobs}
+        modes={mediaModes}
         mediaStatus={mediaStatus}
+        toyBoxStatus={toyBoxStatus}
         onCreateJob={onCreateMediaJob}
+        onCreateGeneration={onCreateMediaGeneration}
         onRefresh={onRefreshMedia}
         onUseArtifactInChat={onUseArtifactInChat}
       />
@@ -4493,19 +4588,31 @@ function MediaView({
   artifacts,
   isMediaBusy,
   jobs,
+  modes,
   mediaStatus,
+  toyBoxStatus,
   onCreateJob,
+  onCreateGeneration,
   onRefresh,
   onUseArtifactInChat,
 }: {
   artifacts: ArtifactRecord[];
   isMediaBusy: boolean;
   jobs: JobRecord[];
+  modes: MediaGenerationModeRecord[];
   mediaStatus: MediaSystemStatus | null;
+  toyBoxStatus: ToyBoxManagerStatus | null;
   onCreateJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
+  onCreateGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null) => Promise<void>;
   onRefresh: () => Promise<void>;
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
 }) {
+  const [activePanel, setActivePanel] = useState<'generate' | 'minecraft' | 'toybox' | 'outputs'>('generate');
+  const modeOptions = modes.length ? modes : fallbackMediaModes();
+  const [selectedMode, setSelectedMode] = useState<MediaGenerationMode>('image');
+  const [mediaPrompt, setMediaPrompt] = useState('');
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const activeMode = modeOptions.find((mode) => mode.id === selectedMode) ?? modeOptions[0];
   const backendCards = [
     {
       label: 'ComfyUI',
@@ -4532,6 +4639,34 @@ function MediaView({
       meta: mediaStatus?.modly.base_url ?? 'No backend URL',
     },
   ];
+  const minecraftModes = modeOptions.filter((mode) => mode.group === 'minecraft');
+  const toyboxPages = toyboxManagerPages();
+  const toyboxLaneCards = toyBoxStatus?.lanes.length
+    ? toyBoxStatus.lanes.map((lane) => ({
+        id: lane.id,
+        title: lane.title,
+        description: lane.description,
+        lanes: lane.connected_integrations,
+        status: lane.status,
+        icon: toyboxIconForLane(lane.id),
+      }))
+    : toyboxPages.map((page) => ({ ...page, id: page.title, status: undefined as string | undefined }));
+
+  function useMode(mode: MediaGenerationMode) {
+    setSelectedMode(mode);
+    setActivePanel('generate');
+  }
+
+  async function submitGeneration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const prompt = mediaPrompt.trim();
+    if (!prompt || isMediaBusy || !activeMode) {
+      return;
+    }
+    await onCreateGeneration(activeMode.id, prompt, referenceFile);
+    setMediaPrompt('');
+    setReferenceFile(null);
+  }
 
   return (
     <section className="workbench-view" aria-label="Media Studio">
@@ -4539,6 +4674,23 @@ function MediaView({
         <GalleryHorizontalEnd size={26} />
         <h3>Media Studio</h3>
         <button className="secondary-button" onClick={() => void onRefresh()} type="button">Refresh</button>
+      </div>
+      <div className="media-panel-tabs" role="tablist" aria-label="Media Studio sections">
+        {[
+          ['generate', 'Generate'],
+          ['minecraft', 'Minecraft AI Suite'],
+          ['toybox', 'ToyBox3D Farm'],
+          ['outputs', 'Outputs'],
+        ].map(([panelId, label]) => (
+          <button
+            className={activePanel === panelId ? 'mode-button active' : 'mode-button'}
+            key={panelId}
+            onClick={() => setActivePanel(panelId as typeof activePanel)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <div className="media-status-row">
         {backendCards.map((backend) => (
@@ -4557,34 +4709,241 @@ function MediaView({
           <span>{mediaStatus?.comfyui.base_url ?? 'No backend URL'}</span>
         </article>
       </div>
-      <div className="strategy-grid">
-        {mediaPlan.map((item) => {
-          const Icon = item.icon;
-          return (
-            <article className="strategy-card" key={item.title}>
-              <Icon size={24} />
-              <strong>{item.title}</strong>
-              <p>{item.stack}</p>
-              <span>{item.lane}</span>
-              <button
-                className="secondary-button"
-                disabled={isMediaBusy}
-                onClick={() => void onCreateJob(item.jobType, item.title, item.stack)}
-                type="button"
-              >
-                Check backend
+      {activePanel === 'generate' && (
+        <>
+          <section className="media-generator-panel" aria-label="Generation mode prompt">
+            <div className="media-mode-grid">
+              {modeOptions.map((mode) => (
+                <button
+                  className={selectedMode === mode.id ? 'media-mode-card active' : 'media-mode-card'}
+                  key={mode.id}
+                  onClick={() => setSelectedMode(mode.id)}
+                  type="button"
+                >
+                  <span>{mode.group}</span>
+                  <strong>{mode.label}</strong>
+                  <small>{mode.output_hint}</small>
+                </button>
+              ))}
+            </div>
+            <form className="media-generate-form" onSubmit={(event) => void submitGeneration(event)}>
+              <div>
+                <span className="section-label">Selected mode</span>
+                <strong>{activeMode?.label ?? 'Image'}</strong>
+                <p>{activeMode?.description}</p>
+              </div>
+              <textarea
+                aria-label="Generation prompt"
+                onChange={(event) => setMediaPrompt(event.target.value)}
+                placeholder={activeMode?.prompt_hint ?? 'Describe what Edison should generate'}
+                rows={5}
+                value={mediaPrompt}
+              />
+              <div className="reference-upload-row">
+                <label htmlFor="media-reference-upload">Reference image</label>
+                <input
+                  accept="image/*"
+                  disabled={!activeMode?.reference_supported}
+                  id="media-reference-upload"
+                  onChange={(event) => setReferenceFile(event.target.files?.[0] ?? null)}
+                  type="file"
+                />
+                <span>{referenceFile ? referenceFile.name : activeMode?.reference_supported ? 'Optional' : 'Not used for this mode'}</span>
+              </div>
+              <button className="apply-button icon-text-button" disabled={!mediaPrompt.trim() || isMediaBusy} type="submit">
+                <Send size={16} />
+                {isMediaBusy ? 'Generating' : 'Generate'}
               </button>
+            </form>
+          </section>
+          <div className="strategy-grid">
+            {mediaPlan.map((item) => {
+              const Icon = item.icon;
+              return (
+                <article className="strategy-card" key={item.title}>
+                  <Icon size={24} />
+                  <strong>{item.title}</strong>
+                  <p>{item.stack}</p>
+                  <span>{item.lane}</span>
+                  <button
+                    className="secondary-button"
+                    disabled={isMediaBusy}
+                    onClick={() => void onCreateJob(item.jobType, item.title, item.stack)}
+                    type="button"
+                  >
+                    Check backend
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      )}
+      {activePanel === 'minecraft' && (
+        <section className="minecraft-suite-panel" aria-label="Minecraft AI Suite">
+          <div className="section-heading">
+            <Box size={18} />
+            <h3>Minecraft AI Suite</h3>
+          </div>
+          <div className="suite-intro-grid">
+            <article>
+              <span className="section-label">Target</span>
+              <strong>Minecraft 1.7.10</strong>
+              <p>Textures, models, worlds, structures, and texture-pack specs are tracked as media jobs and artifacts.</p>
             </article>
-          );
-        })}
-      </div>
+            <article>
+              <span className="section-label">Tool Handoff</span>
+              <strong>Blockbench + resource packs</strong>
+              <p>Detected workstation Blockbench folders can become model/export targets once Edison has an MCP bridge.</p>
+            </article>
+          </div>
+          <div className="minecraft-workflow-grid">
+            {minecraftModes.map((mode) => (
+              <article className="workflow-card" key={mode.id}>
+                <div>
+                  <strong>{mode.label}</strong>
+                  <span>{mode.output_hint}</span>
+                </div>
+                <p>{mode.description}</p>
+                <button className="secondary-button" onClick={() => useMode(mode.id)} type="button">
+                  Use Mode
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+      {activePanel === 'toybox' && (
+        <section className="toybox-manager-panel" aria-label="ToyBox3D Store and Print Farm Manager">
+          <div className="section-heading">
+            <Server size={18} />
+            <h3>ToyBox3D Store & Print Farm</h3>
+          </div>
+          {toyBoxStatus && <p className="panel-copy">{toyBoxStatus.detail}</p>}
+          <div className="toybox-flow-grid">
+            {toyboxLaneCards.map((page) => {
+              const Icon = page.icon;
+              return (
+                <article className="toybox-page-card" key={page.id ?? page.title}>
+                  <Icon size={20} />
+                  <div>
+                    <strong>{page.title}</strong>
+                    <p>{page.description}</p>
+                  </div>
+                  <div className="chip-list">
+                    {page.status && <span>{page.status}</span>}
+                    {page.lanes.map((lane) => <span key={lane}>{lane}</span>)}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <div className="toybox-ops-grid">
+            <article className="toybox-architecture-panel">
+              <div>
+                <span className="section-label">Desktop tool control</span>
+                <strong>Fusion, slicers, labels, files</strong>
+              </div>
+              <ol>
+                <li>Edison asks a PC-side MCP bridge to run an allowlisted task.</li>
+                <li>The bridge can launch Fusion scripts, Blockbench exports, slicers, or label printing.</li>
+                <li>Generated STL/STEP/G-code/label artifacts are returned to Edison for chat and ToyBox tracking.</li>
+              </ol>
+            </article>
+            <article className="toybox-architecture-panel">
+              <div>
+                <span className="section-label">Order automation</span>
+                <strong>Shopify to printer queue</strong>
+              </div>
+              <ol>
+                <li>Shopify webhook or poller creates a production job from an unfulfilled order.</li>
+                <li>SKU mapping chooses model, color, material, slicer profile, printer, and camera monitor.</li>
+                <li>Label printing and customer tracking are handled after QA and packing.</li>
+              </ol>
+            </article>
+          </div>
+          {toyBoxStatus && (
+            <div className="toybox-live-grid">
+              <section className="job-list-panel">
+                <div className="section-heading">
+                  <Box size={18} />
+                  <h3>CAD, Printers & Labels</h3>
+                </div>
+                <div className="toybox-device-list">
+                  {toyBoxStatus.printers.map((printer) => (
+                    <article className="toybox-device-row" key={printer.id}>
+                      <div>
+                        <strong>{printer.name}</strong>
+                        <span>{printer.detail}</span>
+                      </div>
+                      <span className={`backend-status ${statusClassName(printer.status)}`}>{printer.status}</span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+              <section className="job-list-panel">
+                <div className="section-heading">
+                  <Zap size={18} />
+                  <h3>Notifications</h3>
+                </div>
+                <div className="toybox-device-list">
+                  {toyBoxStatus.notification_channels.map((channel) => (
+                    <article className="toybox-device-row" key={channel.id}>
+                      <div>
+                        <strong>{channel.name}</strong>
+                        <span>{channel.detail}</span>
+                        <small>{channel.setup_hint}</small>
+                      </div>
+                      <span className={`backend-status ${statusClassName(channel.status)}`}>{channel.status}</span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </div>
+          )}
+          <div className="toybox-architecture-panel">
+            <div>
+              <span className="section-label">Production path</span>
+              <strong>Shopify order to printed shipment</strong>
+            </div>
+            <ol>
+              <li>Poll scoped Shopify orders and match SKUs to printable products.</li>
+              <li>Select model, filament/color, slicer profile, printer, and camera monitor.</li>
+              <li>Queue print jobs, track production state, then create a Dymo shipping-label task.</li>
+              <li>Attach proof photos and final artifact records back to the order.</li>
+            </ol>
+          </div>
+        </section>
+      )}
+      {activePanel === 'outputs' && (
+        <MediaOutputsPanel
+          artifacts={artifacts}
+          jobs={jobs}
+          onUseArtifactInChat={onUseArtifactInChat}
+        />
+      )}
+    </section>
+  );
+}
+
+function MediaOutputsPanel({
+  artifacts,
+  jobs,
+  onUseArtifactInChat,
+}: {
+  artifacts: ArtifactRecord[];
+  jobs: JobRecord[];
+  onUseArtifactInChat: (artifact: ArtifactRecord) => void;
+}) {
+  return (
+    <div className="media-output-grid">
       <div className="job-list-panel">
         <div className="section-heading">
           <Activity size={18} />
           <h3>Generation Jobs</h3>
         </div>
         <div className="job-list">
-          {jobs.slice(0, 8).map((job) => (
+          {jobs.slice(0, 12).map((job) => (
             <article className="job-row" key={job.id}>
               <div>
                 <strong>{job.title}</strong>
@@ -4602,7 +4961,7 @@ function MediaView({
           <h3>Artifacts</h3>
         </div>
         <div className="artifact-gallery">
-          {artifacts.slice(0, 8).map((artifact) => {
+          {artifacts.slice(0, 12).map((artifact) => {
             const downloadUrl = edisonApi.artifactDownloadUrl(artifact.id);
             return (
               <article className="artifact-card" key={artifact.id}>
@@ -4626,8 +4985,92 @@ function MediaView({
           {artifacts.length === 0 && <div className="empty-line">No generated artifacts yet</div>}
         </div>
       </div>
-    </section>
+    </div>
   );
+}
+
+function fallbackMediaModes(): MediaGenerationModeRecord[] {
+  return [
+    ['image', 'Image', 'core', 'image', 'comfyui', 'General Edison image generation.', true, 'Image artifact', 'Describe the image.'],
+    ['minecraft_texture', 'Minecraft Texture', 'minecraft', 'image', 'comfyui', 'Pixel-art texture concepts for Minecraft 1.7.10.', true, 'Texture image', 'Describe the block/item texture.'],
+    ['minecraft_model', 'Minecraft Model', 'minecraft', 'code', 'minecraft-suite', 'Blockbench-ready model specifications.', true, 'Model specification', 'Describe the model.'],
+    ['minecraft_world', 'Minecraft World', 'minecraft', 'code', 'minecraft-suite', 'World-generation design specs.', false, 'World spec', 'Describe the world.'],
+    ['minecraft_structure', 'Minecraft Structure', 'minecraft', 'code', 'minecraft-suite', 'Structure build specs.', true, 'Structure spec', 'Describe the structure.'],
+    ['minecraft_texture_pack', 'Minecraft Texture Pack', 'minecraft', 'code', 'minecraft-suite', 'Texture-pack production plan.', true, 'Texture pack spec', 'Describe the texture pack.'],
+    ['product_render', 'Product Render', 'commerce', 'image', 'comfyui', 'Clean product shots for ToyBox3D listings.', true, 'Product image', 'Describe the product render.'],
+    ['social_media_content', 'Social Media Content', 'social', 'document', 'media-planner', 'Social post copy and creative direction.', true, 'Campaign spec', 'Describe the post or campaign.'],
+  ].map(([id, label, group, jobType, backend, description, referenceSupported, outputHint, promptHint]) => ({
+    id: id as MediaGenerationMode,
+    label: String(label),
+    group: group as MediaGenerationModeRecord['group'],
+    job_type: jobType as JobType,
+    backend: String(backend),
+    description: String(description),
+    reference_supported: Boolean(referenceSupported),
+    output_hint: String(outputHint),
+    prompt_hint: String(promptHint),
+    metadata: {},
+  }));
+}
+
+function toyboxManagerPages(): Array<{ title: string; description: string; lanes: string[]; icon: IconType }> {
+  return [
+    {
+      title: 'Shopify Orders',
+      description: 'Order intake, fulfillment status, item colors, shipping state, and proof-photo attachments.',
+      lanes: ['orders', 'fulfillment', 'webhooks'],
+      icon: Database,
+    },
+    {
+      title: 'Product-to-Print Mappings',
+      description: 'SKU to model file, slicer profile, filament/color, printer family, and packaging rules.',
+      lanes: ['sku', 'model', 'color'],
+      icon: Box,
+    },
+    {
+      title: 'Print Queue',
+      description: 'Prioritized production queue with printer assignment, retry state, ETA, and order linkage.',
+      lanes: ['queue', 'eta', 'assignment'],
+      icon: Activity,
+    },
+    {
+      title: 'Printer Management',
+      description: 'Printer profiles, camera feeds, bed state, material slots, maintenance, and availability.',
+      lanes: ['printers', 'camera', 'filament'],
+      icon: Server,
+    },
+    {
+      title: 'Production Tracking',
+      description: 'Started, printing, cooling, QA, packed, label printed, shipped, and exception states.',
+      lanes: ['qa', 'packing', 'shipping'],
+      icon: CheckSquare2,
+    },
+    {
+      title: 'Dymo Label Station',
+      description: 'Shipping-label print handoff and label queue once Shopify shipping scopes are connected.',
+      lanes: ['labels', 'tracking', 'handoff'],
+      icon: FileText,
+    },
+  ];
+}
+
+function toyboxIconForLane(laneId: string): IconType {
+  if (laneId.includes('shopify')) {
+    return Database;
+  }
+  if (laneId.includes('mapping')) {
+    return Box;
+  }
+  if (laneId.includes('queue') || laneId.includes('tracking')) {
+    return Activity;
+  }
+  if (laneId.includes('label')) {
+    return FileText;
+  }
+  if (laneId.includes('notification')) {
+    return Zap;
+  }
+  return Server;
 }
 
 function SystemView({
@@ -4702,7 +5145,7 @@ function SystemView({
       <section className="capability-panel" aria-label="MCP servers and plugins">
         <div className="section-heading">
           <Waypoints size={18} />
-          <h3>MCP & Plugins</h3>
+          <h3>MCP, Plugins & Integrations</h3>
         </div>
         <div className="capability-grid">
           {(capabilityStatus?.mcp_servers ?? []).map((server) => (
@@ -4739,6 +5182,22 @@ function SystemView({
               <div className="chip-list">
                 {plugin.scopes.slice(0, 5).map((scope) => <span key={scope}>{scope}</span>)}
               </div>
+            </article>
+          ))}
+          {(capabilityStatus?.integrations ?? []).map((integration) => (
+            <IntegrationCard integration={integration} key={integration.id} />
+          ))}
+          {(capabilityStatus?.recommendations ?? []).slice(0, 4).map((recommendation) => (
+            <article className="capability-card recommendation-card" key={recommendation.id}>
+              <div className="device-card-header">
+                <div>
+                  <span className="section-label">{recommendation.priority} priority</span>
+                  <strong>{recommendation.title}</strong>
+                </div>
+                <span className="backend-status setup_required">Recommended</span>
+              </div>
+              <p>{recommendation.detail}</p>
+              <small>{recommendation.action}</small>
             </article>
           ))}
           {!capabilityStatus && <div className="empty-line">Capability registry has not loaded yet.</div>}
@@ -5036,6 +5495,33 @@ function HardwareControlCenterPanel({ controlCenter }: { controlCenter: Hardware
         </div>
       </div>
     </section>
+  );
+}
+
+function IntegrationCard({ integration }: { integration: LocalIntegrationRecord }) {
+  return (
+    <article className="capability-card integration-card">
+      <div className="device-card-header">
+        <div>
+          <span className="section-label">{integration.host} / {integration.category}</span>
+          <strong>{integration.name}</strong>
+        </div>
+        <span className={`backend-status ${statusClassName(integration.status)}`}>
+          {integration.status}
+        </span>
+      </div>
+      <p>{integration.description}</p>
+      <small>{integration.detail}</small>
+      <div className="chip-list">
+        {integration.detected_tools.slice(0, 5).map((tool) => <span key={tool}>{tool}</span>)}
+        {integration.detected_tools.length === 0 && <span>No tools detected</span>}
+      </div>
+      {integration.next_steps.length > 0 && (
+        <div className="integration-next-steps">
+          {integration.next_steps.slice(0, 2).map((step) => <span key={step}>{step}</span>)}
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -5504,10 +5990,40 @@ function inferMediaJobType(content: string): JobType {
   return 'image';
 }
 
+function inferMediaGenerationMode(content: string): MediaGenerationMode | null {
+  const lowered = content.toLowerCase();
+  const mentionsMinecraft = /\b(minecraft|mc\s*1\.7\.10|1\.7\.10|blockbench|resource\s*pack|texture\s*pack|schematic|structure|biome|worldgen)\b/.test(lowered);
+  if (mentionsMinecraft) {
+    if (/\b(texture\s*pack|resource\s*pack|pack)\b/.test(lowered)) {
+      return 'minecraft_texture_pack';
+    }
+    if (/\b(world|worldgen|biome|dimension|terrain|seed)\b/.test(lowered)) {
+      return 'minecraft_world';
+    }
+    if (/\b(structure|schematic|dungeon|village|tower|castle|building|base)\b/.test(lowered)) {
+      return 'minecraft_structure';
+    }
+    if (/\b(model|entity|mob|blockbench|json\s*model|java\s*model)\b/.test(lowered)) {
+      return 'minecraft_model';
+    }
+    if (/\b(texture|block|item|sprite|tileable|pixel\s*art)\b/.test(lowered)) {
+      return 'minecraft_texture';
+    }
+    return 'minecraft_structure';
+  }
+  if (/\b(product\s*render|shopify\s*(image|photo|listing|thumbnail)|listing\s*(image|render)|toybox3d\s*(render|listing))\b/.test(lowered)) {
+    return 'product_render';
+  }
+  if (/\b(social\s*media|instagram|tiktok|facebook|x post|tweet|caption|reel|shorts|campaign|ad copy)\b/.test(lowered)) {
+    return 'social_media_content';
+  }
+  return null;
+}
+
 function isMediaGenerationPrompt(content: string): boolean {
   const lowered = content.toLowerCase();
   return /\b(generate|make|create|render|draw|design|turn|convert|animate|produce)\b/.test(lowered)
-    && /\b(image|picture|photo|art|poster|video|animation|movie|clip|3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt|modly|comfy|wan)\b/.test(lowered);
+    && /\b(image|picture|photo|art|poster|video|animation|movie|clip|3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt|modly|comfy|wan|minecraft|texture|texture\s*pack|resource\s*pack|blockbench|world|structure|schematic|product\s*render|shopify\s*listing|social\s*media|caption|campaign)\b/.test(lowered);
 }
 
 function mediaJobTitle(content: string, jobType: JobType) {

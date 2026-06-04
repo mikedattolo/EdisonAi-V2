@@ -2788,6 +2788,265 @@ button {
   gap: 14px;
 }
 
+.media-panel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.media-generator-panel,
+.minecraft-suite-panel,
+.toybox-manager-panel {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.media-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.media-mode-card {
+  display: grid;
+  gap: 7px;
+  min-height: 116px;
+  padding: 12px;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1f2937;
+  text-align: left;
+  cursor: pointer;
+}
+
+.media-mode-card:hover,
+.media-mode-card.active {
+  border-color: #70c9b6;
+  background: #eef9f5;
+  box-shadow: 0 0 0 3px rgba(112, 201, 182, 0.18);
+}
+
+.media-mode-card span {
+  color: #607086;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.media-mode-card strong {
+  color: #17212b;
+  line-height: 1.2;
+}
+
+.media-mode-card small {
+  color: #536278;
+  line-height: 1.35;
+}
+
+.media-generate-form {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid #e0e5ec;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.media-generate-form > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+
+.media-generate-form p,
+.panel-copy {
+  margin: 0;
+  color: #536278;
+  line-height: 1.5;
+}
+
+.media-generate-form textarea {
+  min-height: 132px;
+  padding: 12px;
+  border: 1px solid #cdd5e0;
+  border-radius: 8px;
+  color: #17212b;
+  resize: vertical;
+  outline: none;
+}
+
+.media-generate-form textarea:focus {
+  border-color: #55baa8;
+  box-shadow: 0 0 0 3px #dff6f0;
+}
+
+.reference-upload-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-column: 2;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.reference-upload-row label,
+.reference-upload-row span {
+  color: #617085;
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.reference-upload-row input {
+  min-width: 0;
+  color: #425067;
+}
+
+.media-generate-form .apply-button {
+  grid-column: 2;
+  justify-self: end;
+}
+
+.suite-intro-grid,
+.toybox-ops-grid,
+.toybox-live-grid,
+.media-output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.suite-intro-grid article,
+.workflow-card,
+.toybox-page-card,
+.toybox-architecture-panel,
+.toybox-device-row {
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.suite-intro-grid article {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.suite-intro-grid p,
+.workflow-card p,
+.toybox-page-card p {
+  margin: 0;
+  color: #536278;
+  line-height: 1.45;
+}
+
+.minecraft-workflow-grid,
+.toybox-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workflow-card,
+.toybox-page-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 180px;
+  padding: 14px;
+}
+
+.workflow-card > div,
+.toybox-page-card > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.workflow-card span {
+  color: #697487;
+  font-size: 0.84rem;
+}
+
+.toybox-page-card svg {
+  color: #17806e;
+}
+
+.toybox-architecture-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.toybox-architecture-panel ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: #536278;
+  line-height: 1.45;
+}
+
+.toybox-device-list {
+  display: grid;
+  gap: 10px;
+}
+
+.toybox-device-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+}
+
+.toybox-device-row div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.toybox-device-row span:not(.backend-status),
+.toybox-device-row small {
+  color: #697487;
+  line-height: 1.35;
+}
+
+.integration-card .chip-list {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.integration-next-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.integration-next-steps span {
+  padding-left: 9px;
+  border-left: 3px solid #9fd9cb;
+  color: #536278;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.recommendation-card {
+  background: #fffdf8;
+}
+
 .media-status-card,
 .job-list-panel,
 .job-row {
@@ -3059,6 +3318,12 @@ button {
   .command-output-grid,
   .strategy-grid,
   .media-status-row,
+  .media-mode-grid,
+  .minecraft-workflow-grid,
+  .toybox-flow-grid,
+  .toybox-ops-grid,
+  .toybox-live-grid,
+  .media-output-grid,
   .settings-stack,
   .fan-controller-grid,
   .capability-grid,
@@ -4253,6 +4518,7 @@ button {
   .rag-chat-controls,
   .memory-search-form,
   .memory-import-form.two-column,
+  .media-generate-form,
   .text-import {
     grid-template-columns: 1fr;
   }
@@ -4260,8 +4526,27 @@ button {
   .memory-import-form.two-column label,
   .text-import label,
   .text-import textarea,
-  .text-import button {
+  .text-import button,
+  .reference-upload-row,
+  .media-generate-form .apply-button {
     grid-column: auto;
+  }
+
+  .media-panel-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .media-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reference-upload-row {
+    grid-template-columns: 1fr;
+  }
+
+  .toybox-device-row {
+    grid-template-columns: 1fr;
   }
 
   .chat-surface {

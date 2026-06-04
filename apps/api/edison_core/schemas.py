@@ -158,6 +158,17 @@ class AgentRunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class MediaGenerationMode(str, Enum):
+    IMAGE = "image"
+    MINECRAFT_TEXTURE = "minecraft_texture"
+    MINECRAFT_MODEL = "minecraft_model"
+    MINECRAFT_WORLD = "minecraft_world"
+    MINECRAFT_STRUCTURE = "minecraft_structure"
+    MINECRAFT_TEXTURE_PACK = "minecraft_texture_pack"
+    PRODUCT_RENDER = "product_render"
+    SOCIAL_MEDIA_CONTENT = "social_media_content"
+
+
 class AgentRunEventKind(str, Enum):
     STATUS = "status"
     PLAN = "plan"
@@ -629,6 +640,27 @@ class MCPServerRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class MediaGenerationRequest(BaseModel):
+    mode: MediaGenerationMode
+    prompt: str = Field(min_length=1, max_length=4000)
+    title: str | None = Field(default=None, max_length=180)
+    reference_artifact_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MediaGenerationModeRecord(BaseModel):
+    id: MediaGenerationMode
+    label: str
+    group: Literal["core", "minecraft", "commerce", "social"]
+    job_type: JobType
+    backend: str
+    description: str
+    reference_supported: bool = False
+    output_hint: str
+    prompt_hint: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class PluginIntegrationRecord(BaseModel):
     id: str
     name: str
@@ -641,10 +673,96 @@ class PluginIntegrationRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class LocalIntegrationRecord(BaseModel):
+    id: str
+    name: str
+    category: Literal[
+        "mcp",
+        "local-ai",
+        "media",
+        "minecraft",
+        "3d-printing",
+        "cad",
+        "commerce",
+        "developer",
+        "automation",
+        "hardware",
+        "api",
+        "notifications",
+    ]
+    status: Literal["ready", "staged", "missing", "disabled"]
+    host: str
+    description: str
+    detected_tools: list[str] = Field(default_factory=list)
+    paths: list[str] = Field(default_factory=list)
+    detail: str
+    next_steps: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntegrationRecommendation(BaseModel):
+    id: str
+    title: str
+    priority: Literal["high", "medium", "low"]
+    detail: str
+    action: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntegrationScanReport(BaseModel):
+    service: str = "integration-discovery"
+    checked_at: datetime = Field(default_factory=utc_now)
+    integrations: list[LocalIntegrationRecord] = Field(default_factory=list)
+    recommendations: list[IntegrationRecommendation] = Field(default_factory=list)
+    detail: str
+
+
+class ToyBoxProductionLane(BaseModel):
+    id: str
+    title: str
+    status: Literal["ready", "staged", "missing"]
+    description: str
+    connected_integrations: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+
+
+class ToyBoxPrinterRecord(BaseModel):
+    id: str
+    name: str
+    kind: Literal["bambu", "orca", "cura", "dymo", "generic"]
+    status: Literal["ready", "staged", "missing"]
+    role: Literal["printer", "slicer", "label_printer", "camera", "desktop_bridge"]
+    detail: str
+    paths: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxNotificationChannel(BaseModel):
+    id: str
+    name: str
+    status: Literal["ready", "staged", "missing"]
+    target: Literal["sms", "push", "email", "desktop"]
+    detail: str
+    setup_hint: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToyBoxManagerStatus(BaseModel):
+    service: str = "toybox3d-manager"
+    checked_at: datetime = Field(default_factory=utc_now)
+    lanes: list[ToyBoxProductionLane] = Field(default_factory=list)
+    printers: list[ToyBoxPrinterRecord] = Field(default_factory=list)
+    notification_channels: list[ToyBoxNotificationChannel] = Field(default_factory=list)
+    recommendations: list[IntegrationRecommendation] = Field(default_factory=list)
+    detail: str
+
+
 class CapabilityStatus(BaseModel):
     service: str = "capabilities"
     mcp_servers: list[MCPServerRecord] = Field(default_factory=list)
     plugins: list[PluginIntegrationRecord] = Field(default_factory=list)
+    integrations: list[LocalIntegrationRecord] = Field(default_factory=list)
+    recommendations: list[IntegrationRecommendation] = Field(default_factory=list)
     knowledge_presets: list[str] = Field(default_factory=list)
     attribution: list[str] = Field(default_factory=list)
     detail: str
