@@ -61,6 +61,21 @@
       "notes": "Repository inspection, patching, debugging, and test interpretation lane."
     },
     {
+      "id": "qwen3.6-35b-a3b-hauhaucs-coding",
+      "display_name": "Qwen3.6 35B A3B HauhauCS Coding",
+      "provider": "local-openai-compatible",
+      "status": "not_configured",
+      "capabilities": ["chat", "coding", "tool-calling", "long-context", "JSON-structured-output"],
+      "license": "Apache-2.0",
+      "tags": ["coding", "repo", "creator-planning", "huggingface", "qwen", "gguf"],
+      "safety_notes": "Use for Code Space edits, creator planning, captions, metadata, and workflow assistance. Keep media generation policies enforced at tool boundaries.",
+      "context_window": 32768,
+      "max_output_tokens": 8192,
+      "endpoint_url": "http://127.0.0.1:8014/v1",
+      "preferred_gpu": "RTX 3090",
+      "notes": "Hugging Face model candidate HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive. Serve locally with llama.cpp, Ollama, or vLLM-compatible OpenAI API before marking ready."
+    },
+    {
       "id": "local-vision",
       "display_name": "Local Vision",
       "provider": "local-openai-compatible",

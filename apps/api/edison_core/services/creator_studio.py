@@ -38,6 +38,7 @@ class CreatorStudioService:
                 status="setup_required",
                 detail="Creator Studio asset path is not configured.",
                 guardrails=CREATOR_GUARDRAILS,
+                metadata={"planning_model": "qwen3.6-35b-a3b-hauhaucs-coding"},
             )
 
         root = _normalize_creator_root(configured_path)
@@ -47,7 +48,10 @@ class CreatorStudioService:
                 source_path=str(configured_path),
                 detail="Creator Studio assets were not found. Sync the safe PixelAI creator bundle to Edison first.",
                 guardrails=CREATOR_GUARDRAILS,
-                metadata={"expected_layout": "creator_studio/templates, creator_studio/config, creator_studio/data"},
+                metadata={
+                    "expected_layout": "creator_studio/templates, creator_studio/config, creator_studio/data",
+                    "planning_model": "qwen3.6-35b-a3b-hauhaucs-coding",
+                },
             )
 
         datasets = _discover_datasets(root)
@@ -73,6 +77,7 @@ class CreatorStudioService:
                 "supports_photo": True,
                 "supports_video": True,
                 "supports_dataset_plans": True,
+                "planning_model": "qwen3.6-35b-a3b-hauhaucs-coding",
             },
         )
 

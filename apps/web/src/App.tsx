@@ -79,6 +79,7 @@ import type {
   ToyBoxManagerStatus,
   WorkspaceCommand,
   WorkspaceCommandRunResult,
+  WorkspaceCopilotTaskResult,
   WorkspaceEntry,
   WorkspaceFile,
   WorkspaceIndexSearchMatch,
@@ -264,6 +265,7 @@ export default function App() {
   const [workspaceDraftContent, setWorkspaceDraftContent] = useState('');
   const [workspacePatchPreview, setWorkspacePatchPreview] = useState<WorkspacePatchPreview | null>(null);
   const [workspaceCommandResult, setWorkspaceCommandResult] = useState<WorkspaceCommandRunResult | null>(null);
+  const [workspaceCopilotResult, setWorkspaceCopilotResult] = useState<WorkspaceCopilotTaskResult | null>(null);
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState('');
   const [workspaceSearchResults, setWorkspaceSearchResults] = useState<WorkspaceSearchMatch[]>([]);
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus | null>(null);
@@ -1147,6 +1149,7 @@ export default function App() {
     setWorkspaceDraftContent('');
     setWorkspacePatchPreview(null);
     setWorkspaceCommandResult(null);
+    setWorkspaceCopilotResult(null);
     setWorkspaceSearchResults([]);
     await refreshWorkspaceSurface('', rootId);
   }
@@ -1250,22 +1253,55 @@ export default function App() {
     }
   }
 
-  async function runWorkspaceCommand(command: WorkspaceCommand) {
+  async function runWorkspaceCommand(command: WorkspaceCommand | string) {
+    const commandPayload =
+      typeof command === 'string'
+        ? { command: command.trim(), cwd: '.', timeout_seconds: 120, approved: true }
+        : { command: command.command, cwd: command.cwd, timeout_seconds: 120, approved: true };
+    if (!commandPayload.command) {
+      return;
+    }
     setIsWorkspaceBusy(true);
     setError(null);
     try {
-      const result = await edisonApi.runWorkspaceCommand(
-        {
-          command: command.command,
-          cwd: command.cwd,
-          timeout_seconds: 120,
-          approved: true,
-        },
-        activeWorkspaceRootId,
-      );
+      const result = await edisonApi.runWorkspaceCommand(commandPayload, activeWorkspaceRootId);
       setWorkspaceCommandResult(result);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Command run failed');
+    } finally {
+      setIsWorkspaceBusy(false);
+    }
+  }
+
+  async function runWorkspaceCopilotTask(instruction: string, runCommands: boolean) {
+    const cleanInstruction = instruction.trim();
+    if (!cleanInstruction) {
+      return;
+    }
+    setIsWorkspaceBusy(true);
+    setError(null);
+    try {
+      const result = await edisonApi.runWorkspaceCopilotTask(
+        {
+          instruction: cleanInstruction,
+          target_paths: workspaceFile?.path ? [workspaceFile.path] : [],
+          preferred_model: 'qwen3.6-35b-a3b-hauhaucs-coding',
+          auto_apply: true,
+          run_commands: runCommands,
+          max_context_files: 8,
+        },
+        activeWorkspaceRootId,
+      );
+      setWorkspaceCopilotResult(result);
+      const firstFile = result.changes.find((change) => change.file)?.file;
+      if (firstFile) {
+        setWorkspaceFile(firstFile);
+        setWorkspaceDraftContent(firstFile.content);
+        setWorkspacePatchPreview(null);
+      }
+      await refreshWorkspaceSurface(workspacePath);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Code Space Copilot task failed');
     } finally {
       setIsWorkspaceBusy(false);
     }
@@ -1676,6 +1712,7 @@ export default function App() {
             sessionState={sessionState}
             status={status}
             workspaceCommandResult={workspaceCommandResult}
+            workspaceCopilotResult={workspaceCopilotResult}
             workspaceEntries={workspaceEntries}
             workspaceDraftContent={workspaceDraftContent}
             workspaceFile={workspaceFile}
@@ -1694,6 +1731,7 @@ export default function App() {
             setWorkspaceSearchQuery={setWorkspaceSearchQuery}
             onApplyWorkspacePatch={applyWorkspacePatch}
             onPreviewWorkspacePatch={previewWorkspacePatch}
+            onRunWorkspaceCopilotTask={runWorkspaceCopilotTask}
             onRunWorkspaceCommand={runWorkspaceCommand}
             onAddChatContextPath={addChatContextPath}
           />
@@ -2651,6 +2689,7 @@ function WorkbenchView({
   onRefreshKnowledge,
   onApplyWorkspacePatch,
   onPreviewWorkspacePatch,
+  onRunWorkspaceCopilotTask,
   onRunWorkspaceCommand,
   onAddChatContextPath,
   onRefreshMedia,
@@ -2664,6 +2703,7 @@ function WorkbenchView({
   sessionState,
   status,
   workspaceCommandResult,
+  workspaceCopilotResult,
   workspaceEntries,
   workspaceDraftContent,
   workspaceFile,
@@ -2722,7 +2762,8 @@ function WorkbenchView({
   onRefreshKnowledge: () => Promise<void>;
   onApplyWorkspacePatch: () => Promise<void>;
   onPreviewWorkspacePatch: () => Promise<void>;
-  onRunWorkspaceCommand: (command: WorkspaceCommand) => Promise<void>;
+  onRunWorkspaceCopilotTask: (instruction: string, runCommands: boolean) => Promise<void>;
+  onRunWorkspaceCommand: (command: WorkspaceCommand | string) => Promise<void>;
   onAddChatContextPath: (path: string) => void;
   onRefreshMedia: () => Promise<void>;
   onRefreshSystem: () => Promise<void>;
@@ -2735,6 +2776,7 @@ function WorkbenchView({
   sessionState: SessionStateRecord | null;
   status: SystemStatus | null;
   workspaceCommandResult: WorkspaceCommandRunResult | null;
+  workspaceCopilotResult: WorkspaceCopilotTaskResult | null;
   workspaceEntries: WorkspaceEntry[];
   workspaceDraftContent: string;
   workspaceFile: WorkspaceFile | null;
@@ -2784,6 +2826,7 @@ function WorkbenchView({
       <CodeWorkspaceView
         activeRootId={activeWorkspaceRootId}
         commandResult={workspaceCommandResult}
+        copilotResult={workspaceCopilotResult}
         entries={workspaceEntries}
         draftContent={workspaceDraftContent}
         file={workspaceFile}
@@ -2793,6 +2836,7 @@ function WorkbenchView({
         onOpenEntry={onOpenWorkspaceEntry}
         onParent={onWorkspaceParent}
         onPreviewPatch={onPreviewWorkspacePatch}
+        onRunCopilotTask={onRunWorkspaceCopilotTask}
         onRefresh={onRefreshWorkspace}
         onRunCommand={onRunWorkspaceCommand}
         onAddChatContextPath={onAddChatContextPath}
@@ -2957,6 +3001,7 @@ function CreatorStudioView({
   const datasets = creatorStatus?.datasets ?? [];
   const restrictedAssets = creatorStatus?.restricted_assets ?? [];
   const restrictedModelCount = restrictedAssets.filter((asset) => asset.kind === 'model').length;
+  const creatorPlanningModel = String(creatorStatus?.metadata.planning_model ?? 'qwen3.6-35b-a3b-hauhaucs-coding');
   const activeDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) ?? datasets.find((dataset) => dataset.status === 'ready') ?? datasets[0] ?? null;
   const creatorJobs = jobs.filter((job) => String(job.metadata.generation_mode ?? '').startsWith('creator_'));
   const creatorJobIds = new Set(creatorJobs.map((job) => job.id));
@@ -2969,6 +3014,7 @@ function CreatorStudioView({
     ['Datasets', String(datasets.filter((dataset) => dataset.status === 'ready').length), `${datasets.length} detected safe dataset folder(s)`],
     ['Templates', String(creatorStatus?.workflow_templates.length ?? 0), (creatorStatus?.workflow_templates ?? []).slice(0, 2).join(', ') || 'No workflow templates found'],
     ['Restricted Assets', String(restrictedAssets.length), `${restrictedModelCount} model candidate(s), copied workflows/scripts/configs`],
+    ['Assistant', 'Qwen coding', creatorPlanningModel],
     ['Backends', `${mediaStatus?.comfyui.status ?? 'offline'} / ${mediaStatus?.wan22.status ?? 'offline'}`, 'Photo via ComfyUI, video via Wan/ComfyUI'],
   ];
 
@@ -2984,6 +3030,7 @@ function CreatorStudioView({
       creator_trigger_token: activeDataset?.trigger_token ?? 'creator_ai',
       safety_profile: 'sfw_virtual_creator',
       source: 'creator-studio',
+      planning_model: creatorPlanningModel,
       pixelai_source_path: creatorStatus?.normalized_root ?? creatorStatus?.source_path ?? null,
     });
     setPrompt('');
@@ -4260,6 +4307,7 @@ function SearchCompareView() {
 function CodeWorkspaceView({
   activeRootId,
   commandResult,
+  copilotResult,
   entries,
   draftContent,
   file,
@@ -4269,6 +4317,7 @@ function CodeWorkspaceView({
   onOpenEntry,
   onParent,
   onPreviewPatch,
+  onRunCopilotTask,
   onRefresh,
   onRunCommand,
   onAddChatContextPath,
@@ -4286,6 +4335,7 @@ function CodeWorkspaceView({
 }: {
   activeRootId: string;
   commandResult: WorkspaceCommandRunResult | null;
+  copilotResult: WorkspaceCopilotTaskResult | null;
   entries: WorkspaceEntry[];
   draftContent: string;
   file: WorkspaceFile | null;
@@ -4295,8 +4345,9 @@ function CodeWorkspaceView({
   onOpenEntry: (entry: WorkspaceEntry) => Promise<void>;
   onParent: () => Promise<void>;
   onPreviewPatch: () => Promise<void>;
+  onRunCopilotTask: (instruction: string, runCommands: boolean) => Promise<void>;
   onRefresh: () => Promise<void>;
-  onRunCommand: (command: WorkspaceCommand) => Promise<void>;
+  onRunCommand: (command: WorkspaceCommand | string) => Promise<void>;
   onAddChatContextPath: (path: string) => void;
   onSearch: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onSelectRoot: (rootId: string) => Promise<void>;
@@ -4312,6 +4363,9 @@ function CodeWorkspaceView({
 }) {
   const [projectName, setProjectName] = useState('');
   const [projectPrompt, setProjectPrompt] = useState('');
+  const [copilotInstruction, setCopilotInstruction] = useState('');
+  const [copilotRunCommands, setCopilotRunCommands] = useState(false);
+  const [customCommand, setCustomCommand] = useState('');
   const topLanguages = Object.entries(summary?.languages ?? {}).slice(0, 3);
   const commandPreview = scan?.commands.slice(0, 6) ?? [];
   const entrypointPreview = scan?.entrypoints.slice(0, 5) ?? [];
@@ -4324,6 +4378,24 @@ function CodeWorkspaceView({
     await onCreateProject(projectName, projectPrompt);
     setProjectName('');
     setProjectPrompt('');
+  }
+
+  async function handleCopilotTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!copilotInstruction.trim()) {
+      return;
+    }
+    await onRunCopilotTask(copilotInstruction, copilotRunCommands);
+    setCopilotInstruction('');
+  }
+
+  async function handleCustomCommand(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!customCommand.trim()) {
+      return;
+    }
+    await onRunCommand(customCommand);
+    setCustomCommand('');
   }
 
   return (
@@ -4372,6 +4444,69 @@ function CodeWorkspaceView({
             Create
           </button>
         </form>
+      </section>
+
+      <section className="workspace-copilot-panel" aria-label="Code Space Copilot">
+        <div className="section-heading">
+          <Sparkles size={18} />
+          <h3>Copilot Task</h3>
+        </div>
+        <form className="workspace-copilot-form" onSubmit={(event) => void handleCopilotTask(event)}>
+          <textarea
+            aria-label="Code Space Copilot instruction"
+            onChange={(event) => setCopilotInstruction(event.target.value)}
+            placeholder="Ask Edison to edit this repo, create files, fix a bug, add a feature, or explain what to change."
+            value={copilotInstruction}
+          />
+          <div className="workspace-copilot-actions">
+            <label className="inline-toggle">
+              <input
+                checked={copilotRunCommands}
+                onChange={(event) => setCopilotRunCommands(event.target.checked)}
+                type="checkbox"
+              />
+              Run safe validation commands
+            </label>
+            <button className="apply-button icon-text-button" disabled={isBusy || !copilotInstruction.trim()} type="submit">
+              <Send size={16} />
+              Apply Task
+            </button>
+          </div>
+        </form>
+        {copilotResult && (
+          <div className="workspace-copilot-result">
+            <div>
+              <span className="section-label">Latest Result</span>
+              <strong>{copilotResult.summary}</strong>
+              <span>{copilotResult.model_id ?? 'local coding model'} / {copilotResult.status.replace('_', ' ')}</span>
+            </div>
+            <div className="copilot-change-list">
+              {copilotResult.changes.map((change) => (
+                <button
+                  className="copilot-change-row"
+                  key={`${change.path}-${change.applied ? 'applied' : 'preview'}`}
+                  onClick={() => void onOpenEntry({ path: change.path, name: change.path.split('/').pop() ?? change.path, kind: 'file' })}
+                  type="button"
+                >
+                  <FileCode2 size={16} />
+                  <div>
+                    <strong>{change.path}</strong>
+                    <span>{(change.error ?? change.summary) || (change.applied ? 'Applied' : 'Previewed')}</span>
+                  </div>
+                  <small className={`job-status ${change.error ? 'error' : change.applied ? 'complete' : 'queued'}`}>
+                    {change.error ? 'error' : change.applied ? 'applied' : 'preview'}
+                  </small>
+                </button>
+              ))}
+              {copilotResult.changes.length === 0 && <div className="empty-line">No file changes returned</div>}
+            </div>
+            {copilotResult.followups.length > 0 && (
+              <div className="copilot-followups">
+                {copilotResult.followups.map((followup) => <span key={followup}>{followup}</span>)}
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <div className="code-overview-row">
@@ -4429,6 +4564,17 @@ function CodeWorkspaceView({
             ))}
             {commandPreview.length === 0 && <div className="empty-line">No commands</div>}
           </div>
+          <form className="workspace-command-form" onSubmit={(event) => void handleCustomCommand(event)}>
+            <input
+              aria-label="Run a safe workspace command"
+              onChange={(event) => setCustomCommand(event.target.value)}
+              placeholder="git status, python -m pytest, npm run build"
+              value={customCommand}
+            />
+            <button className="secondary-button" disabled={isBusy || !customCommand.trim()} type="submit">
+              Run
+            </button>
+          </form>
         </article>
         <article className="intelligence-card">
           <div className="section-heading">

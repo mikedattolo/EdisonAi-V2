@@ -598,6 +598,36 @@ class WorkspaceCommandRunResult(BaseModel):
     output_truncated: bool = False
 
 
+class WorkspaceCopilotTaskRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=8000)
+    target_paths: list[str] = Field(default_factory=list, max_length=12)
+    preferred_model: str | None = "qwen3.6-35b-a3b-hauhaucs-coding"
+    auto_apply: bool = True
+    run_commands: bool = False
+    max_context_files: int = Field(default=8, ge=1, le=20)
+
+
+class WorkspaceCopilotChange(BaseModel):
+    path: str
+    summary: str = ""
+    applied: bool = False
+    preview: WorkspacePatchPreview | None = None
+    file: WorkspaceFile | None = None
+    error: str | None = None
+
+
+class WorkspaceCopilotTaskResult(BaseModel):
+    job: JobRecord
+    status: Literal["complete", "setup_required", "error"]
+    instruction: str
+    model_id: str | None = None
+    summary: str
+    changes: list[WorkspaceCopilotChange] = Field(default_factory=list)
+    commands: list[WorkspaceCommandRunResult] = Field(default_factory=list)
+    followups: list[str] = Field(default_factory=list)
+    raw_response: str | None = None
+
+
 class KnowledgeSourceRecord(BaseModel):
     id: str
     kind: Literal["text", "url", "wikipedia", "local_file", "preset"]

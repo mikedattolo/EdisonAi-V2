@@ -139,6 +139,54 @@ def test_workspace_command_route_runs_detected_command_and_records_job(tmp_path)
     assert events.json()[-1]["metadata"]["exit_code"] == 0
 
 
+def test_workspace_command_route_runs_safe_custom_command(tmp_path):
+    (tmp_path / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        comfyui_base_url="",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    result = client.post(
+        "/api/v1/workspace/commands/run",
+        json={"command": "python -m compileall .", "cwd": ".", "timeout_seconds": 30, "approved": True},
+    )
+
+    assert result.status_code == 200
+    assert result.json()["status"] == "complete"
+    assert result.json()["job"]["backend"] == "workspace-command"
+
+
+def test_workspace_copilot_task_creates_fallback_file_when_model_not_ready(tmp_path):
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        comfyui_base_url="",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/v1/workspace/copilot/tasks",
+        json={
+            "instruction": "Create a small hello file for this repo",
+            "auto_apply": True,
+            "run_commands": False,
+        },
+    )
+    body = response.json()
+
+    assert response.status_code == 201
+    assert body["status"] == "setup_required"
+    assert body["job"]["backend"] == "workspace-copilot"
+    assert body["changes"][0]["applied"] is True
+    assert body["changes"][0]["path"].startswith("edison-copilot/")
+    assert (tmp_path / body["changes"][0]["path"]).exists()
+
+
 def test_workspace_instruction_and_index_routes(tmp_path):
     src = tmp_path / "apps" / "api"
     src.mkdir(parents=True)

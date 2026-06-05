@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from edison_core.api.dependencies import get_generation_store, get_workspace_project_manager
+from edison_core.api.dependencies import get_generation_store, get_model_gateway, get_workspace_project_manager
 from edison_core.schemas import (
     JobCreate,
     JobStatus,
@@ -14,6 +14,8 @@ from edison_core.schemas import (
     WorkspaceFile,
     WorkspaceCommandRunRequest,
     WorkspaceCommandRunResult,
+    WorkspaceCopilotTaskRequest,
+    WorkspaceCopilotTaskResult,
     WorkspacePatchApplyRequest,
     WorkspacePatchApplyResult,
     WorkspacePatchPreview,
@@ -39,6 +41,8 @@ from edison_core.services.workspace_tools import (
     WorkspaceUnsupportedFileError,
 )
 from edison_core.services.generation_store import GenerationStore
+from edison_core.services.model_gateway import ModelGateway
+from edison_core.services.workspace_copilot import WorkspaceCopilot
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 
 
@@ -342,6 +346,38 @@ def run_workspace_command(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
     except WorkspaceNotFoundError as error:
         store.update_job_status(job.id, JobStatus.CANCELLED, str(error), {"command": payload.command, "cwd": payload.cwd})
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+
+@router.post("/copilot/tasks", response_model=WorkspaceCopilotTaskResult, status_code=status.HTTP_201_CREATED)
+def run_workspace_copilot_task(
+    payload: WorkspaceCopilotTaskRequest,
+    root_id: str = Query("app"),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+    store: GenerationStore = Depends(get_generation_store),
+    gateway: ModelGateway = Depends(get_model_gateway),
+) -> WorkspaceCopilotTaskResult:
+    workspace = _workspace(root_id, projects)
+    job = store.create_job(
+        JobCreate(
+            job_type=JobType.CODE,
+            title=f"Code Space task: {payload.instruction[:80]}",
+            backend="workspace-copilot",
+            metadata={
+                "root_id": root_id,
+                "preferred_model": payload.preferred_model,
+                "auto_apply": payload.auto_apply,
+                "run_commands": payload.run_commands,
+            },
+        )
+    )
+    try:
+        return WorkspaceCopilot(workspace, gateway, store).run(payload, job)
+    except WorkspaceAccessError as error:
+        store.update_job_status(job.id, JobStatus.CANCELLED, str(error), {"root_id": root_id})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except WorkspaceNotFoundError as error:
+        store.update_job_status(job.id, JobStatus.CANCELLED, str(error), {"root_id": root_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
 

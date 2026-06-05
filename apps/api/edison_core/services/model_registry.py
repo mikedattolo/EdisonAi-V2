@@ -21,7 +21,10 @@ class ModelRegistry:
         if not registry_path.exists():
             return cls(default_profiles())
         payload = json.loads(registry_path.read_text(encoding="utf-8"))
-        return cls(ModelProfile(**item) for item in payload.get("models", []))
+        profiles = [ModelProfile(**item) for item in payload.get("models", [])]
+        existing_ids = {profile.id for profile in profiles}
+        profiles.extend(profile for profile in builtin_extension_profiles() if profile.id not in existing_ids)
+        return cls(profiles)
 
     def list_profiles(self) -> list[ModelProfile]:
         return sorted(self._profiles.values(), key=lambda profile: profile.id)
@@ -102,6 +105,38 @@ def default_profiles() -> list[ModelProfile]:
             max_output_tokens=4096,
             endpoint_url="http://127.0.0.1:8002/v1",
             preferred_gpu="RTX 3090",
+        )
+    ]
+
+
+def builtin_extension_profiles() -> list[ModelProfile]:
+    return [
+        ModelProfile(
+            id="qwen3.6-35b-a3b-hauhaucs-coding",
+            display_name="Qwen3.6 35B A3B HauhauCS Coding",
+            provider="local-openai-compatible",
+            status=ModelStatus.NOT_CONFIGURED,
+            capabilities=[
+                ModelCapability.CHAT,
+                ModelCapability.CODING,
+                ModelCapability.TOOL_CALLING,
+                ModelCapability.LONG_CONTEXT,
+                ModelCapability.JSON_STRUCTURED_OUTPUT,
+            ],
+            license="Apache-2.0",
+            tags=["coding", "repo", "creator-planning", "huggingface", "qwen", "gguf"],
+            safety_notes=(
+                "Use for Code Space edits, creator planning, captions, metadata, and workflow assistance. "
+                "Keep media generation policies enforced at tool boundaries."
+            ),
+            context_window=32768,
+            max_output_tokens=8192,
+            endpoint_url="http://127.0.0.1:8014/v1",
+            preferred_gpu="RTX 3090",
+            notes=(
+                "Hugging Face model candidate HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive. "
+                "Serve locally with llama.cpp, Ollama, or a vLLM-compatible OpenAI API before marking ready."
+            ),
         )
     ]
 

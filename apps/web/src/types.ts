@@ -682,6 +682,36 @@ export interface WorkspaceCommandRunResult {
   output_truncated: boolean;
 }
 
+export interface WorkspaceCopilotTaskRequest {
+  instruction: string;
+  target_paths?: string[];
+  preferred_model?: string | null;
+  auto_apply?: boolean;
+  run_commands?: boolean;
+  max_context_files?: number;
+}
+
+export interface WorkspaceCopilotChange {
+  path: string;
+  summary: string;
+  applied: boolean;
+  preview?: WorkspacePatchPreview | null;
+  file?: WorkspaceFile | null;
+  error?: string | null;
+}
+
+export interface WorkspaceCopilotTaskResult {
+  job: JobRecord;
+  status: 'complete' | 'setup_required' | 'error';
+  instruction: string;
+  model_id?: string | null;
+  summary: string;
+  changes: WorkspaceCopilotChange[];
+  commands: WorkspaceCommandRunResult[];
+  followups: string[];
+  raw_response?: string | null;
+}
+
 export interface KnowledgeSourceRecord {
   id: string;
   kind: 'text' | 'url' | 'wikipedia' | 'local_file' | 'preset';

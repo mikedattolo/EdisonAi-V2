@@ -797,7 +797,9 @@ class WorkspaceTools:
 
     def _is_detected_command(self, command: str, cwd: str) -> bool:
         normalized_cwd = cwd.strip() or "."
-        return any(candidate.command == command and candidate.cwd == normalized_cwd for candidate in self.scan().commands)
+        if any(candidate.command == command and candidate.cwd == normalized_cwd for candidate in self.scan().commands):
+            return True
+        return _is_safe_workspace_command(command)
 
     def _truncate_output(self, output: str, limit: int = 20_000) -> tuple[str, bool]:
         if len(output) <= limit:
@@ -861,3 +863,35 @@ class WorkspaceTools:
 
     def _modified_at(self, timestamp: float) -> datetime:
         return datetime.fromtimestamp(timestamp, timezone.utc)
+
+
+def _is_safe_workspace_command(command: str) -> bool:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    executable = Path(parts[0]).name.lower()
+    if executable == "git":
+        return len(parts) >= 2 and parts[1] in {"status", "diff", "log", "branch", "show"}
+    if executable in {"python", "python3", "py"}:
+        if len(parts) >= 3 and parts[1] == "-m" and parts[2] in {"pytest", "unittest", "compileall"}:
+            return True
+        return len(parts) >= 2 and _looks_local_script(parts[1], {".py"})
+    if executable == "pytest":
+        return True
+    if executable == "node":
+        return len(parts) >= 2 and _looks_local_script(parts[1], {".js", ".mjs", ".cjs"})
+    if executable == "npm":
+        return len(parts) >= 2 and parts[1] in {"test", "run", "exec"}
+    if executable in {"pnpm", "yarn"}:
+        return len(parts) >= 2 and parts[1] in {"test", "run", "exec"}
+    return False
+
+
+def _looks_local_script(value: str, suffixes: set[str]) -> bool:
+    if value.startswith("-") or "://" in value:
+        return False
+    path = Path(value)
+    return path.suffix.lower() in suffixes and not path.is_absolute() and ".." not in path.parts

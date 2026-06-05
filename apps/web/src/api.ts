@@ -39,6 +39,8 @@ import type {
   RuntimeSettingsRecord,
   ToyBoxManagerStatus,
   WorkspaceCommandRunResult,
+  WorkspaceCopilotTaskRequest,
+  WorkspaceCopilotTaskResult,
   WorkspaceEntry,
   WorkspaceFile,
   WorkspaceIndexSearchMatch,
@@ -345,6 +347,11 @@ export const edisonApi = {
     }),
   runWorkspaceCommand: (payload: { command: string; cwd: string; timeout_seconds?: number; approved: boolean }, rootId = 'app') =>
     request<WorkspaceCommandRunResult>(withQuery('/api/v1/workspace/commands/run', { root_id: rootId }), {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  runWorkspaceCopilotTask: (payload: WorkspaceCopilotTaskRequest, rootId = 'app') =>
+    request<WorkspaceCopilotTaskResult>(withQuery('/api/v1/workspace/copilot/tasks', { root_id: rootId }), {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
