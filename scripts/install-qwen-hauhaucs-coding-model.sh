@@ -9,6 +9,7 @@ HF_OLLAMA_REF="${HF_OLLAMA_REF:-hf.co/${REPO_ID}:Q4_K_M}"
 EDISON_HOME="${EDISON_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 MODEL_REGISTRY_PATH="${MODEL_REGISTRY_PATH:-$EDISON_HOME/config/model-registry.local.json}"
 PORT="${PORT:-8014}"
+RESTART_EDISON_API="${RESTART_EDISON_API:-1}"
 
 if command -v ollama >/dev/null 2>&1; then
   echo "Using Ollama for ${HF_OLLAMA_REF}"
@@ -65,6 +66,10 @@ registry_path.write_text(json.dumps(payload, indent=2) + "\\n", encoding="utf-8"
 print(f"Updated {registry_path}")
 PY
 
+  if [[ "$RESTART_EDISON_API" == "1" ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --user restart edison-api.service || true
+  fi
+
   cat <<EOF
 Ollama model alias is ready:
   $OLLAMA_MODEL
@@ -72,7 +77,7 @@ Ollama model alias is ready:
 Edison model registry endpoint:
   http://127.0.0.1:11434/v1
 
-Restart edison-api.service after this installer finishes so Edison reloads the ready profile.
+Edison API restart attempted so the ready profile can be reloaded.
 EOF
   exit 0
 fi
