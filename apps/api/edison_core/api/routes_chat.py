@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from edison_core.api.dependencies import (
     get_agent_run_store,
     get_conversation_store,
+    get_desktop_bridge_client,
     get_generation_store,
     get_hardware_device_service,
     get_knowledge_store,
@@ -42,6 +44,7 @@ from edison_core.schemas import (
 )
 from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.conversation_store import ConversationNotFoundError, ConversationStore
+from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import CameraCaptureError, HardwareDeviceService
 from edison_core.services.knowledge_store import KnowledgeStore
@@ -60,6 +63,7 @@ def create_chat_turn(
     gateway: ModelGateway = Depends(get_model_gateway),
     workspace: WorkspaceTools = Depends(get_workspace_tools),
     hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+    bridge: DesktopBridgeClient = Depends(get_desktop_bridge_client),
     generation_store: GenerationStore = Depends(get_generation_store),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
@@ -139,6 +143,39 @@ def create_chat_turn(
             model_selection=camera_result.model_selection,
         )
 
+    desktop_result = _run_desktop_bridge_chat_action(resolved_payload, bridge)
+    if desktop_result is not None:
+        _complete_agent_run_if_needed(agent_run, agent_runs, desktop_result.inference.finish_reason)
+        assistant_message = conversations.add_message(
+            conversation_id,
+            MessageCreate(
+                role=MessageRole.ASSISTANT,
+                content=desktop_result.inference.content,
+                model=desktop_result.inference.model_id,
+                metadata={
+                    "finish_reason": desktop_result.inference.finish_reason,
+                    "gateway": desktop_result.inference.metadata,
+                    "model_selection_reason": desktop_result.model_selection.reason,
+                    "requested_mode": payload.mode.value,
+                    "resolved_mode": resolved_payload.mode.value,
+                    "agent_enabled": payload.agent_enabled,
+                    "intent_router": {**intent_metadata, **desktop_result.metadata.get("intent_router", {})},
+                    "workspace_context": workspace_metadata,
+                    "knowledge_context": _skipped_knowledge_context("direct_desktop_bridge_tool"),
+                    "personal_context": personal_metadata,
+                    "agent_run_id": agent_run.id if agent_run else None,
+                    "desktop_bridge_action": desktop_result.metadata,
+                },
+            ),
+        )
+        return ChatResponse(
+            conversation=conversations.get_conversation(conversation_id),
+            user_message=user_message,
+            assistant_message=assistant_message,
+            inference=desktop_result.inference,
+            model_selection=desktop_result.model_selection,
+        )
+
     model_messages = context_messages + _openai_messages(conversation.messages)
     model_selection, inference = gateway.complete(
         InferenceRequest(
@@ -194,6 +231,7 @@ def stream_chat_turn(
     gateway: ModelGateway = Depends(get_model_gateway),
     workspace: WorkspaceTools = Depends(get_workspace_tools),
     hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+    bridge: DesktopBridgeClient = Depends(get_desktop_bridge_client),
     generation_store: GenerationStore = Depends(get_generation_store),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
@@ -290,6 +328,58 @@ def stream_chat_turn(
 
         return StreamingResponse(
             camera_event_source(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    desktop_result = _run_desktop_bridge_chat_action(resolved_payload, bridge)
+    if desktop_result is not None:
+        def desktop_event_source():
+            yield _sse(
+                "start",
+                {
+                    "conversation_id": conversation_id,
+                    "user_message": user_message.model_dump(mode="json"),
+                    "model_selection": desktop_result.model_selection.model_dump(mode="json"),
+                    "agent_run": agent_run.model_dump(mode="json") if agent_run else None,
+                },
+            )
+            yield _sse("token", {"delta": desktop_result.inference.content})
+            _complete_agent_run_if_needed(agent_run, agent_runs, desktop_result.inference.finish_reason)
+            assistant_message = conversations.add_message(
+                conversation_id,
+                MessageCreate(
+                    role=MessageRole.ASSISTANT,
+                    content=desktop_result.inference.content,
+                    model=desktop_result.inference.model_id,
+                    metadata={
+                        "finish_reason": desktop_result.inference.finish_reason,
+                        "gateway": desktop_result.inference.metadata,
+                        "model_selection_reason": desktop_result.model_selection.reason,
+                        "requested_mode": payload.mode.value,
+                        "resolved_mode": resolved_payload.mode.value,
+                        "agent_enabled": payload.agent_enabled,
+                        "intent_router": {**intent_metadata, **desktop_result.metadata.get("intent_router", {})},
+                        "workspace_context": workspace_metadata,
+                        "knowledge_context": _skipped_knowledge_context("direct_desktop_bridge_tool"),
+                        "personal_context": personal_metadata,
+                        "streamed": True,
+                        "agent_run_id": agent_run.id if agent_run else None,
+                        "desktop_bridge_action": desktop_result.metadata,
+                    },
+                ),
+            )
+            response = ChatResponse(
+                conversation=conversations.get_conversation(conversation_id),
+                user_message=user_message,
+                assistant_message=assistant_message,
+                inference=desktop_result.inference,
+                model_selection=desktop_result.model_selection,
+            )
+            yield _sse("done", response.model_dump(mode="json"))
+
+        return StreamingResponse(
+            desktop_event_source(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -518,6 +608,165 @@ class CameraChatResult:
     metadata: dict
 
 
+@dataclass(frozen=True)
+class DesktopBridgeChatResult:
+    inference: InferenceResponse
+    model_selection: ModelSelection
+    metadata: dict
+
+
+def _run_desktop_bridge_chat_action(
+    payload: ChatRequest,
+    bridge: DesktopBridgeClient,
+) -> DesktopBridgeChatResult | None:
+    message = payload.message.strip()
+    if _is_slicer_handoff_request(message):
+        return _run_slicer_chat_action(payload, bridge)
+    if _is_fusion_chat_request(message):
+        return _run_fusion_chat_action(payload, bridge)
+    if _is_desktop_bridge_inventory_request(message):
+        return _run_desktop_bridge_inventory_action(payload, bridge)
+    return None
+
+
+def _run_fusion_chat_action(payload: ChatRequest, bridge: DesktopBridgeClient) -> DesktopBridgeChatResult:
+    message = payload.message.strip()
+    dimensions = _extract_dimensions_mm(message)
+    is_box = _mentions_any(message, {"box", "block", "cube", "rectangular", "rectangle"})
+    action_payload: dict = {
+        "prompt": message,
+        "launch": _should_launch_desktop_app(message),
+        "exports": [],
+    }
+    if dimensions and is_box:
+        width, depth, height = dimensions
+        action_payload["parameters"] = {
+            "command": "box",
+            "width_mm": width,
+            "depth_mm": depth,
+            "height_mm": height,
+        }
+        action_payload["exports"] = [{"name": _safe_export_name(message, "fusion-model"), "format": "stl"}]
+    elif is_box:
+        action_payload["parameters"] = {
+            "command": "box",
+            "width_mm": 40.0,
+            "depth_mm": 30.0,
+            "height_mm": 12.0,
+        }
+        action_payload["exports"] = [{"name": _safe_export_name(message, "fusion-model"), "format": "stl"}]
+    else:
+        action_payload["parameters"] = {"command": "prompt", "description": message}
+
+    result = bridge.action("fusion/job", action_payload)
+    ok = result.ok
+    result_payload = result.result
+    content = _fusion_chat_content(ok, result.detail, result_payload, action_payload)
+    metadata = {
+        "tool": "desktop_bridge",
+        "action": "fusion/job",
+        "request_payload": action_payload,
+        "result": result_payload,
+        "ok": ok,
+        "intent_router": {"tool_action": "desktop_bridge.fusion_job"},
+    }
+    selection = _desktop_bridge_tool_selection(payload.mode, "Fusion 360 CAD request routed to the desktop bridge")
+    return DesktopBridgeChatResult(
+        inference=InferenceResponse(
+            model_id=selection.model.id,
+            content=content,
+            finish_reason="stop" if ok else "error",
+            metadata=metadata,
+        ),
+        model_selection=selection,
+        metadata=metadata,
+    )
+
+
+def _run_slicer_chat_action(payload: ChatRequest, bridge: DesktopBridgeClient) -> DesktopBridgeChatResult:
+    message = payload.message.strip()
+    model_path = _extract_model_path(message)
+    slicer = _preferred_slicer(message)
+    action_payload = {
+        "model_path": model_path or "",
+        "slicer": slicer,
+        "launch": _should_launch_slicer(message),
+        "notes": message,
+    }
+    result = bridge.action("slicer/prepare", action_payload)
+    ok = result.ok
+    result_payload = result.result
+    content = _slicer_chat_content(ok, result.detail, result_payload, action_payload)
+    metadata = {
+        "tool": "desktop_bridge",
+        "action": "slicer/prepare",
+        "request_payload": action_payload,
+        "result": result_payload,
+        "ok": ok,
+        "intent_router": {"tool_action": "desktop_bridge.slicer_prepare"},
+    }
+    selection = _desktop_bridge_tool_selection(payload.mode, f"{slicer} handoff routed to the desktop bridge")
+    return DesktopBridgeChatResult(
+        inference=InferenceResponse(
+            model_id=selection.model.id,
+            content=content,
+            finish_reason="stop" if ok else "error",
+            metadata=metadata,
+        ),
+        model_selection=selection,
+        metadata=metadata,
+    )
+
+
+def _run_desktop_bridge_inventory_action(
+    payload: ChatRequest,
+    bridge: DesktopBridgeClient,
+) -> DesktopBridgeChatResult:
+    status_record = bridge.status()
+    ok = status_record.reachable
+    slicers = [
+        item
+        for item in status_record.apps
+        if _mentions_any(
+            " ".join(str(item.get(key) or "") for key in ("id", "name", "path")),
+            {"bambu", "orca", "cura", "slicer"},
+        )
+    ]
+    lines = [
+        "Desktop bridge is reachable." if ok else "Desktop bridge is not reachable yet.",
+        "",
+        f"Apps: {_join_names(status_record.apps) or 'none detected'}",
+        f"Slicers: {_join_names(slicers) or 'none detected'}",
+        f"Windows printers: {_join_names(status_record.printers) or 'none detected'}",
+        f"Registered 3D printers: {_join_names(status_record.three_d_printers) or 'none registered yet'}",
+        "Allowed folders:",
+        *[f"- `{root}`" for root in status_record.allowed_roots],
+    ]
+    if not status_record.three_d_printers:
+        lines.append("")
+        lines.append(
+            "Bambu/Orca/Cura are ready for slicer handoff. Direct printer control still needs each printer's LAN IP, serial/device ID, and access code registered locally."
+        )
+    metadata = {
+        "tool": "desktop_bridge",
+        "action": "status",
+        "ok": ok,
+        "result": status_record.model_dump(mode="json"),
+        "intent_router": {"tool_action": "desktop_bridge.status"},
+    }
+    selection = _desktop_bridge_tool_selection(payload.mode, "Desktop bridge inventory request")
+    return DesktopBridgeChatResult(
+        inference=InferenceResponse(
+            model_id=selection.model.id,
+            content="\n".join(lines),
+            finish_reason="stop" if ok else "error",
+            metadata=metadata,
+        ),
+        model_selection=selection,
+        metadata=metadata,
+    )
+
+
 def _run_camera_chat_action(
     payload: ChatRequest,
     hardware: HardwareDeviceService,
@@ -629,6 +878,23 @@ def _camera_tool_selection(reason: str) -> ModelSelection:
     )
 
 
+def _desktop_bridge_tool_selection(mode: ChatMode, reason: str) -> ModelSelection:
+    return ModelSelection(
+        mode=mode,
+        required_capabilities=[],
+        model=ModelProfile(
+            id="edison-desktop-bridge",
+            display_name="Edison Desktop Bridge",
+            provider="edison-tool",
+            status=ModelStatus.READY,
+            capabilities=[],
+            context_window=0,
+            max_output_tokens=0,
+        ),
+        reason=reason,
+    )
+
+
 def _is_camera_chat_request(message: str) -> bool:
     lowered = message.lower()
     camera_terms = {
@@ -665,6 +931,171 @@ def _is_camera_chat_request(message: str) -> bool:
             "look around",
         )
     )
+
+
+def _is_fusion_chat_request(message: str) -> bool:
+    lowered = message.lower()
+    if not _mentions_any(lowered, {"fusion", "fusion 360", "cad"}):
+        return False
+    return _mentions_any(
+        lowered,
+        {
+            "make",
+            "create",
+            "design",
+            "model",
+            "part",
+            "stl",
+            "step",
+            "export",
+            "queue",
+            "build",
+        },
+    )
+
+
+def _is_slicer_handoff_request(message: str) -> bool:
+    lowered = message.lower()
+    if _extract_model_path(message):
+        return _mentions_any(lowered, {"bambu", "orca", "cura", "slicer", "handoff", "print"})
+    return _mentions_any(lowered, {"bambu studio", "orcaslicer", "orca slicer", "cura", "slicer handoff"})
+
+
+def _is_desktop_bridge_inventory_request(message: str) -> bool:
+    lowered = message.lower()
+    return _mentions_any(lowered, {"desktop bridge", "connected apps", "bridge tools"}) and _mentions_any(
+        lowered,
+        {"list", "show", "what", "status", "tools", "printers", "folders", "slicers"},
+    )
+
+
+def _fusion_chat_content(ok: bool, detail: str, result: dict, request_payload: dict) -> str:
+    if not ok:
+        return (
+            "I tried to route this to Fusion 360 through the desktop bridge, but the bridge returned an error.\n\n"
+            f"Detail: {detail}"
+        )
+    job_id = result.get("job_id") or "queued"
+    job_path = result.get("job_path") or ""
+    exports_dir = result.get("exports_dir") or ""
+    result_path = result.get("result_path") or ""
+    parameters = request_payload.get("parameters") if isinstance(request_payload.get("parameters"), dict) else {}
+    generated = ""
+    if parameters.get("command") == "box":
+        generated = (
+            f"\n\nGenerated CAD command: box {parameters.get('width_mm')} x "
+            f"{parameters.get('depth_mm')} x {parameters.get('height_mm')} mm."
+        )
+    elif parameters.get("command") == "prompt":
+        generated = (
+            "\n\nI routed this to Fusion 360 instead of Modly. This complex prompt is queued for the Fusion bridge; "
+            "the current automatic CAD script path is strongest for simple boxes/blocks while we expand the script generator."
+        )
+    return (
+        f"I routed this to Fusion 360 through the desktop bridge, not Modly.\n\n"
+        f"Queued Fusion job: `{job_id}`\n"
+        f"Job file: `{job_path}`\n"
+        f"Result file: `{result_path}`\n"
+        f"Exports folder: `{exports_dir}`\n"
+        f"{detail}"
+        f"{generated}"
+    )
+
+
+def _slicer_chat_content(ok: bool, detail: str, result: dict, request_payload: dict) -> str:
+    slicer = request_payload.get("slicer") or "slicer"
+    if not ok:
+        return (
+            f"I tried to prepare this in {slicer} through the desktop bridge, but it failed.\n\n"
+            f"Detail: {detail}\n"
+            f"Model path I received: `{request_payload.get('model_path') or ''}`"
+        )
+    manifest_path = result.get("manifest_path") or ""
+    launch = result.get("launch") if isinstance(result.get("launch"), dict) else {}
+    launch_detail = launch.get("detail") if isinstance(launch, dict) else ""
+    return (
+        f"I prepared a {slicer} slicer handoff through the desktop bridge.\n\n"
+        f"Model path: `{request_payload.get('model_path') or ''}`\n"
+        f"Handoff manifest: `{manifest_path}`\n"
+        f"Launch requested: `{bool(request_payload.get('launch'))}`\n"
+        f"{detail}"
+        + (f"\n{launch_detail}" if launch_detail else "")
+        + "\n\nI did not start a print."
+    )
+
+
+def _extract_model_path(message: str) -> str | None:
+    pattern = re.compile(
+        r"((?:[A-Za-z]:\\|/|\\\\)[^\r\n`\"<>|]+?\.(?:stl|3mf|obj|step|glb|gcode))",
+        re.IGNORECASE,
+    )
+    match = pattern.search(message)
+    if not match:
+        return None
+    return match.group(1).strip().rstrip(".,;:)")
+
+
+def _extract_dimensions_mm(message: str) -> tuple[float, float, float] | None:
+    pattern = re.compile(
+        r"(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?\s*(?:x|by|×)\s*"
+        r"(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?\s*(?:x|by|×)\s*"
+        r"(\d+(?:\.\d+)?)\s*(?:mm|millimeters?)?",
+        re.IGNORECASE,
+    )
+    match = pattern.search(message)
+    if not match:
+        return None
+    return tuple(float(item) for item in match.groups())  # type: ignore[return-value]
+
+
+def _preferred_slicer(message: str) -> str:
+    lowered = message.lower()
+    if "orca" in lowered:
+        return "OrcaSlicer"
+    if "cura" in lowered:
+        return "Cura"
+    return "Bambu Studio" if "bambu" in lowered else "Bambu Studio"
+
+
+def _should_launch_desktop_app(message: str) -> bool:
+    lowered = message.lower()
+    if _mentions_any(lowered, {"do not launch", "don't launch", "dont launch", "without launching", "unless required"}):
+        return False
+    return _mentions_any(lowered, {"open fusion", "launch fusion", "start fusion", "use fusion"})
+
+
+def _should_launch_slicer(message: str) -> bool:
+    lowered = message.lower()
+    if _mentions_any(lowered, {"do not start", "don't start", "dont start", "do not print", "don't print", "dont print"}):
+        return False
+    return _mentions_any(lowered, {"open in", "launch", "open bambu", "open orca", "open cura"})
+
+
+def _safe_export_name(message: str, fallback: str) -> str:
+    words = re.findall(r"[a-zA-Z0-9]+", message.lower())
+    ignored = {"use", "fusion", "360", "create", "make", "design", "a", "an", "the", "and", "export", "stl"}
+    useful = [word for word in words if word not in ignored][:5]
+    return "-".join(useful) or fallback
+
+
+def _join_names(items: list[dict]) -> str:
+    names = [str(item.get("name") or item.get("id") or "").strip() for item in items]
+    return ", ".join(name for name in names if name)
+
+
+def _mentions_any(message: str, terms: set[str]) -> bool:
+    lowered = message.lower()
+    return any(term in lowered for term in terms)
+
+
+def _skipped_knowledge_context(reason: str) -> dict:
+    return {
+        "enabled": False,
+        "query": "",
+        "warnings": [],
+        "matches": [],
+        "skipped_reason": reason,
+    }
 
 
 def _infer_intent_mode(payload: ChatRequest) -> tuple[ChatMode, str]:
