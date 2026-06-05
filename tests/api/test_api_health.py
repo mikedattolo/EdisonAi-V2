@@ -42,6 +42,7 @@ def test_capability_registry_lists_mcp_servers_and_plugins(tmp_path):
     assert {server["id"] for server in body["mcp_servers"]} >= {"edison-knowledge", "edison-workspace"}
     assert {plugin["target"] for plugin in body["plugins"]} >= {"codex", "claude-code"}
     assert "mcp-agents" in body["knowledge_presets"]
+    assert "business-product-ops" in body["knowledge_presets"]
 
 
 def test_gpu_fan_control_routes_are_safe_by_default(tmp_path):

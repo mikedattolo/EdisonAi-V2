@@ -134,6 +134,14 @@ def integer_schema(description: str, default: int, minimum: int, maximum: int) -
     }
 
 
+def boolean_schema(description: str, default: bool = False) -> dict[str, Any]:
+    return {
+        "type": "boolean",
+        "description": description,
+        "default": default,
+    }
+
+
 def _error_response(request_id: Any, code: int, message: str) -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",

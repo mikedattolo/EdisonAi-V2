@@ -75,18 +75,25 @@ def test_extended_knowledge_presets_ingest_local_reference_notes(tmp_path):
     )
     client = TestClient(create_app(settings))
 
-    for preset in ["odysseus-features", "mcp-agents", "local-ai-hardware"]:
+    for preset in ["odysseus-features", "mcp-agents", "local-ai-hardware", "business-product-ops"]:
         ingested = client.post("/api/v1/knowledge/ingest/preset", json={"preset": preset})
         assert ingested.status_code == 201
         assert len(ingested.json()) == 1
 
-    search = client.post(
+    feature_search = client.post(
         "/api/v1/knowledge/search",
-        json={"query": "Hailo MCP Odysseus", "max_results": 10},
+        json={"query": "MCP Odysseus Shopify product design", "max_results": 10},
+    )
+    hardware_search = client.post(
+        "/api/v1/knowledge/search",
+        json={"query": "Hailo hardware accelerator", "max_results": 5},
     )
 
-    assert search.status_code == 200
-    titles = {match["source_title"] for match in search.json()}
+    assert feature_search.status_code == 200
+    assert hardware_search.status_code == 200
+    titles = {match["source_title"] for match in feature_search.json()}
+    hardware_titles = {match["source_title"] for match in hardware_search.json()}
     assert "Odysseus Feature Map for Edison" in titles
     assert "MCP and Agent Integration Notes" in titles
-    assert "Local AI Hardware Operations" in titles
+    assert "Business and Product Operations for Edison" in titles
+    assert "Local AI Hardware Operations" in hardware_titles

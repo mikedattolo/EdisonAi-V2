@@ -211,6 +211,17 @@ def upsert_order(
     return store.upsert_order(payload)
 
 
+@router.post("/orders/{order_id}/queue", response_model=list[ToyBoxQueueItemRecord])
+def queue_order(
+    order_id: str,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> list[ToyBoxQueueItemRecord]:
+    try:
+        return store.queue_order(order_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Order not found") from error
+
+
 @router.get("/queue", response_model=list[ToyBoxQueueItemRecord])
 def list_queue(
     limit: int = 100,
@@ -271,7 +282,7 @@ def _production_lanes(report: IntegrationScanReport) -> list[ToyBoxProductionLan
             connected_integrations=["workstation-print-tools", "workstation-desktop-bridge"],
             next_steps=[
                 "Add printer adapters for Bambu/Orca/Cura workflows.",
-                "Persist queue state and production events.",
+                "Connect live printer status polling and failure events.",
             ],
         ),
         ToyBoxProductionLane(

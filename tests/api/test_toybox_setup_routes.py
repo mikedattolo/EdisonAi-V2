@@ -49,6 +49,15 @@ def test_toybox_setup_seeds_runtime_settings_printers_and_mapping(tmp_path):
 
 def test_toybox_order_and_queue_round_trip(tmp_path):
     client = make_client(tmp_path)
+    setup = client.post(
+        "/api/v1/toybox/setup/defaults",
+        json={
+            "desktop_bridge_url": "http://192.168.1.31:8765",
+            "dymo_printer_name": "Mike's shipping label printer",
+            "default_slicer": "OrcaSlicer",
+        },
+    )
+    mapping_id = setup.json()["mappings"][0]["id"]
 
     order = client.post(
         "/api/v1/toybox/orders",
@@ -59,6 +68,11 @@ def test_toybox_order_and_queue_round_trip(tmp_path):
         },
     )
     assert order.status_code == 200
+
+    planned = client.post(f"/api/v1/toybox/orders/{order.json()['id']}/queue")
+    assert planned.status_code == 200
+    assert planned.json()[0]["mapping_id"] == mapping_id
+    assert planned.json()[0]["status"] == "queued"
 
     queue = client.post(
         "/api/v1/toybox/queue",

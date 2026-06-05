@@ -623,6 +623,7 @@ class KnowledgeIngestPresetRequest(BaseModel):
         "odysseus-features",
         "mcp-agents",
         "local-ai-hardware",
+        "business-product-ops",
     ]
 
 

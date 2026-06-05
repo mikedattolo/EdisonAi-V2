@@ -301,6 +301,62 @@ class ToyBoxStore:
             )
         return order
 
+    def queue_order(self, order_id: str) -> list[ToyBoxQueueItemRecord]:
+        order = self.get_order(order_id)
+        mappings = {mapping.sku: mapping for mapping in self.list_mappings()}
+        created: list[ToyBoxQueueItemRecord] = []
+        missing_mapping = False
+
+        for item in order.items:
+            if not isinstance(item, dict):
+                continue
+            sku = str(item.get("sku") or item.get("variant_sku") or "").strip()
+            quantity = _positive_int(item.get("quantity"), default=1)
+            title = str(item.get("title") or item.get("name") or sku or "ToyBox3D print").strip()
+            mapping = mappings.get(sku)
+            if mapping is None:
+                missing_mapping = True
+                for copy_index in range(quantity):
+                    created.append(
+                        self.create_queue_item(
+                            ToyBoxQueueItemCreate(
+                                order_id=order.id,
+                                title=f"{title} #{copy_index + 1}" if quantity > 1 else title,
+                                status="blocked",
+                                metadata={
+                                    "reason": "missing_product_mapping",
+                                    "sku": sku,
+                                    "source_item": item,
+                                },
+                            )
+                        )
+                    )
+                continue
+
+            for copy_index in range(quantity):
+                created.append(
+                    self.create_queue_item(
+                        ToyBoxQueueItemCreate(
+                            order_id=order.id,
+                            mapping_id=mapping.id,
+                            printer_id=mapping.default_printer_id,
+                            title=f"{mapping.title} #{copy_index + 1}" if quantity > 1 else mapping.title,
+                            status="queued",
+                            model_path=mapping.model_path,
+                            metadata={
+                                "sku": sku,
+                                "source_item": item,
+                                "material": mapping.material,
+                                "color": mapping.color,
+                                "slicer_profile": mapping.slicer_profile,
+                            },
+                        )
+                    )
+                )
+
+        self._set_order_status(order.id, "blocked" if missing_mapping else "queued")
+        return created
+
     def list_queue(self, limit: int = 100) -> list[ToyBoxQueueItemRecord]:
         with self.database.connect() as connection:
             rows = connection.execute(
@@ -361,6 +417,21 @@ class ToyBoxStore:
         if row is None:
             raise ToyBoxNotFoundError(item_id)
         return self._queue_from_row(row)
+
+    def get_order(self, order_id: str) -> ToyBoxOrderRecord:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM toybox_orders WHERE id = ?", (order_id,)).fetchone()
+        if row is None:
+            raise ToyBoxNotFoundError(order_id)
+        return self._order_from_row(row)
+
+    def _set_order_status(self, order_id: str, status: str) -> None:
+        now = utc_now()
+        with self.database.connect() as connection:
+            connection.execute(
+                "UPDATE toybox_orders SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now.isoformat(), order_id),
+            )
 
     def _printer_from_row(self, row: sqlite3.Row) -> ToyBoxPrinterProfileRecord:
         return ToyBoxPrinterProfileRecord(
@@ -434,3 +505,11 @@ def _json_load(raw: str, fallback):
         return json.loads(raw)
     except json.JSONDecodeError:
         return fallback
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(parsed, 1)

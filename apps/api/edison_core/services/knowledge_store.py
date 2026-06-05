@@ -319,6 +319,18 @@ class KnowledgeStore:
                     kind="preset",
                 )
             )
+        elif preset == "business-product-ops":
+            records.append(
+                self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title="Business and Product Operations for Edison",
+                        text=BUSINESS_PRODUCT_OPS_KNOWLEDGE,
+                        uri="edison:preset/business-product-ops",
+                        metadata={"source": "preset", "preset": preset},
+                    ),
+                    kind="preset",
+                )
+            )
         else:
             raise KnowledgeIngestError(f"Unknown preset: {preset}")
         return records
@@ -492,6 +504,34 @@ Local AI hardware notes for Edison V2:
 - Storage should favor the largest available data volume for model, dataset, media,
   cache, and workspace directories, while keeping Edison app code and user-created
   code spaces separated.
+""".strip()
+
+
+BUSINESS_PRODUCT_OPS_KNOWLEDGE = """
+Business and product operations notes for Edison V2:
+
+- Treat chat as the command center for work, with optional tools for product
+  briefs, business planning, design reviews, store operations, print-farm status,
+  customer support drafts, and project follow-through.
+- Product-design workflows should start from a brief: audience, problem, workflow,
+  constraints, assets, success metrics, and the next implementation task.
+- Business-management workflows should connect strategy to action: offer, target
+  customer, channel, production process, cost/risk notes, metrics, and reminders.
+- ToyBox3D should map Shopify products and variants to STL/3MF assets, filament
+  colors, printer profiles, queue priority, QA checkpoints, packaging notes, and
+  shipping-label status before any automatic print starts.
+- Print-farm operations should keep a visible queue, printer health, material
+  readiness, camera monitoring, failed-print alerts, order exceptions, and a
+  manual approval path for risky or expensive jobs.
+- Copilot/Codex-style coding workflows should expose repository search, file
+  editing, tests, review, branch context, and clear commit summaries, while keeping
+  generated customer projects outside the Edison application repository.
+- Claude/ChatGPT-style knowledge workflows should support saved project context,
+  artifacts, source-backed research, summaries, response streaming, and simple
+  controls near the chat composer.
+- Practical dashboards to add next: Shopify orders, production status, printer
+  utilization, inventory/materials, revenue/orders, support issues, product design
+  backlog, knowledge freshness, and automation health.
 """.strip()
 
 
