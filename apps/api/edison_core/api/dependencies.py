@@ -6,6 +6,7 @@ from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
+from edison_core.services.creator_studio import CreatorStudioService
 from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import HardwareDeviceService
@@ -104,6 +105,10 @@ def get_wan22_client(request: Request) -> Wan22Client:
 
 def get_modly_client(request: Request) -> ModlyClient:
     return request.app.state.modly_client
+
+
+def get_creator_studio_service(request: Request) -> CreatorStudioService:
+    return request.app.state.creator_studio_service
 
 
 def get_media_orchestrator(request: Request) -> MediaOrchestrator:

@@ -27,6 +27,7 @@ from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
+from edison_core.services.creator_studio import CreatorStudioService
 from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import HardwareDeviceService
@@ -86,6 +87,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
         resolved_settings.modly_base_url,
         timeout_seconds=resolved_settings.modly_timeout_seconds,
     )
+    creator_studio_service = CreatorStudioService(resolved_settings)
     media_orchestrator = MediaOrchestrator(
         resolved_settings,
         comfyui_client,
@@ -139,6 +141,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.invokeai_client = invokeai_client
     app.state.wan22_client = wan22_client
     app.state.modly_client = modly_client
+    app.state.creator_studio_service = creator_studio_service
     app.state.media_orchestrator = media_orchestrator
     app.state.status_service = status_service
     app.state.fan_control_service = fan_control_service

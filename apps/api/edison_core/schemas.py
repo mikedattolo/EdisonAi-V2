@@ -165,6 +165,9 @@ class MediaGenerationMode(str, Enum):
     MINECRAFT_WORLD = "minecraft_world"
     MINECRAFT_STRUCTURE = "minecraft_structure"
     MINECRAFT_TEXTURE_PACK = "minecraft_texture_pack"
+    CREATOR_PHOTO = "creator_photo"
+    CREATOR_VIDEO = "creator_video"
+    CREATOR_DATASET = "creator_dataset"
     PRODUCT_RENDER = "product_render"
     SOCIAL_MEDIA_CONTENT = "social_media_content"
 
@@ -362,12 +365,36 @@ class MediaBackendStatus(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreatorStudioDatasetRecord(BaseModel):
+    id: str
+    name: str
+    root_path: str
+    kind: Literal["image", "video", "mixed", "unknown"] = "unknown"
+    status: Literal["ready", "detected", "empty"] = "detected"
+    item_count: int = 0
+    trigger_token: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreatorStudioStatus(BaseModel):
+    service: str = "creator-studio"
+    status: Literal["ready", "setup_required", "offline", "error"]
+    source_path: str | None = None
+    normalized_root: str | None = None
+    detail: str
+    datasets: list[CreatorStudioDatasetRecord] = Field(default_factory=list)
+    workflow_templates: list[str] = Field(default_factory=list)
+    guardrails: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class MediaSystemStatus(BaseModel):
     service: str = "media"
     comfyui: ComfyUIStatus
     invokeai: MediaBackendStatus
     wan22: MediaBackendStatus
     modly: MediaBackendStatus
+    creator_studio: CreatorStudioStatus
     job_counts: dict[str, int] = Field(default_factory=dict)
 
 
@@ -652,7 +679,7 @@ class MediaGenerationRequest(BaseModel):
 class MediaGenerationModeRecord(BaseModel):
     id: MediaGenerationMode
     label: str
-    group: Literal["core", "minecraft", "commerce", "social"]
+    group: Literal["core", "minecraft", "creator", "commerce", "social"]
     job_type: JobType
     backend: str
     description: str

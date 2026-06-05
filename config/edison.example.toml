@@ -27,6 +27,7 @@ wan22_base_url = "http://127.0.0.1:8188"
 wan22_timeout_seconds = 2.0
 modly_base_url = "http://127.0.0.1:7070"
 modly_timeout_seconds = 2.0
+creator_studio_source_path = "vendor/pixelai_creator_studio"
 workflow_root = "workflows"
 
 [hardware]

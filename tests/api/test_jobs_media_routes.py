@@ -108,6 +108,9 @@ def test_media_modes_and_minecraft_generation_create_planning_artifact(tmp_path)
         "minecraft_world",
         "minecraft_structure",
         "minecraft_texture_pack",
+        "creator_photo",
+        "creator_video",
+        "creator_dataset",
         "product_render",
         "social_media_content",
     }.issubset({item["id"] for item in modes.json()})
@@ -240,3 +243,99 @@ def test_completed_media_job_can_deliver_artifact_to_chat(tmp_path):
     assert delivered.status_code == 201
     assert delivered.json()["metadata"]["artifacts"][0]["id"] == artifact.id
     assert loaded["messages"][0]["metadata"]["delivery_type"] == "media_result"
+
+
+def test_creator_studio_status_discovers_safe_pixelai_assets(tmp_path):
+    creator_root = _creator_studio_fixture(tmp_path)
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        artifact_root=tmp_path / "artifacts",
+        creator_studio_source_path=creator_root,
+        comfyui_base_url="",
+    )
+    client = TestClient(create_app(settings))
+
+    status = client.get("/api/v1/media/status")
+    creator = status.json()["creator_studio"]
+
+    assert status.status_code == 200
+    assert creator["status"] == "ready"
+    assert creator["workflow_templates"] == ["safe_creator_photo.json"]
+    assert creator["datasets"][0]["name"] == "Images"
+    assert creator["datasets"][0]["item_count"] == 1
+    assert "No nude" in " ".join(creator["guardrails"])
+
+
+def test_creator_dataset_generation_creates_guarded_planning_artifact(tmp_path):
+    creator_root = _creator_studio_fixture(tmp_path)
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        artifact_root=tmp_path / "artifacts",
+        creator_studio_source_path=creator_root,
+        comfyui_base_url="",
+    )
+    client = TestClient(create_app(settings))
+
+    created = client.post(
+        "/api/v1/media/generate",
+        json={
+            "mode": "creator_dataset",
+            "prompt": "Fictional AI adult creator persona for fashion, fitness, and product lifestyle photos",
+        },
+    )
+    artifact = client.get(f"/api/v1/artifacts/{created.json()['result_artifact_id']}")
+    artifact_path = tmp_path / artifact.json()["path"]
+
+    assert created.status_code == 201
+    assert created.json()["status"] == "complete"
+    assert created.json()["backend"] == "creator-studio"
+    assert artifact_path.exists()
+    content = artifact_path.read_text(encoding="utf-8")
+    assert "AI Creator Studio Dataset Plan" in content
+    assert "Do not use real-person likenesses" in content
+
+
+def test_creator_photo_blocks_explicit_minor_and_real_person_prompts(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        artifact_root=tmp_path / "artifacts",
+        comfyui_base_url="",
+    )
+    client = TestClient(create_app(settings))
+
+    explicit = client.post(
+        "/api/v1/media/generate",
+        json={"mode": "creator_photo", "prompt": "OnlyFans nude bedroom set"},
+    )
+    minor = client.post(
+        "/api/v1/media/generate",
+        json={"mode": "creator_photo", "prompt": "young-looking schoolgirl influencer portrait"},
+    )
+    real_person = client.post(
+        "/api/v1/media/generate",
+        json={"mode": "creator_video", "prompt": "a celebrity deepfake walking clip"},
+    )
+
+    assert explicit.status_code == 400
+    assert "non-nude" in explicit.json()["detail"]
+    assert minor.status_code == 400
+    assert "fictional adult personas" in minor.json()["detail"]
+    assert real_person.status_code == 400
+    assert "real-person likenesses" in real_person.json()["detail"]
+
+
+def _creator_studio_fixture(tmp_path):
+    creator_root = tmp_path / "pixelai" / "creator_studio"
+    workflow_dir = creator_root / "templates" / "workflows"
+    safe_images = creator_root / "data" / "lena_hub" / "sfw" / "images"
+    unsafe_images = creator_root / "data" / "lena_hub" / "nsfw_images"
+    workflow_dir.mkdir(parents=True)
+    safe_images.mkdir(parents=True)
+    unsafe_images.mkdir(parents=True)
+    (workflow_dir / "safe_creator_photo.json").write_text("{}", encoding="utf-8")
+    (safe_images / "reference.png").write_bytes(b"fake image")
+    (unsafe_images / "blocked.png").write_bytes(b"blocked")
+    return creator_root

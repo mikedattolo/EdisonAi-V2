@@ -23,6 +23,7 @@ dist/
 data/
 artifacts/
 logs/
+vendor/pixelai_creator_studio/
 projects/fusion-jobs/
 projects/slicer-jobs/
 *.sqlite3

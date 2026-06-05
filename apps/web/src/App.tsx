@@ -102,6 +102,7 @@ type ViewId =
   | 'search'
   | 'code'
   | 'media'
+  | 'creator'
   | 'gallery'
   | 'memory'
   | 'system'
@@ -141,6 +142,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'search', label: 'Search', icon: Search },
   { id: 'code', label: 'Code Space', icon: Code2 },
   { id: 'media', label: 'Media', icon: GalleryHorizontalEnd },
+  { id: 'creator', label: 'Creator', icon: Sparkles },
   { id: 'gallery', label: 'Gallery', icon: Image },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'system', label: 'System', icon: Server },
@@ -311,7 +313,7 @@ export default function App() {
   }, [activeMode]);
 
   useEffect(() => {
-    if (activeView === 'media' || activeView === 'gallery') {
+    if (activeView === 'media' || activeView === 'creator' || activeView === 'gallery') {
       void refreshMediaSurface();
     }
     if (activeView === 'settings') {
@@ -1088,7 +1090,12 @@ export default function App() {
     }
   }
 
-  async function createMediaGeneration(mode: MediaGenerationMode, prompt: string, referenceFile?: File | null) {
+  async function createMediaGeneration(
+    mode: MediaGenerationMode,
+    prompt: string,
+    referenceFile?: File | null,
+    metadata: Record<string, unknown> = {},
+  ) {
     setIsMediaBusy(true);
     setError(null);
     try {
@@ -1098,6 +1105,7 @@ export default function App() {
         prompt,
         reference_artifact_id: referenceArtifact?.id ?? null,
         metadata: {
+          ...metadata,
           source: 'media-studio',
           reference_filename: referenceFile?.name,
         },
@@ -2698,7 +2706,7 @@ function WorkbenchView({
   toyBoxStatus: ToyBoxManagerStatus | null;
   onCreateWorkspaceProject: (name: string, prompt: string) => Promise<void>;
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
-  onCreateMediaGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null) => Promise<void>;
+  onCreateMediaGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null, metadata?: Record<string, unknown>) => Promise<void>;
   onCaptureCameraSnapshot: (devicePath?: string | null) => Promise<void>;
   onAnalyzeCameraFrame: (devicePath?: string | null) => Promise<void>;
   onOpenCompareConversation: (conversationId: string) => Promise<void>;
@@ -2818,6 +2826,20 @@ function WorkbenchView({
       />
     );
   }
+  if (activeView === 'creator') {
+    return (
+      <CreatorStudioView
+        artifacts={artifacts}
+        isMediaBusy={isMediaBusy}
+        jobs={mediaJobs}
+        modes={mediaModes}
+        mediaStatus={mediaStatus}
+        onCreateGeneration={onCreateMediaGeneration}
+        onRefresh={onRefreshMedia}
+        onUseArtifactInChat={onUseArtifactInChat}
+      />
+    );
+  }
   if (activeView === 'gallery') {
     return (
       <GalleryView
@@ -2900,6 +2922,202 @@ function FeatureView({ icon: Icon, title, items }: { icon: IconType; title: stri
           </article>
         ))}
       </div>
+    </section>
+  );
+}
+
+function CreatorStudioView({
+  artifacts,
+  isMediaBusy,
+  jobs,
+  modes,
+  mediaStatus,
+  onCreateGeneration,
+  onRefresh,
+  onUseArtifactInChat,
+}: {
+  artifacts: ArtifactRecord[];
+  isMediaBusy: boolean;
+  jobs: JobRecord[];
+  modes: MediaGenerationModeRecord[];
+  mediaStatus: MediaSystemStatus | null;
+  onCreateGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null, metadata?: Record<string, unknown>) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onUseArtifactInChat: (artifact: ArtifactRecord) => void;
+}) {
+  const modeOptions = modes.length ? modes : fallbackMediaModes();
+  const creatorModes = modeOptions.filter((mode) => mode.group === 'creator');
+  const safeCreatorModes = creatorModes.length ? creatorModes : fallbackMediaModes().filter((mode) => mode.group === 'creator');
+  const [selectedMode, setSelectedMode] = useState<MediaGenerationMode>('creator_photo');
+  const [prompt, setPrompt] = useState('');
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const activeMode = safeCreatorModes.find((mode) => mode.id === selectedMode) ?? safeCreatorModes[0];
+  const creatorStatus = mediaStatus?.creator_studio;
+  const datasets = creatorStatus?.datasets ?? [];
+  const activeDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) ?? datasets.find((dataset) => dataset.status === 'ready') ?? datasets[0] ?? null;
+  const creatorJobs = jobs.filter((job) => String(job.metadata.generation_mode ?? '').startsWith('creator_'));
+  const creatorJobIds = new Set(creatorJobs.map((job) => job.id));
+  const creatorArtifacts = artifacts.filter((artifact) => {
+    const generationMode = String(artifact.metadata.generation_mode ?? '');
+    return generationMode.startsWith('creator_') || (artifact.source_job_id ? creatorJobIds.has(artifact.source_job_id) : false);
+  });
+  const statusCards = [
+    ['Asset Pack', creatorStatus?.status ?? 'setup_required', creatorStatus?.normalized_root ?? creatorStatus?.source_path ?? 'No creator bundle path'],
+    ['Datasets', String(datasets.filter((dataset) => dataset.status === 'ready').length), `${datasets.length} detected safe dataset folder(s)`],
+    ['Templates', String(creatorStatus?.workflow_templates.length ?? 0), (creatorStatus?.workflow_templates ?? []).slice(0, 2).join(', ') || 'No workflow templates found'],
+    ['Backends', `${mediaStatus?.comfyui.status ?? 'offline'} / ${mediaStatus?.wan22.status ?? 'offline'}`, 'Photo via ComfyUI, video via Wan/ComfyUI'],
+  ];
+
+  async function submitCreatorGeneration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt || isMediaBusy || !activeMode) {
+      return;
+    }
+    await onCreateGeneration(activeMode.id, trimmedPrompt, referenceFile, {
+      creator_dataset_id: activeDataset?.id ?? null,
+      creator_dataset_name: activeDataset?.name ?? null,
+      creator_trigger_token: activeDataset?.trigger_token ?? 'creator_ai',
+      safety_profile: 'sfw_virtual_creator',
+      source: 'creator-studio',
+      pixelai_source_path: creatorStatus?.normalized_root ?? creatorStatus?.source_path ?? null,
+    });
+    setPrompt('');
+    setReferenceFile(null);
+  }
+
+  return (
+    <section className="workbench-view creator-studio-view" aria-label="AI Creator Studio">
+      <div className="view-heading">
+        <Sparkles size={26} />
+        <h3>AI Creator Studio</h3>
+        <button className="secondary-button icon-text-button" onClick={() => void onRefresh()} type="button">
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+
+      <section className="creator-hero-panel" aria-label="Creator Studio overview">
+        <div>
+          <span className="section-label">Virtual creator workflow</span>
+          <strong>Photoreal photos, short videos, and dataset plans for fictional AI personas</strong>
+          <p>
+            Uses Edison media jobs with PixelAI-style dataset/profile structure, ComfyUI photo generation, Wan video handoff,
+            and Gallery/chat artifact delivery.
+          </p>
+        </div>
+        <div className="creator-guardrail-grid">
+          {(creatorStatus?.guardrails ?? [
+            'AI-generated or rights-cleared fictional adult personas only',
+            'No nude, pornographic, or sexually explicit output',
+            'No real-person likeness, celebrity impersonation, or non-consensual datasets',
+            'No minors or youth-coded creator content',
+          ]).map((guardrail) => (
+            <span key={guardrail}>
+              <ShieldCheck size={15} />
+              {guardrail}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      <div className="creator-status-grid">
+        {statusCards.map(([label, value, detail]) => (
+          <article className="creator-status-card" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+            <small>{detail}</small>
+          </article>
+        ))}
+      </div>
+
+      <div className="creator-shell">
+        <section className="creator-control-panel" aria-label="Creator generation controls">
+          <div className="section-heading">
+            <Camera size={18} />
+            <h3>Generate</h3>
+          </div>
+          <div className="creator-mode-tabs" role="tablist" aria-label="Creator generation modes">
+            {safeCreatorModes.map((mode) => (
+              <button
+                className={selectedMode === mode.id ? 'mode-button active' : 'mode-button'}
+                key={mode.id}
+                onClick={() => setSelectedMode(mode.id)}
+                type="button"
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+          <form className="creator-form" onSubmit={(event) => void submitCreatorGeneration(event)}>
+            <label>
+              <span className="section-label">Dataset / persona</span>
+              <select onChange={(event) => setSelectedDatasetId(event.target.value)} value={selectedDatasetId}>
+                <option value="">Auto select safe dataset</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.id} value={dataset.id}>
+                    {dataset.name} ({dataset.item_count} items)
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="creator-active-mode-card">
+              <span className="section-label">Selected output</span>
+              <strong>{activeMode?.label ?? 'Creator Photo'}</strong>
+              <p>{activeMode?.description}</p>
+            </div>
+            <textarea
+              aria-label="Creator prompt"
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder={activeMode?.prompt_hint ?? 'Describe a safe virtual creator photo or video'}
+              rows={6}
+              value={prompt}
+            />
+            <div className="reference-upload-row">
+              <label htmlFor="creator-reference-upload">Reference image</label>
+              <input
+                accept="image/*"
+                disabled={!activeMode?.reference_supported}
+                id="creator-reference-upload"
+                onChange={(event) => setReferenceFile(event.target.files?.[0] ?? null)}
+                type="file"
+              />
+              <span>{referenceFile ? referenceFile.name : activeMode?.reference_supported ? 'Optional persona/style reference' : 'Not used for this mode'}</span>
+            </div>
+            <button className="apply-button icon-text-button" disabled={!prompt.trim() || isMediaBusy} type="submit">
+              <Send size={16} />
+              {isMediaBusy ? 'Generating' : 'Generate'}
+            </button>
+          </form>
+        </section>
+
+        <section className="creator-dataset-panel" aria-label="Creator datasets">
+          <div className="section-heading">
+            <Database size={18} />
+            <h3>Safe Datasets</h3>
+          </div>
+          <p>{creatorStatus?.detail ?? 'Creator Studio status has not loaded yet.'}</p>
+          <div className="creator-dataset-list">
+            {datasets.slice(0, 8).map((dataset) => (
+              <article className="creator-dataset-row" key={dataset.id}>
+                <div>
+                  <strong>{dataset.name}</strong>
+                  <span>{dataset.kind} / {dataset.item_count} items / {dataset.trigger_token ?? 'creator_ai'}</span>
+                </div>
+                <small className={`backend-status ${statusClassName(dataset.status)}`}>{dataset.status}</small>
+              </article>
+            ))}
+            {datasets.length === 0 && <div className="empty-line">No safe creator datasets detected yet.</div>}
+          </div>
+        </section>
+      </div>
+
+      <MediaOutputsPanel
+        artifacts={creatorArtifacts.length ? creatorArtifacts : artifacts.slice(0, 8)}
+        jobs={creatorJobs.length ? creatorJobs : jobs.slice(0, 8)}
+        onUseArtifactInChat={onUseArtifactInChat}
+      />
     </section>
   );
 }
@@ -4660,7 +4878,7 @@ function MediaView({
   mediaStatus: MediaSystemStatus | null;
   toyBoxStatus: ToyBoxManagerStatus | null;
   onCreateJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
-  onCreateGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null) => Promise<void>;
+  onCreateGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null, metadata?: Record<string, unknown>) => Promise<void>;
   onRefresh: () => Promise<void>;
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
 }) {
@@ -4694,6 +4912,12 @@ function MediaView({
       status: mediaStatus?.modly.status ?? 'offline',
       detail: mediaStatus?.modly.detail ?? 'Modly has not been checked yet.',
       meta: mediaStatus?.modly.base_url ?? 'No backend URL',
+    },
+    {
+      label: 'Creator Studio',
+      status: mediaStatus?.creator_studio.status ?? 'setup_required',
+      detail: mediaStatus?.creator_studio.detail ?? 'Creator Studio assets have not been checked yet.',
+      meta: mediaStatus?.creator_studio.normalized_root ?? mediaStatus?.creator_studio.source_path ?? 'No creator bundle path',
     },
   ];
   const minecraftModes = modeOptions.filter((mode) => mode.group === 'minecraft');
@@ -5201,6 +5425,9 @@ function fallbackMediaModes(): MediaGenerationModeRecord[] {
     ['minecraft_world', 'Minecraft World', 'minecraft', 'code', 'minecraft-suite', 'World-generation design specs.', false, 'World spec', 'Describe the world.'],
     ['minecraft_structure', 'Minecraft Structure', 'minecraft', 'code', 'minecraft-suite', 'Structure build specs.', true, 'Structure spec', 'Describe the structure.'],
     ['minecraft_texture_pack', 'Minecraft Texture Pack', 'minecraft', 'code', 'minecraft-suite', 'Texture-pack production plan.', true, 'Texture pack spec', 'Describe the texture pack.'],
+    ['creator_photo', 'Creator Photo', 'creator', 'image', 'comfyui', 'Photoreal virtual creator images using safe AI-only persona references.', true, 'Photoreal image', 'Describe a non-explicit creator photo.'],
+    ['creator_video', 'Creator Video', 'creator', 'video', 'wan22', 'Short safe virtual creator video clips.', true, 'Short video', 'Describe a safe creator video clip.'],
+    ['creator_dataset', 'Creator Dataset', 'creator', 'document', 'creator-studio', 'Dataset intake and training handoff plan.', true, 'Dataset spec', 'Describe the fictional persona and dataset.'],
     ['product_render', 'Product Render', 'commerce', 'image', 'comfyui', 'Clean product shots for ToyBox3D listings.', true, 'Product image', 'Describe the product render.'],
     ['social_media_content', 'Social Media Content', 'social', 'document', 'media-planner', 'Social post copy and creative direction.', true, 'Campaign spec', 'Describe the post or campaign.'],
   ].map(([id, label, group, jobType, backend, description, referenceSupported, outputHint, promptHint]) => ({
@@ -6596,6 +6823,16 @@ function inferMediaGenerationMode(content: string): MediaGenerationMode | null {
     }
     return 'minecraft_structure';
   }
+  const mentionsCreator = /\b(onlyfans|ai\s*creator|virtual\s*(creator|influencer|model)|creator\s*studio|fictional\s*persona|persona\s*dataset|creator\s*dataset|lora\s*persona)\b/.test(lowered);
+  if (mentionsCreator) {
+    if (/\b(dataset|training|lora|caption|trigger\s*token|persona\s*pack)\b/.test(lowered)) {
+      return 'creator_dataset';
+    }
+    if (/\b(video|animation|clip|reel|shorts|motion|wan)\b/.test(lowered)) {
+      return 'creator_video';
+    }
+    return 'creator_photo';
+  }
   if (/\b(product\s*render|shopify\s*(image|photo|listing|thumbnail)|listing\s*(image|render)|toybox3d\s*(render|listing))\b/.test(lowered)) {
     return 'product_render';
   }
@@ -6621,7 +6858,7 @@ function isMediaGenerationPrompt(content: string): boolean {
   }
   const lowered = content.toLowerCase();
   return /\b(generate|make|create|render|draw|design|turn|convert|animate|produce)\b/.test(lowered)
-    && /\b(image|picture|photo|art|poster|video|animation|movie|clip|3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt|modly|comfy|wan|minecraft|texture|texture\s*pack|resource\s*pack|blockbench|world|structure|schematic|product\s*render|shopify\s*listing|social\s*media|caption|campaign)\b/.test(lowered);
+    && /\b(image|picture|photo|art|poster|video|animation|movie|clip|3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt|modly|comfy|wan|minecraft|texture|texture\s*pack|resource\s*pack|blockbench|world|structure|schematic|product\s*render|shopify\s*listing|social\s*media|caption|campaign|onlyfans|ai\s*creator|virtual\s*(creator|influencer|model)|creator\s*studio|fictional\s*persona|creator\s*dataset|lora\s*persona)\b/.test(lowered);
 }
 
 function mediaJobTitle(content: string, jobType: JobType) {

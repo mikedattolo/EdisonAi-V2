@@ -35,6 +35,7 @@ class EdisonSettings(BaseModel):
     wan22_timeout_seconds: float = 2.0
     modly_base_url: str | None = None
     modly_timeout_seconds: float = 2.0
+    creator_studio_source_path: Path | None = PROJECT_ROOT / "vendor" / "pixelai_creator_studio"
     workflow_root: Path = PROJECT_ROOT / "workflows"
     integration_discovery_path: Path = PROJECT_ROOT / "config" / "integration-discovery.local.json"
     runtime_settings_path: Path = PROJECT_ROOT / "config" / "runtime-settings.local.json"
@@ -111,6 +112,12 @@ def load_settings(config_path: str | Path | None = None) -> EdisonSettings:
         modly_timeout_seconds=float(
             os.getenv("EDISON_MODLY_TIMEOUT_SECONDS", media.get("modly_timeout_seconds", 2.0))
         ),
+        creator_studio_source_path=_optional_resolve_path(
+            os.getenv(
+                "EDISON_CREATOR_STUDIO_SOURCE_PATH",
+                media.get("creator_studio_source_path", "vendor/pixelai_creator_studio"),
+            )
+        ),
         workflow_root=_resolve_path(
             os.getenv("EDISON_WORKFLOW_ROOT", media.get("workflow_root", "workflows"))
         ),
@@ -160,6 +167,12 @@ def _read_toml(path: Path) -> dict:
 def _resolve_path(value: str | Path) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _optional_resolve_path(value: str | Path | None) -> Path | None:
+    if value is None or str(value).strip() == "":
+        return None
+    return _resolve_path(value)
 
 
 def _bool_env(name: str, default: bool) -> bool:

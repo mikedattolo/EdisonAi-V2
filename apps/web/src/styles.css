@@ -2915,6 +2915,204 @@ button {
   color: #425067;
 }
 
+.creator-studio-view {
+  gap: 16px;
+}
+
+.creator-hero-panel,
+.creator-control-panel,
+.creator-dataset-panel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+}
+
+.creator-hero-panel {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.82fr);
+  align-items: start;
+  background: #fbfcfd;
+}
+
+.creator-hero-panel > div:first-child {
+  display: grid;
+  gap: 8px;
+}
+
+.creator-hero-panel strong {
+  color: #17212b;
+  font-size: 1.08rem;
+  line-height: 1.3;
+}
+
+.creator-hero-panel p,
+.creator-dataset-panel p,
+.creator-active-mode-card p {
+  margin: 0;
+  color: #536278;
+  line-height: 1.48;
+}
+
+.creator-guardrail-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.creator-guardrail-grid span {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-height: 34px;
+  padding: 8px 9px;
+  border: 1px solid #dbe5e1;
+  border-radius: 8px;
+  background: #f5fbf8;
+  color: #324236;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.creator-guardrail-grid svg {
+  color: #17806e;
+}
+
+.creator-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.creator-status-card {
+  display: grid;
+  gap: 6px;
+  min-height: 110px;
+  padding: 13px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.creator-status-card span {
+  color: #697487;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.creator-status-card strong {
+  overflow: hidden;
+  color: #1f2937;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creator-status-card small {
+  color: #536278;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.creator-shell {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.86fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.creator-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid #d7dfe8;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.creator-form {
+  display: grid;
+  gap: 12px;
+}
+
+.creator-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.creator-form select,
+.creator-form textarea {
+  width: 100%;
+  border: 1px solid #cdd5e0;
+  border-radius: 8px;
+  color: #17212b;
+  outline: none;
+}
+
+.creator-form select {
+  min-height: 38px;
+  padding: 0 10px;
+  background: #ffffff;
+}
+
+.creator-form textarea {
+  min-height: 150px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.creator-form select:focus,
+.creator-form textarea:focus {
+  border-color: #55baa8;
+  box-shadow: 0 0 0 3px #dff6f0;
+}
+
+.creator-active-mode-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.creator-dataset-list {
+  display: grid;
+  gap: 10px;
+  max-height: 390px;
+  overflow: auto;
+}
+
+.creator-dataset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 11px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.creator-dataset-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.creator-dataset-row strong,
+.creator-dataset-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creator-dataset-row span {
+  color: #697487;
+  font-size: 0.82rem;
+}
+
 .media-generate-form .apply-button {
   grid-column: 2;
   justify-self: end;
@@ -3468,6 +3666,9 @@ button {
   .strategy-grid,
   .media-status-row,
   .media-mode-grid,
+  .creator-hero-panel,
+  .creator-status-grid,
+  .creator-shell,
   .minecraft-workflow-grid,
   .toybox-flow-grid,
   .toybox-ops-grid,
@@ -4669,6 +4870,7 @@ button {
   .rag-chat-controls,
   .memory-search-form,
   .memory-import-form.two-column,
+  .creator-mode-tabs,
   .media-generate-form,
   .text-import {
     grid-template-columns: 1fr;
@@ -4679,6 +4881,7 @@ button {
   .text-import textarea,
   .text-import button,
   .reference-upload-row,
+  .creator-mode-tabs,
   .media-generate-form .apply-button {
     grid-column: auto;
   }

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from edison_core.api.dependencies import (
     get_comfyui_client,
     get_conversation_store,
+    get_creator_studio_service,
     get_generation_store,
     get_invokeai_client,
     get_media_orchestrator,
@@ -32,6 +33,7 @@ from edison_core.schemas import (
 )
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationNotFoundError, ConversationStore
+from edison_core.services.creator_studio import CreatorStudioService
 from edison_core.services.generation_store import GenerationStore, JobNotFoundError
 from edison_core.services.invokeai_client import InvokeAIClient
 from edison_core.services.media_orchestrator import MediaOrchestrator
@@ -53,6 +55,7 @@ def media_status(
     invokeai: InvokeAIClient = Depends(get_invokeai_client),
     wan22: Wan22Client = Depends(get_wan22_client),
     modly: ModlyClient = Depends(get_modly_client),
+    creator_studio: CreatorStudioService = Depends(get_creator_studio_service),
     store: GenerationStore = Depends(get_generation_store),
 ) -> MediaSystemStatus:
     return MediaSystemStatus(
@@ -60,6 +63,7 @@ def media_status(
         invokeai=invokeai.status(),
         wan22=wan22.status(),
         modly=modly.status(),
+        creator_studio=creator_studio.status(),
         job_counts=store.job_counts(),
     )
 
@@ -71,10 +75,13 @@ def generate_media(
     invokeai: InvokeAIClient = Depends(get_invokeai_client),
     wan22: Wan22Client = Depends(get_wan22_client),
     modly: ModlyClient = Depends(get_modly_client),
+    creator_studio: CreatorStudioService = Depends(get_creator_studio_service),
     orchestrator: MediaOrchestrator = Depends(get_media_orchestrator),
     store: GenerationStore = Depends(get_generation_store),
 ) -> JobRecord:
     mode = _mode_record(payload.mode)
+    if payload.mode in _CREATOR_MODES:
+        _validate_creator_generation(payload, creator_studio)
     if _is_planning_mode(payload.mode, payload.reference_artifact_id):
         return _create_planning_artifact_job(payload, mode, store, orchestrator.settings.artifact_root)
 
@@ -295,6 +302,54 @@ def _media_modes() -> list[MediaGenerationModeRecord]:
             metadata={"minecraft_version": "1.7.10"},
         ),
         MediaGenerationModeRecord(
+            id=MediaGenerationMode.CREATOR_PHOTO,
+            label="Creator Photo",
+            group="creator",
+            job_type=JobType.IMAGE,
+            backend="comfyui",
+            description="Photoreal virtual creator images using AI-only or rights-cleared persona references.",
+            reference_supported=True,
+            output_hint="Photoreal image artifact",
+            prompt_hint="Describe a non-explicit creator photo, scene, outfit, lighting, and persona token.",
+            metadata={
+                "requires_ai_only_identity": True,
+                "explicit_content_allowed": False,
+                "recommended_backend": "ComfyUI FLUX/SDXL",
+            },
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.CREATOR_VIDEO,
+            label="Creator Video",
+            group="creator",
+            job_type=JobType.VIDEO,
+            backend="wan22",
+            description="Short non-explicit virtual creator motion clips through the configured Wan/ComfyUI video backend.",
+            reference_supported=True,
+            output_hint="Short video artifact",
+            prompt_hint="Describe a safe creator clip with motion, camera move, outfit, scene, and duration.",
+            metadata={
+                "requires_ai_only_identity": True,
+                "explicit_content_allowed": False,
+                "recommended_backend": "WAN 2.2",
+            },
+        ),
+        MediaGenerationModeRecord(
+            id=MediaGenerationMode.CREATOR_DATASET,
+            label="Creator Dataset",
+            group="creator",
+            job_type=JobType.DOCUMENT,
+            backend="creator-studio",
+            description="Dataset intake, captioning, trigger-token, and training handoff plan for a fictional AI creator.",
+            reference_supported=True,
+            output_hint="Dataset and LoRA prep spec",
+            prompt_hint="Describe the fictional creator persona, dataset source, image count, style range, and target outputs.",
+            metadata={
+                "requires_ai_only_identity": True,
+                "explicit_content_allowed": False,
+                "source": "PixelAI Creator Studio architecture",
+            },
+        ),
+        MediaGenerationModeRecord(
             id=MediaGenerationMode.PRODUCT_RENDER,
             label="Product Render",
             group="commerce",
@@ -356,6 +411,20 @@ def _prompt_for_mode(payload: MediaGenerationRequest, mode: MediaGenerationModeR
             f"Studio product render for a ToyBox3D Shopify listing, {prompt}. "
             "Clean background, accurate shape, printable plastic material, clear lighting, commercial thumbnail."
         )
+    if payload.mode == MediaGenerationMode.CREATOR_PHOTO:
+        token = _creator_token(payload)
+        return (
+            f"Photorealistic editorial photo of a fictional AI-generated adult virtual creator persona {token}, {prompt}. "
+            "Non-nude, non-explicit, rights-cleared synthetic identity, no real-person likeness, natural skin texture, "
+            "professional lighting, polished social creator portfolio style, no watermark, no UI text."
+        )
+    if payload.mode == MediaGenerationMode.CREATOR_VIDEO:
+        token = _creator_token(payload)
+        return (
+            f"Short photorealistic video of a fictional AI-generated adult virtual creator persona {token}, {prompt}. "
+            "Non-nude, non-explicit, rights-cleared synthetic identity, no real-person likeness, stable face consistency, "
+            "natural motion, clean camera movement, no watermark, no UI text."
+        )
     return prompt
 
 
@@ -365,6 +434,7 @@ def _is_planning_mode(mode: MediaGenerationMode, reference_artifact_id: str | No
         MediaGenerationMode.MINECRAFT_WORLD,
         MediaGenerationMode.MINECRAFT_STRUCTURE,
         MediaGenerationMode.MINECRAFT_TEXTURE_PACK,
+        MediaGenerationMode.CREATOR_DATASET,
         MediaGenerationMode.SOCIAL_MEDIA_CONTENT,
     }
 
@@ -375,7 +445,12 @@ def _create_planning_artifact_job(
     store: GenerationStore,
     artifact_root: Path,
 ) -> JobRecord:
-    backend = "minecraft-suite" if mode.group == "minecraft" else "media-planner"
+    if mode.group == "minecraft":
+        backend = "minecraft-suite"
+    elif mode.group == "creator":
+        backend = "creator-studio"
+    else:
+        backend = "media-planner"
     job = store.create_job(
         JobCreate(
             job_type=mode.job_type,
@@ -436,6 +511,24 @@ def _planning_markdown(payload: MediaGenerationRequest, mode: MediaGenerationMod
             "- Define palette, scale, collision/visual bounds, and export target.",
             "- Track generated files in Edison artifacts before packaging.",
         ]
+    elif mode.group == "creator":
+        sections = [
+            "# AI Creator Studio Dataset Plan",
+            f"Prompt: {prompt}",
+            f"Reference artifact: {reference}",
+            "## Safety And Rights",
+            "- Use only AI-generated or rights-cleared fictional adult personas.",
+            "- Do not use real-person likenesses, celebrities, minors, nudity, or sexually explicit content.",
+            "- Keep dataset provenance and model permissions attached to every training/output job.",
+            "## Dataset Prep",
+            "- Separate input images, captions, rejected frames, and training-ready selections.",
+            "- Create a stable trigger token and caption each image with outfit, scene, lighting, and composition.",
+            "- Keep SFW image and video folders separate from any rejected or unsupported content.",
+            "## Generation Handoff",
+            "- Creator Photo jobs route to ComfyUI with the selected persona/dataset metadata.",
+            "- Creator Video jobs route to the configured Wan/ComfyUI video backend.",
+            "- Deliver resulting image/video artifacts back to chat and Gallery.",
+        ]
     else:
         sections = [
             f"# {mode.label}",
@@ -452,3 +545,89 @@ def _planning_markdown(payload: MediaGenerationRequest, mode: MediaGenerationMod
 def _title_from_prompt(prompt: str) -> str:
     title = " ".join(prompt.split())
     return f"{title[:53]}..." if len(title) > 56 else title or "Untitled"
+
+
+_CREATOR_MODES = {
+    MediaGenerationMode.CREATOR_PHOTO,
+    MediaGenerationMode.CREATOR_VIDEO,
+    MediaGenerationMode.CREATOR_DATASET,
+}
+
+_EXPLICIT_CREATOR_TERMS = {
+    "onlyfans",
+    "nude",
+    "naked",
+    "porn",
+    "porno",
+    "sex",
+    "sexual",
+    "explicit",
+    "blowjob",
+    "handjob",
+    "masturbat",
+    "orgasm",
+    "penetrat",
+    "genital",
+    "vagina",
+    "penis",
+    "breasts exposed",
+    "topless",
+}
+
+_MINOR_CREATOR_TERMS = {
+    "teen",
+    "minor",
+    "underage",
+    "schoolgirl",
+    "school boy",
+    "schoolboy",
+    "child",
+    "kid",
+    "young-looking",
+}
+
+_REAL_PERSON_TERMS = {
+    "celebrity",
+    "real person",
+    "looks like",
+    "deepfake",
+    "impersonate",
+}
+
+
+def _validate_creator_generation(payload: MediaGenerationRequest, creator_studio: CreatorStudioService) -> None:
+    text = " ".join(
+        [
+            payload.prompt,
+            " ".join(str(value) for value in payload.metadata.values() if isinstance(value, str)),
+        ]
+    ).lower()
+    if any(term in text for term in _EXPLICIT_CREATOR_TERMS):
+        raise HTTPException(
+            status_code=400,
+            detail="Creator Studio supports safe virtual creator content only: non-nude, non-explicit photo/video generation.",
+        )
+    if any(term in text for term in _MINOR_CREATOR_TERMS):
+        raise HTTPException(
+            status_code=400,
+            detail="Creator Studio only supports fictional adult personas and blocks minor or youth-coded requests.",
+        )
+    if any(term in text for term in _REAL_PERSON_TERMS):
+        raise HTTPException(
+            status_code=400,
+            detail="Creator Studio cannot create real-person likenesses, celebrity impersonations, or deepfakes.",
+        )
+    source_status = creator_studio.status()
+    if payload.mode == MediaGenerationMode.CREATOR_DATASET and source_status.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail="Creator Studio assets are not installed yet. Sync the safe PixelAI creator bundle to Edison first.",
+        )
+
+
+def _creator_token(payload: MediaGenerationRequest) -> str:
+    for key in ("trigger_token", "creator_trigger_token", "dataset_trigger_token"):
+        value = payload.metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "creator_ai"

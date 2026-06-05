@@ -240,19 +240,45 @@ export type MediaGenerationMode =
   | 'minecraft_world'
   | 'minecraft_structure'
   | 'minecraft_texture_pack'
+  | 'creator_photo'
+  | 'creator_video'
+  | 'creator_dataset'
   | 'product_render'
   | 'social_media_content';
 
 export interface MediaGenerationModeRecord {
   id: MediaGenerationMode;
   label: string;
-  group: 'core' | 'minecraft' | 'commerce' | 'social';
+  group: 'core' | 'minecraft' | 'creator' | 'commerce' | 'social';
   job_type: JobType;
   backend: string;
   description: string;
   reference_supported: boolean;
   output_hint: string;
   prompt_hint: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CreatorStudioDatasetRecord {
+  id: string;
+  name: string;
+  root_path: string;
+  kind: 'image' | 'video' | 'mixed' | 'unknown';
+  status: 'ready' | 'detected' | 'empty';
+  item_count: number;
+  trigger_token?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface CreatorStudioStatus {
+  service: string;
+  status: 'ready' | 'setup_required' | 'offline' | 'error';
+  source_path?: string | null;
+  normalized_root?: string | null;
+  detail: string;
+  datasets: CreatorStudioDatasetRecord[];
+  workflow_templates: string[];
+  guardrails: string[];
   metadata: Record<string, unknown>;
 }
 
@@ -361,6 +387,7 @@ export interface MediaSystemStatus {
   invokeai: MediaBackendStatus;
   wan22: MediaBackendStatus;
   modly: MediaBackendStatus;
+  creator_studio: CreatorStudioStatus;
   job_counts: Record<string, number>;
 }
 
