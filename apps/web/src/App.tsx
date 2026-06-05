@@ -6483,6 +6483,9 @@ function latestImageArtifactFromConversation(conversation: ConversationWithMessa
 
 function inferMediaJobType(content: string): JobType {
   const lowered = content.toLowerCase();
+  if (isDesktopBridgeToolPrompt(content)) {
+    return 'image';
+  }
   if (/\b(video|animation|movie|clip|timelapse|wan)\b/.test(lowered)) {
     return 'video';
   }
@@ -6496,6 +6499,9 @@ function inferMediaJobType(content: string): JobType {
 }
 
 function inferMediaGenerationMode(content: string): MediaGenerationMode | null {
+  if (isDesktopBridgeToolPrompt(content)) {
+    return null;
+  }
   const lowered = content.toLowerCase();
   const mentionsMinecraft = /\b(minecraft|mc\s*1\.7\.10|1\.7\.10|blockbench|resource\s*pack|texture\s*pack|schematic|structure|biome|worldgen)\b/.test(lowered);
   if (mentionsMinecraft) {
@@ -6525,7 +6531,20 @@ function inferMediaGenerationMode(content: string): MediaGenerationMode | null {
   return null;
 }
 
+function isDesktopBridgeToolPrompt(content: string): boolean {
+  const lowered = content.toLowerCase();
+  const mentionsBridge = /\b(desktop\s*bridge|bridge\s*tools?|connected\s+(apps|tools|printers|slicers)|allowed\s+(folders|roots))\b/.test(lowered);
+  const mentionsFusion = /\b(fusion\s*360|autodesk\s+fusion|fusion\s+bridge|use\s+fusion|in\s+fusion)\b/.test(lowered);
+  const mentionsSlicer = /\b(bambu\s*studio|bambu\s*lab|orcaslicer|orca\s*slicer|cura|slicer\s+handoff|prepare\s+.*\bslicer|slice\s+this|print\s+handoff)\b/.test(lowered);
+  const mentionsCadWorkflow = /\b(cad|parametric|sketch|extrude|chamfer|fillet|solid\s+body|step|iges|f3d)\b/.test(lowered)
+    && /\b(mm|millimeter|dimension|stl|3mf|export|part|model|body|block)\b/.test(lowered);
+  return mentionsBridge || mentionsFusion || mentionsSlicer || mentionsCadWorkflow;
+}
+
 function isMediaGenerationPrompt(content: string): boolean {
+  if (isDesktopBridgeToolPrompt(content)) {
+    return false;
+  }
   const lowered = content.toLowerCase();
   return /\b(generate|make|create|render|draw|design|turn|convert|animate|produce)\b/.test(lowered)
     && /\b(image|picture|photo|art|poster|video|animation|movie|clip|3d|3-d|three-dimensional|mesh|glb|obj|stl|sculpt|modly|comfy|wan|minecraft|texture|texture\s*pack|resource\s*pack|blockbench|world|structure|schematic|product\s*render|shopify\s*listing|social\s*media|caption|campaign)\b/.test(lowered);

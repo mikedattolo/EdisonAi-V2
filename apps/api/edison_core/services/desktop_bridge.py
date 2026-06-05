@@ -9,7 +9,7 @@ from edison_core.services.runtime_settings import RuntimeSettingsStore
 
 
 class DesktopBridgeClient:
-    def __init__(self, runtime_settings: RuntimeSettingsStore, timeout_seconds: float = 2.5) -> None:
+    def __init__(self, runtime_settings: RuntimeSettingsStore, timeout_seconds: float = 12.0) -> None:
         self.runtime_settings = runtime_settings
         self.timeout_seconds = timeout_seconds
 
