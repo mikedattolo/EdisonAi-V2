@@ -112,6 +112,51 @@ def test_camera_analyze_route_captures_artifact_and_uses_vision_gateway(tmp_path
     assert downloaded.content.startswith(b"\xff\xd8")
 
 
+def test_chat_camera_prompt_captures_and_analyzes_frame(tmp_path):
+    app = create_app(_settings(tmp_path))
+    app.state.hardware_device_service = _FakeHardwareDeviceService(tmp_path / "artifacts")
+    app.state.model_gateway = _FakeVisionGateway()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/chat",
+        json={"message": "What does your camera see?", "mode": "auto", "memory_enabled": True},
+    )
+
+    body = response.json()
+    assistant = body["assistant_message"]
+
+    assert response.status_code == 201
+    assert body["model_selection"]["model"]["id"] == "local-vision"
+    assert "desk" in body["inference"]["content"].lower()
+    assert "Saved frame" in body["inference"]["content"]
+    assert assistant["metadata"]["intent_router"]["tool_action"] == "camera.analyze_frame"
+    assert assistant["metadata"]["camera_action"]["artifact_id"]
+
+
+def test_streaming_chat_camera_prompt_uses_camera_tool(tmp_path):
+    app = create_app(_settings(tmp_path))
+    app.state.hardware_device_service = _FakeHardwareDeviceService(tmp_path / "artifacts")
+    app.state.model_gateway = _FakeVisionGateway()
+    client = TestClient(app)
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat/stream",
+        json={"message": "Can you look through your camera?", "mode": "auto", "memory_enabled": True},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    conversations = client.get("/api/v1/conversations").json()
+    loaded = client.get(f"/api/v1/conversations/{conversations[0]['id']}").json()
+
+    assert response.status_code == 200
+    assert "event: token" in body
+    assert "desk" in body.lower()
+    assert loaded["messages"][1]["metadata"]["streamed"] is True
+    assert loaded["messages"][1]["metadata"]["intent_router"]["tool_action"] == "camera.analyze_frame"
+
+
 class _FakeHardwareDeviceService:
     def __init__(self, artifact_root: Path) -> None:
         self.artifact_root = artifact_root

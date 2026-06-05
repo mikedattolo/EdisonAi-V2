@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -8,11 +9,14 @@ from fastapi.responses import StreamingResponse
 from edison_core.api.dependencies import (
     get_agent_run_store,
     get_conversation_store,
+    get_generation_store,
+    get_hardware_device_service,
     get_knowledge_store,
     get_model_gateway,
     get_personal_workspace_store,
     get_workspace_tools,
 )
+from edison_core.api.routes_hardware import _release_camera_feeds, _save_camera_artifact
 from edison_core.schemas import (
     AgentRunCreate,
     AgentRunEventCreate,
@@ -20,18 +24,26 @@ from edison_core.schemas import (
     AgentRunStatus,
     AgentRunStatusUpdate,
     AgentRunWithEvents,
+    ArtifactRecord,
+    CameraSnapshotRequest,
     ChatMode,
     ChatRequest,
     ChatResponse,
     ConversationCreate,
     InferenceRequest,
+    InferenceResponse,
     MessageCreate,
     MessageRole,
+    ModelProfile,
+    ModelSelection,
+    ModelStatus,
     OrganizerStatus,
     WorkspaceIndexSearchRequest,
 )
 from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.conversation_store import ConversationNotFoundError, ConversationStore
+from edison_core.services.generation_store import GenerationStore
+from edison_core.services.hardware_devices import CameraCaptureError, HardwareDeviceService
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_gateway import ModelGateway
 from edison_core.services.personal_workspace import PersonalWorkspaceStore
@@ -47,6 +59,8 @@ def create_chat_turn(
     conversations: ConversationStore = Depends(get_conversation_store),
     gateway: ModelGateway = Depends(get_model_gateway),
     workspace: WorkspaceTools = Depends(get_workspace_tools),
+    hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+    generation_store: GenerationStore = Depends(get_generation_store),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
     agent_runs: AgentRunStore = Depends(get_agent_run_store),
@@ -91,6 +105,39 @@ def create_chat_turn(
         conversation = conversations.get_conversation(conversation_id)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found") from error
+
+    if _is_camera_chat_request(resolved_payload.message):
+        camera_result = _run_camera_chat_action(resolved_payload, hardware, generation_store, gateway)
+        _complete_agent_run_if_needed(agent_run, agent_runs, camera_result.inference.finish_reason)
+        assistant_message = conversations.add_message(
+            conversation_id,
+            MessageCreate(
+                role=MessageRole.ASSISTANT,
+                content=camera_result.inference.content,
+                model=camera_result.inference.model_id,
+                metadata={
+                    "finish_reason": camera_result.inference.finish_reason,
+                    "gateway": camera_result.inference.metadata,
+                    "model_selection_reason": camera_result.model_selection.reason,
+                    "requested_mode": payload.mode.value,
+                    "resolved_mode": resolved_payload.mode.value,
+                    "agent_enabled": payload.agent_enabled,
+                    "intent_router": {**intent_metadata, "tool_action": "camera.analyze_frame"},
+                    "workspace_context": workspace_metadata,
+                    "knowledge_context": knowledge_metadata,
+                    "personal_context": personal_metadata,
+                    "agent_run_id": agent_run.id if agent_run else None,
+                    "camera_action": camera_result.metadata,
+                },
+            ),
+        )
+        return ChatResponse(
+            conversation=conversations.get_conversation(conversation_id),
+            user_message=user_message,
+            assistant_message=assistant_message,
+            inference=camera_result.inference,
+            model_selection=camera_result.model_selection,
+        )
 
     model_messages = context_messages + _openai_messages(conversation.messages)
     model_selection, inference = gateway.complete(
@@ -146,6 +193,8 @@ def stream_chat_turn(
     conversations: ConversationStore = Depends(get_conversation_store),
     gateway: ModelGateway = Depends(get_model_gateway),
     workspace: WorkspaceTools = Depends(get_workspace_tools),
+    hardware: HardwareDeviceService = Depends(get_hardware_device_service),
+    generation_store: GenerationStore = Depends(get_generation_store),
     knowledge: KnowledgeStore = Depends(get_knowledge_store),
     personal: PersonalWorkspaceStore = Depends(get_personal_workspace_store),
     agent_runs: AgentRunStore = Depends(get_agent_run_store),
@@ -191,6 +240,59 @@ def stream_chat_turn(
         conversation = conversations.get_conversation(conversation_id)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found") from error
+
+    if _is_camera_chat_request(resolved_payload.message):
+        camera_result = _run_camera_chat_action(resolved_payload, hardware, generation_store, gateway)
+
+        def camera_event_source():
+            yield _sse(
+                "start",
+                {
+                    "conversation_id": conversation_id,
+                    "user_message": user_message.model_dump(mode="json"),
+                    "model_selection": camera_result.model_selection.model_dump(mode="json"),
+                    "agent_run": agent_run.model_dump(mode="json") if agent_run else None,
+                },
+            )
+            yield _sse("token", {"delta": camera_result.inference.content})
+            _complete_agent_run_if_needed(agent_run, agent_runs, camera_result.inference.finish_reason)
+            assistant_message = conversations.add_message(
+                conversation_id,
+                MessageCreate(
+                    role=MessageRole.ASSISTANT,
+                    content=camera_result.inference.content,
+                    model=camera_result.inference.model_id,
+                    metadata={
+                        "finish_reason": camera_result.inference.finish_reason,
+                        "gateway": camera_result.inference.metadata,
+                        "model_selection_reason": camera_result.model_selection.reason,
+                        "requested_mode": payload.mode.value,
+                        "resolved_mode": resolved_payload.mode.value,
+                        "agent_enabled": payload.agent_enabled,
+                        "intent_router": {**intent_metadata, "tool_action": "camera.analyze_frame"},
+                        "workspace_context": workspace_metadata,
+                        "knowledge_context": knowledge_metadata,
+                        "personal_context": personal_metadata,
+                        "streamed": True,
+                        "agent_run_id": agent_run.id if agent_run else None,
+                        "camera_action": camera_result.metadata,
+                    },
+                ),
+            )
+            response = ChatResponse(
+                conversation=conversations.get_conversation(conversation_id),
+                user_message=user_message,
+                assistant_message=assistant_message,
+                inference=camera_result.inference,
+                model_selection=camera_result.model_selection,
+            )
+            yield _sse("done", response.model_dump(mode="json"))
+
+        return StreamingResponse(
+            camera_event_source(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     model_messages = context_messages + _openai_messages(conversation.messages)
     selection, stream = gateway.stream_complete(
@@ -406,6 +508,163 @@ def _resolve_chat_payload(payload: ChatRequest) -> tuple[ChatRequest, dict]:
     if resolved_mode == payload.mode:
         return payload, metadata
     return payload.model_copy(update={"mode": resolved_mode}), metadata
+
+
+@dataclass(frozen=True)
+class CameraChatResult:
+    inference: InferenceResponse
+    model_selection: ModelSelection
+    artifact: ArtifactRecord | None
+    metadata: dict
+
+
+def _run_camera_chat_action(
+    payload: ChatRequest,
+    hardware: HardwareDeviceService,
+    store: GenerationStore,
+    gateway: ModelGateway,
+) -> CameraChatResult:
+    try:
+        _release_camera_feeds(None)
+        capture = hardware.capture_camera_snapshot(
+            CameraSnapshotRequest(
+                width=1280,
+                height=720,
+                input_format="mjpeg",
+                title="Brio camera chat frame",
+            )
+        )
+    except CameraCaptureError as error:
+        selection = _camera_tool_selection("Camera capture failed")
+        return CameraChatResult(
+            inference=InferenceResponse(
+                model_id=selection.model.id,
+                content=(
+                    "I tried to use the camera, but Edison could not capture a frame yet. "
+                    f"{error}"
+                ),
+                finish_reason="error",
+                metadata={"tool": "camera.capture", "error": str(error)},
+            ),
+            model_selection=selection,
+            artifact=None,
+            metadata={"status": "capture_failed", "error": str(error)},
+        )
+
+    artifact = _save_camera_artifact(
+        store,
+        capture,
+        payload.message[:120] or "Brio camera chat frame",
+        {"analysis_prompt": payload.message, "source": "chat-camera-intent"},
+    )
+    image_bytes = capture.absolute_path.read_bytes()
+    selection, inference = gateway.analyze_image(_camera_prompt(payload.message), image_bytes, "image/jpeg")
+    content = _camera_chat_content(inference, artifact, capture.detail)
+    return CameraChatResult(
+        inference=InferenceResponse(
+            model_id=inference.model_id,
+            content=content,
+            finish_reason=inference.finish_reason,
+            metadata={
+                **inference.metadata,
+                "tool": "camera.analyze_frame",
+                "artifact_id": artifact.id,
+                "capture_detail": capture.detail,
+            },
+        ),
+        model_selection=selection,
+        artifact=artifact,
+        metadata={
+            "status": "complete" if inference.finish_reason in {"stop", "length"} else inference.finish_reason,
+            "artifact_id": artifact.id,
+            "artifact_path": artifact.path,
+            "camera": capture.camera.model_dump(mode="json"),
+            "capture_detail": capture.detail,
+        },
+    )
+
+
+def _camera_chat_content(inference: InferenceResponse, artifact: ArtifactRecord, capture_detail: str) -> str:
+    if inference.finish_reason == "not_configured":
+        return (
+            "I can access the camera now and captured a fresh frame, but the local vision model is not ready yet. "
+            f"{inference.content}\n\n"
+            f"Saved frame: `{artifact.title}` (`{artifact.id}`)."
+        )
+    if inference.finish_reason == "error":
+        return (
+            "I captured a fresh camera frame, but the vision model failed while analyzing it. "
+            f"{inference.content}\n\n"
+            f"Saved frame: `{artifact.title}` (`{artifact.id}`)."
+        )
+    return (
+        f"{inference.content}\n\n"
+        f"Saved frame: `{artifact.title}` (`{artifact.id}`). {capture_detail}"
+    )
+
+
+def _camera_prompt(message: str) -> str:
+    return (
+        "Analyze this live Edison Brio camera frame in under 120 words. "
+        "Start with one direct sentence describing the scene, then list the important visible objects. "
+        "If anything is uncertain, say so plainly. User request: "
+        f"{message}"
+    )
+
+
+def _camera_tool_selection(reason: str) -> ModelSelection:
+    return ModelSelection(
+        mode=ChatMode.CHAT,
+        required_capabilities=[],
+        model=ModelProfile(
+            id="edison-camera",
+            display_name="Edison Camera",
+            provider="edison-hardware",
+            status=ModelStatus.READY,
+            capabilities=[],
+            context_window=0,
+            max_output_tokens=0,
+        ),
+        reason=reason,
+    )
+
+
+def _is_camera_chat_request(message: str) -> bool:
+    lowered = message.lower()
+    camera_terms = {
+        "camera",
+        "webcam",
+        "brio",
+        "video feed",
+        "live feed",
+        "through your eyes",
+        "through the camera",
+    }
+    visual_terms = {
+        "see",
+        "seeing",
+        "look",
+        "watch",
+        "visible",
+        "view",
+        "describe",
+        "analyze",
+        "snapshot",
+        "picture",
+        "photo",
+        "frame",
+    }
+    if any(term in lowered for term in camera_terms) and any(term in lowered for term in visual_terms):
+        return True
+    return any(
+        phrase in lowered
+        for phrase in (
+            "what can you see",
+            "what do you see",
+            "what are you seeing",
+            "look around",
+        )
+    )
 
 
 def _infer_intent_mode(payload: ChatRequest) -> tuple[ChatMode, str]:
