@@ -1,0 +1,11 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "addin",
+  "author": "Edison AI",
+  "description": "Polls Edison desktop bridge Fusion jobs and runs them inside Fusion 360.",
+  "supportedOS": "windows",
+  "editEnabled": true,
+  "id": "EdisonFusionBridge",
+  "version": "0.1.0",
+  "runOnStartup": false
+}

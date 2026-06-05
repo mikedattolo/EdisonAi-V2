@@ -864,7 +864,9 @@ class DesktopBridgeStatus(BaseModel):
     reachable: bool = False
     apps: list[dict[str, Any]] = Field(default_factory=list)
     printers: list[dict[str, Any]] = Field(default_factory=list)
+    three_d_printers: list[dict[str, Any]] = Field(default_factory=list)
     allowed_roots: list[str] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=list)
     detail: str
     checked_at: datetime = Field(default_factory=utc_now)
 

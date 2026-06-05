@@ -41,6 +41,14 @@ if (!(Test-Path $ConfigPath)) {
     )
     apps = $Apps
     printers = $Printers
+    three_d_printers = @()
+    fusion = @{
+      queue_dir = (Join-Path $RepoRoot "projects\fusion-jobs\queue")
+      results_dir = (Join-Path $RepoRoot "projects\fusion-jobs\results")
+      exports_dir = (Join-Path $RepoRoot "projects\fusion-jobs\exports")
+      launch_tool_id = ""
+    }
+    slicer_jobs_dir = (Join-Path $RepoRoot "projects\slicer-jobs")
   }
   $Config | ConvertTo-Json -Depth 8 | Set-Content -Path $ConfigPath -Encoding UTF8
 }
