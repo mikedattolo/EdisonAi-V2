@@ -210,7 +210,7 @@ def _restricted_manifest_assets(root: Path) -> list[CreatorStudioAssetRecord]:
     if not manifest_path.exists():
         return []
     try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return []
     items = raw.get("restricted_asset_candidates")
