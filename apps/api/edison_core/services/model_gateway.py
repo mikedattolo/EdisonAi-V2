@@ -45,9 +45,16 @@ class ModelGateway:
             "stream": False,
             "max_tokens": profile.max_output_tokens,
         }
+        response_format = request.metadata.get("response_format")
+        if isinstance(response_format, dict):
+            payload["response_format"] = response_format
 
         try:
-            result = self._post(_chat_completions_url(profile.endpoint_url), payload)
+            result = self._post(
+                _chat_completions_url(profile.endpoint_url),
+                payload,
+                timeout_seconds=_request_timeout(request.metadata, self.timeout_seconds),
+            )
             result.raise_for_status()
             body = result.json()
         except httpx.HTTPError as error:
@@ -151,10 +158,11 @@ class ModelGateway:
                 reason="fallback profile used because no model matches required capabilities",
             )
 
-    def _post(self, url: str, payload: dict[str, Any]) -> httpx.Response:
+    def _post(self, url: str, payload: dict[str, Any], timeout_seconds: float | None = None) -> httpx.Response:
+        timeout = timeout_seconds or self.timeout_seconds
         if self.http_client is not None:
-            return self.http_client.post(url, json=payload, timeout=self.timeout_seconds)
-        with httpx.Client(timeout=self.timeout_seconds) as client:
+            return self.http_client.post(url, json=payload, timeout=timeout)
+        with httpx.Client(timeout=timeout) as client:
             return client.post(url, json=payload)
 
 
@@ -307,6 +315,17 @@ def _chat_completions_url(endpoint_url: str) -> str:
     if clean.endswith("/chat/completions"):
         return clean
     return f"{clean}/chat/completions"
+
+
+def _request_timeout(metadata: dict[str, Any], default: float) -> float:
+    value = metadata.get("timeout_seconds")
+    if value is None:
+        return default
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(timeout, 1.0), 600.0)
 
 
 def _parse_openai_compatible_response(model_id: str, body: dict[str, Any]) -> InferenceResponse:

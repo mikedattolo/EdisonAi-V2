@@ -43,7 +43,12 @@ class WorkspaceCopilot:
                 mode=ChatMode.CODING,
                 preferred_model=request.preferred_model,
                 prompt=self._prompt(request, context),
-                metadata={"source": "workspace-copilot", "root": str(self.workspace.root)},
+                metadata={
+                    "source": "workspace-copilot",
+                    "root": str(self.workspace.root),
+                    "response_format": {"type": "json_object"},
+                    "timeout_seconds": 240,
+                },
             )
         )
 

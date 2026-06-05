@@ -129,14 +129,14 @@ def builtin_extension_profiles() -> list[ModelProfile]:
                 "Use for Code Space edits, creator planning, captions, metadata, and workflow assistance. "
                 "Keep media generation policies enforced at tool boundaries."
             ),
-            context_window=32768,
-            max_output_tokens=8192,
-            endpoint_url="http://127.0.0.1:11434/v1",
-            preferred_gpu="RTX 3090",
+            context_window=8192,
+            max_output_tokens=4096,
+            endpoint_url="http://127.0.0.1:8014/v1",
+            preferred_gpu="RTX 3090 + RTX 5060 Ti + RTX 4060 Ti",
             notes=(
                 "Hugging Face model candidate HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive. "
-                "The installer creates an Ollama alias named qwen3.6-35b-a3b-hauhaucs-coding from "
-                "hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_M before marking this profile ready."
+                "The installer runs this through a GPU llama.cpp Vulkan server on port 8014 because current Ollama "
+                "does not load the qwen35moe architecture."
             ),
         )
     ]
