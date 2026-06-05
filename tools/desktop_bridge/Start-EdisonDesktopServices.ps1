@@ -3,6 +3,7 @@ param(
   [string]$EdisonHost = "192.168.1.34",
   [string]$EdisonUser = "mike",
   [int]$Port = 8765,
+  [switch]$EnableSshTunnel,
   [int]$MaxTunnelAttempts = 24,
   [int]$RetryDelaySeconds = 5
 )
@@ -15,6 +16,37 @@ function Write-StartupLog {
   param([string]$Message)
   $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
   "$Timestamp $Message" | Add-Content -Path $LogPath -Encoding UTF8
+}
+
+function Clear-RemoteTunnelPort {
+  param(
+    [string]$HostName,
+    [string]$UserName,
+    [string]$IdentityPath,
+    [int]$RemotePort
+  )
+  try {
+    $CleanupCommand = @"
+if ss -ltn | grep -q '127.0.0.1:$RemotePort'; then
+  fuser -k -n tcp $RemotePort >/dev/null 2>&1 || true
+  current_sshd=`$(ps -o ppid= -p `$\$ | tr -d ' ')
+  if ss -ltn | grep -q '127.0.0.1:$RemotePort'; then
+    ps -u "`$USER" -o pid=,cmd= | awk -v current="`$current_sshd" '`$1 != current && `$0 ~ /sshd-session: .*`$/ {print `$1}' | xargs -r kill
+  fi
+fi
+"@
+    & ssh.exe @(
+      "-o", "BatchMode=yes",
+      "-o", "ConnectTimeout=8",
+      "-o", "StrictHostKeyChecking=accept-new",
+      "-i", $IdentityPath,
+      "$UserName@$HostName",
+      $CleanupCommand
+    ) | Out-Null
+    Write-StartupLog "Cleared any stale Edison listener on 127.0.0.1:$RemotePort."
+  } catch {
+    Write-StartupLog "Remote tunnel cleanup skipped: $($_.Exception.Message)"
+  }
 }
 
 Write-StartupLog "Starting Edison desktop services."
@@ -71,6 +103,12 @@ try {
   throw
 }
 
+if (!$EnableSshTunnel) {
+  Write-StartupLog "SSH reverse tunnel disabled. Use Edison runtime desktop_bridge_url=http://<this-pc-ip>:$Port."
+  Write-StartupLog "Edison desktop services are running."
+  exit 0
+}
+
 $KeyPath = Join-Path $env:USERPROFILE ".ssh\edison_desktop_bridge_tunnel"
 if (!(Test-Path $KeyPath)) {
   throw "SSH tunnel key was not found at $KeyPath."
@@ -84,6 +122,7 @@ for ($Attempt = 1; $Attempt -le $MaxTunnelAttempts; $Attempt++) {
     foreach ($Process in $ExistingTunnel) {
       Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
     }
+    Clear-RemoteTunnelPort -HostName $EdisonHost -UserName $EdisonUser -IdentityPath $KeyPath -RemotePort $Port
 
     Start-Process -FilePath "ssh.exe" -ArgumentList @(
       "-N",

@@ -7,14 +7,18 @@ putting secrets or broad filesystem access in the repo.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Start-EdisonDesktopBridge.ps1
-powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Start-EdisonBridgeTunnel.ps1
 ```
 
 The helper creates `config/desktop-bridge.local.json` from the local integration
 scan, starts `edison_desktop_bridge.py` on port `8765`, and verifies `/health`.
-The tunnel helper exposes the bridge privately to Edison as
-`http://127.0.0.1:8765` on the Edison machine, avoiding a Windows Firewall LAN
-port rule.
+Set Edison's runtime `desktop_bridge_url` to the main PC LAN URL, for example
+`http://192.168.1.31:8765`. If direct LAN access is not available, the optional
+tunnel helper exposes the bridge privately to Edison as `http://127.0.0.1:8765`
+on the Edison machine:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Start-EdisonBridgeTunnel.ps1
+```
 
 ## Start At Windows Login
 
@@ -23,8 +27,9 @@ powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Register-EdisonDes
 ```
 
 This registers a current-user scheduled task named `Edison Desktop Services`.
-It runs `Start-EdisonDesktopServices.ps1`, which starts the bridge first, then
-retries the Edison SSH tunnel while the network is still coming online.
+It runs `Start-EdisonDesktopServices.ps1`, which starts the bridge and verifies
+`/health`. Pass `-EnableSshTunnel` only when Edison must use the reverse SSH
+tunnel instead of the main PC LAN URL.
 
 ## Endpoints
 

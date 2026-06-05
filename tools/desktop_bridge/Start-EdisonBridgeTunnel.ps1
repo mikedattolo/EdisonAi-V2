@@ -19,6 +19,28 @@ foreach ($Process in $Existing) {
   Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
+try {
+  $CleanupCommand = @"
+if ss -ltn | grep -q '127.0.0.1:$RemotePort'; then
+  fuser -k -n tcp $RemotePort >/dev/null 2>&1 || true
+  current_sshd=`$(ps -o ppid= -p `$\$ | tr -d ' ')
+  if ss -ltn | grep -q '127.0.0.1:$RemotePort'; then
+    ps -u "`$USER" -o pid=,cmd= | awk -v current="`$current_sshd" '`$1 != current && `$0 ~ /sshd-session: .*`$/ {print `$1}' | xargs -r kill
+  fi
+fi
+"@
+  & ssh.exe @(
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=8",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-i", $KeyPath,
+    "$EdisonUser@$EdisonHost",
+    $CleanupCommand
+  ) | Out-Null
+} catch {
+  Write-Warning "Could not clear stale Edison tunnel listener: $($_.Exception.Message)"
+}
+
 Start-Process -FilePath "ssh.exe" -ArgumentList @(
   "-N",
   "-o", "ExitOnForwardFailure=yes",
