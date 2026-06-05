@@ -93,6 +93,7 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable --now "$SERVICE_NAME"
+systemctl --user restart "$SERVICE_NAME"
 
 if [[ ! -f "$MODEL_REGISTRY_PATH" && -f "$EDISON_HOME/config/model-registry.example.json" ]]; then
   cp "$EDISON_HOME/config/model-registry.example.json" "$MODEL_REGISTRY_PATH"

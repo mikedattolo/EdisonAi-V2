@@ -124,7 +124,7 @@ def builtin_extension_profiles() -> list[ModelProfile]:
                 ModelCapability.JSON_STRUCTURED_OUTPUT,
             ],
             license="Apache-2.0",
-            tags=["coding", "repo", "creator-planning", "huggingface", "qwen", "gguf"],
+            tags=["coding", "repo", "creator-planning", "huggingface", "qwen", "gguf", "llama.cpp", "vulkan", "gpu"],
             safety_notes=(
                 "Use for Code Space edits, creator planning, captions, metadata, and workflow assistance. "
                 "Keep media generation policies enforced at tool boundaries."
