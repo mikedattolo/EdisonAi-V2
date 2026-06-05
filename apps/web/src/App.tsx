@@ -2955,6 +2955,8 @@ function CreatorStudioView({
   const activeMode = safeCreatorModes.find((mode) => mode.id === selectedMode) ?? safeCreatorModes[0];
   const creatorStatus = mediaStatus?.creator_studio;
   const datasets = creatorStatus?.datasets ?? [];
+  const restrictedAssets = creatorStatus?.restricted_assets ?? [];
+  const restrictedModelCount = restrictedAssets.filter((asset) => asset.kind === 'model').length;
   const activeDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) ?? datasets.find((dataset) => dataset.status === 'ready') ?? datasets[0] ?? null;
   const creatorJobs = jobs.filter((job) => String(job.metadata.generation_mode ?? '').startsWith('creator_'));
   const creatorJobIds = new Set(creatorJobs.map((job) => job.id));
@@ -2966,6 +2968,7 @@ function CreatorStudioView({
     ['Asset Pack', creatorStatus?.status ?? 'setup_required', creatorStatus?.normalized_root ?? creatorStatus?.source_path ?? 'No creator bundle path'],
     ['Datasets', String(datasets.filter((dataset) => dataset.status === 'ready').length), `${datasets.length} detected safe dataset folder(s)`],
     ['Templates', String(creatorStatus?.workflow_templates.length ?? 0), (creatorStatus?.workflow_templates ?? []).slice(0, 2).join(', ') || 'No workflow templates found'],
+    ['Restricted Assets', String(restrictedAssets.length), `${restrictedModelCount} model candidate(s), copied workflows/scripts/configs`],
     ['Backends', `${mediaStatus?.comfyui.status ?? 'offline'} / ${mediaStatus?.wan22.status ?? 'offline'}`, 'Photo via ComfyUI, video via Wan/ComfyUI'],
   ];
 
@@ -3090,6 +3093,27 @@ function CreatorStudioView({
               {isMediaBusy ? 'Generating' : 'Generate'}
             </button>
           </form>
+        </section>
+
+        <section className="creator-dataset-panel" aria-label="Restricted labeled Creator assets">
+          <div className="section-heading">
+            <SlidersHorizontal size={18} />
+            <h3>Restricted-Labeled Assets</h3>
+          </div>
+          <p>Non-media workflows, configs, and scripts are copied into Edison; model weights are cataloged as candidates for review.</p>
+          <div className="creator-asset-list">
+            {restrictedAssets.slice(0, 12).map((asset) => (
+              <article className="creator-asset-row" key={asset.id}>
+                <div>
+                  <strong>{asset.name}</strong>
+                  <span>{asset.kind} / {formatBytes(asset.size_bytes ?? null)}</span>
+                  <small>{asset.copied_path ?? asset.source_path ?? 'No path recorded'}</small>
+                </div>
+                <small className={`backend-status ${statusClassName(asset.status)}`}>{asset.status}</small>
+              </article>
+            ))}
+            {restrictedAssets.length === 0 && <div className="empty-line">No restricted-labeled workflow or model candidates detected yet.</div>}
+          </div>
         </section>
 
         <section className="creator-dataset-panel" aria-label="Creator datasets">
@@ -6941,6 +6965,8 @@ function statusClassName(status: string) {
   }
   if ([
     'attention',
+    'candidate',
+    'cataloged',
     'detected',
     'driver_missing',
     'runtime_missing',

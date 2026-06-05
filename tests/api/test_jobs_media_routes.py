@@ -261,9 +261,14 @@ def test_creator_studio_status_discovers_safe_pixelai_assets(tmp_path):
 
     assert status.status_code == 200
     assert creator["status"] == "ready"
-    assert creator["workflow_templates"] == ["safe_creator_photo.json"]
+    assert "safe_creator_photo.json" in creator["workflow_templates"]
+    assert "lena_restricted_photo.json" in creator["workflow_templates"]
     assert creator["datasets"][0]["name"] == "Images"
     assert creator["datasets"][0]["item_count"] == 1
+    restricted_assets = {item["name"]: item for item in creator["restricted_assets"]}
+    assert restricted_assets["lena_restricted_photo.json"]["kind"] == "workflow"
+    assert restricted_assets["lena_restricted_style_lora.safetensors"]["kind"] == "model"
+    assert restricted_assets["lena_restricted_style_lora.safetensors"]["status"] == "available"
     assert "No nude" in " ".join(creator["guardrails"])
 
 
@@ -330,12 +335,18 @@ def test_creator_photo_blocks_explicit_minor_and_real_person_prompts(tmp_path):
 def _creator_studio_fixture(tmp_path):
     creator_root = tmp_path / "pixelai" / "creator_studio"
     workflow_dir = creator_root / "templates" / "workflows"
+    restricted_workflow_dir = creator_root / "restricted_assets" / "workflows"
+    restricted_model_dir = creator_root / "restricted_assets" / "models"
     safe_images = creator_root / "data" / "lena_hub" / "sfw" / "images"
     unsafe_images = creator_root / "data" / "lena_hub" / "nsfw_images"
     workflow_dir.mkdir(parents=True)
+    restricted_workflow_dir.mkdir(parents=True)
+    restricted_model_dir.mkdir(parents=True)
     safe_images.mkdir(parents=True)
     unsafe_images.mkdir(parents=True)
     (workflow_dir / "safe_creator_photo.json").write_text("{}", encoding="utf-8")
+    (restricted_workflow_dir / "lena_restricted_photo.json").write_text("{}", encoding="utf-8")
+    (restricted_model_dir / "lena_restricted_style_lora.safetensors").write_bytes(b"fake model")
     (safe_images / "reference.png").write_bytes(b"fake image")
     (unsafe_images / "blocked.png").write_bytes(b"blocked")
     return creator_root

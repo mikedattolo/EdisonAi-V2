@@ -376,6 +376,18 @@ class CreatorStudioDatasetRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreatorStudioAssetRecord(BaseModel):
+    id: str
+    name: str
+    kind: Literal["workflow", "model", "script", "config", "document", "other"] = "other"
+    status: Literal["available", "candidate", "cataloged"] = "available"
+    source_path: str | None = None
+    copied_path: str | None = None
+    size_bytes: int | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class CreatorStudioStatus(BaseModel):
     service: str = "creator-studio"
     status: Literal["ready", "setup_required", "offline", "error"]
@@ -384,6 +396,7 @@ class CreatorStudioStatus(BaseModel):
     detail: str
     datasets: list[CreatorStudioDatasetRecord] = Field(default_factory=list)
     workflow_templates: list[str] = Field(default_factory=list)
+    restricted_assets: list[CreatorStudioAssetRecord] = Field(default_factory=list)
     guardrails: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

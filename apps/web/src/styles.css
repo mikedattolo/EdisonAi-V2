@@ -3077,14 +3077,16 @@ button {
   background: #fbfcfd;
 }
 
-.creator-dataset-list {
+.creator-dataset-list,
+.creator-asset-list {
   display: grid;
   gap: 10px;
   max-height: 390px;
   overflow: auto;
 }
 
-.creator-dataset-row {
+.creator-dataset-row,
+.creator-asset-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -3095,20 +3097,26 @@ button {
   background: #fbfcfd;
 }
 
-.creator-dataset-row div {
+.creator-dataset-row div,
+.creator-asset-row div {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
 
 .creator-dataset-row strong,
-.creator-dataset-row span {
+.creator-dataset-row span,
+.creator-asset-row strong,
+.creator-asset-row span,
+.creator-asset-row small:not(.backend-status) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.creator-dataset-row span {
+.creator-dataset-row span,
+.creator-asset-row span,
+.creator-asset-row small:not(.backend-status) {
   color: #697487;
   font-size: 0.82rem;
 }

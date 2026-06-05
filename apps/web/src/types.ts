@@ -270,6 +270,18 @@ export interface CreatorStudioDatasetRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface CreatorStudioAssetRecord {
+  id: string;
+  name: string;
+  kind: 'workflow' | 'model' | 'script' | 'config' | 'document' | 'other';
+  status: 'available' | 'candidate' | 'cataloged';
+  source_path?: string | null;
+  copied_path?: string | null;
+  size_bytes?: number | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+}
+
 export interface CreatorStudioStatus {
   service: string;
   status: 'ready' | 'setup_required' | 'offline' | 'error';
@@ -278,6 +290,7 @@ export interface CreatorStudioStatus {
   detail: string;
   datasets: CreatorStudioDatasetRecord[];
   workflow_templates: string[];
+  restricted_assets: CreatorStudioAssetRecord[];
   guardrails: string[];
   metadata: Record<string, unknown>;
 }

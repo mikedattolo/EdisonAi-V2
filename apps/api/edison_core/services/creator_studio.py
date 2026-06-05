@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Literal
 
 from edison_core.config import EdisonSettings
-from edison_core.schemas import CreatorStudioDatasetRecord, CreatorStudioStatus
+from edison_core.schemas import CreatorStudioAssetRecord, CreatorStudioDatasetRecord, CreatorStudioStatus
 
 
 CREATOR_GUARDRAILS = [
@@ -19,6 +20,11 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 SAFE_DATASET_NAMES = {"sfw", "training_ready", "datasets"}
 UNSAFE_PATH_PARTS = {"nsfw", "adult", "restricted", "porn", "explicit"}
+MODEL_SUFFIXES = {".safetensors", ".ckpt", ".gguf", ".bin", ".pt", ".pth"}
+WORKFLOW_SUFFIXES = {".json"}
+SCRIPT_SUFFIXES = {".py", ".bat", ".ps1", ".sh"}
+CONFIG_SUFFIXES = {".yaml", ".yml", ".toml"}
+DOCUMENT_SUFFIXES = {".md", ".txt"}
 
 
 class CreatorStudioService:
@@ -46,6 +52,7 @@ class CreatorStudioService:
 
         datasets = _discover_datasets(root)
         workflow_templates = _discover_workflow_templates(root)
+        restricted_assets = _discover_restricted_assets(root)
         detail = "Creator Studio assets are available for safe virtual creator workflows."
         if not workflow_templates:
             detail = "Creator Studio root is present, but no workflow templates were found yet."
@@ -56,10 +63,13 @@ class CreatorStudioService:
             detail=detail,
             datasets=datasets,
             workflow_templates=workflow_templates,
+            restricted_assets=restricted_assets,
             guardrails=CREATOR_GUARDRAILS,
             metadata={
                 "dataset_count": len(datasets),
                 "workflow_template_count": len(workflow_templates),
+                "restricted_asset_count": len(restricted_assets),
+                "restricted_model_candidate_count": len([item for item in restricted_assets if item.kind == "model"]),
                 "supports_photo": True,
                 "supports_video": True,
                 "supports_dataset_plans": True,
@@ -82,14 +92,17 @@ def _normalize_creator_root(path: Path) -> Path | None:
 
 
 def _discover_workflow_templates(root: Path) -> list[str]:
-    template_roots = [root / "templates" / "workflows", root / "comfyui" / "workflows"]
+    template_roots = [
+        root / "templates" / "workflows",
+        root / "comfyui" / "workflows",
+        root / "restricted_assets" / "workflows",
+        root / "restricted_assets" / "ComfyUI" / "user" / "default" / "workflows",
+    ]
     templates: list[str] = []
     for template_root in template_roots:
         if not template_root.exists():
             continue
         for path in sorted(template_root.glob("*.json")):
-            if _has_unsafe_path_part(path):
-                continue
             templates.append(path.name)
     return templates[:24]
 
@@ -164,6 +177,123 @@ def _dataset_kind(counts: dict[str, int]) -> Literal["image", "video", "mixed", 
     if counts["video"]:
         return "video"
     return "unknown"
+
+
+def _discover_restricted_assets(root: Path) -> list[CreatorStudioAssetRecord]:
+    assets: list[CreatorStudioAssetRecord] = []
+    seen: set[str] = set()
+    restricted_root = root / "restricted_assets"
+    if restricted_root.exists():
+        for path in sorted(restricted_root.rglob("*")):
+            if not path.is_file() or _is_media_file(path):
+                continue
+            record = _asset_record_from_path(
+                path,
+                source_path=None,
+                copied_root=root,
+                status="available",
+                tags=["restricted-labeled", "copied"],
+            )
+            assets.append(record)
+            seen.add(record.id)
+
+    for record in _restricted_manifest_assets(root):
+        if record.id in seen:
+            continue
+        assets.append(record)
+        seen.add(record.id)
+    return sorted(assets, key=lambda item: (item.kind, item.name.lower()))[:80]
+
+
+def _restricted_manifest_assets(root: Path) -> list[CreatorStudioAssetRecord]:
+    manifest_path = root / "edison_creator_bundle_manifest.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    items = raw.get("restricted_asset_candidates")
+    if not isinstance(items, list):
+        return []
+    records: list[CreatorStudioAssetRecord] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source_path = str(item.get("source_path") or "")
+        name = str(item.get("name") or Path(source_path).name or "Restricted asset")
+        suffix = Path(name).suffix.lower()
+        kind = _asset_kind_from_suffix(suffix)
+        status = "candidate" if kind == "model" else "cataloged"
+        record = CreatorStudioAssetRecord(
+            id=_asset_id(source_path or name),
+            name=name,
+            kind=kind,
+            status=status,
+            source_path=source_path or None,
+            copied_path=None,
+            size_bytes=_int_or_none(item.get("size_bytes")),
+            tags=["restricted-labeled", "manifest"],
+            metadata={
+                "original_relative_path": item.get("relative_path"),
+                "copied": bool(item.get("copied")),
+            },
+        )
+        records.append(record)
+    return records
+
+
+def _asset_record_from_path(
+    path: Path,
+    *,
+    source_path: str | None,
+    copied_root: Path,
+    status: Literal["available", "candidate", "cataloged"],
+    tags: list[str],
+) -> CreatorStudioAssetRecord:
+    suffix = path.suffix.lower()
+    copied_path = path.relative_to(copied_root).as_posix() if path.is_relative_to(copied_root) else str(path)
+    return CreatorStudioAssetRecord(
+        id=_asset_id(str(path)),
+        name=path.name,
+        kind=_asset_kind_from_suffix(suffix),
+        status=status,
+        source_path=source_path,
+        copied_path=copied_path,
+        size_bytes=path.stat().st_size if path.exists() else None,
+        tags=tags,
+        metadata={"suffix": suffix},
+    )
+
+
+def _asset_kind_from_suffix(suffix: str) -> Literal["workflow", "model", "script", "config", "document", "other"]:
+    if suffix in WORKFLOW_SUFFIXES:
+        return "workflow"
+    if suffix in MODEL_SUFFIXES:
+        return "model"
+    if suffix in SCRIPT_SUFFIXES:
+        return "script"
+    if suffix in CONFIG_SUFFIXES:
+        return "config"
+    if suffix in DOCUMENT_SUFFIXES:
+        return "document"
+    return "other"
+
+
+def _asset_id(value: str) -> str:
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
+    return f"creator_asset_{digest}"
+
+
+def _is_media_file(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _dataset_id(path: Path) -> str:
