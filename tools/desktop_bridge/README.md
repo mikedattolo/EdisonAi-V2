@@ -72,12 +72,16 @@ installed slicer apps on the PC.
 The bridge queues CAD jobs in `projects\fusion-jobs\queue`. Fusion itself needs
 to run the Fusion API, so install the add-in once:
 
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\desktop_bridge\Install-EdisonFusionBridge.ps1
+```
+
+Then restart Fusion 360. If Fusion does not auto-run it, enable it manually:
+
 1. Open Fusion 360 on the main PC.
 2. Go to `Utilities` > `Scripts and Add-Ins`.
-3. Add this folder:
-   `tools\desktop_bridge\fusion_addin\EdisonFusionBridge`.
-4. Run `EdisonFusionBridge`; enable run-at-startup in Fusion if you want it
-   always listening.
+3. Run `EdisonFusionBridge` from the Add-Ins list.
+4. Enable run-at-startup in Fusion if you want it always listening.
 
 Edison can then call `POST /api/v1/desktop-bridge/fusion/job`. The bridge writes
 a job JSON file, launches Fusion 360 if requested, and the add-in writes results
