@@ -41,6 +41,8 @@ def test_capability_registry_lists_mcp_servers_and_plugins(tmp_path):
     assert response.status_code == 200
     assert {server["id"] for server in body["mcp_servers"]} >= {"edison-knowledge", "edison-workspace"}
     assert {plugin["target"] for plugin in body["plugins"]} >= {"codex", "claude-code"}
+    assert {plugin["id"]: plugin["status"] for plugin in body["plugins"]}["edison-codex"] == "ready"
+    assert {plugin["id"]: plugin["status"] for plugin in body["plugins"]}["edison-claude-code"] == "ready"
     assert "mcp-agents" in body["knowledge_presets"]
     assert "business-product-ops" in body["knowledge_presets"]
 

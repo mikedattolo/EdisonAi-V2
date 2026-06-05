@@ -3011,6 +3011,40 @@ button {
   gap: 10px;
 }
 
+.toybox-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.toybox-metric-card {
+  display: grid;
+  gap: 5px;
+  min-height: 104px;
+  padding: 12px;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.toybox-metric-card span {
+  color: #697487;
+  font-size: 0.78rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.toybox-metric-card strong {
+  color: #1f2937;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.toybox-metric-card small {
+  color: #536278;
+  line-height: 1.35;
+}
+
 .toybox-device-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

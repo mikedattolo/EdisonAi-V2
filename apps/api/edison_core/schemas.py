@@ -755,6 +755,7 @@ class ToyBoxManagerStatus(BaseModel):
     printers: list[ToyBoxPrinterRecord] = Field(default_factory=list)
     notification_channels: list[ToyBoxNotificationChannel] = Field(default_factory=list)
     recommendations: list[IntegrationRecommendation] = Field(default_factory=list)
+    dashboard: dict[str, Any] = Field(default_factory=dict)
     detail: str
 
 
@@ -857,6 +858,37 @@ class ToyBoxSetupResult(BaseModel):
     mappings: list[ToyBoxProductMappingRecord]
     bridge_status: dict[str, Any] = Field(default_factory=dict)
     detail: str
+
+
+class ToyBoxShopifyWebhookResult(BaseModel):
+    service: str = "toybox3d-shopify-webhook"
+    accepted: bool
+    duplicate: bool = False
+    topic: str = ""
+    webhook_id: str = ""
+    order: ToyBoxOrderRecord | None = None
+    queue: list[ToyBoxQueueItemRecord] = Field(default_factory=list)
+    notification: dict[str, Any] | None = None
+    detail: str
+
+
+class ToyBoxNotificationSendRequest(BaseModel):
+    title: str = Field(default="Edison ToyBox3D", max_length=160)
+    message: str = Field(min_length=1, max_length=1000)
+    severity: Literal["info", "warning", "error"] = "info"
+    provider: str | None = None
+    target: str | None = None
+    force: bool = False
+
+
+class ToyBoxNotificationResult(BaseModel):
+    service: str = "toybox3d-notifications"
+    ok: bool
+    provider: str
+    target: str = ""
+    status: Literal["sent", "disabled", "setup_required", "error"]
+    detail: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DesktopBridgeStatus(BaseModel):

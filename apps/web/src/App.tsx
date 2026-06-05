@@ -4708,6 +4708,17 @@ function MediaView({
         icon: toyboxIconForLane(lane.id),
       }))
     : toyboxPages.map((page) => ({ ...page, id: page.title, status: undefined as string | undefined }));
+  const toyboxDashboard = toyBoxStatus?.dashboard ?? {};
+  const orderCounts = dashboardBucket(toyboxDashboard, 'orders');
+  const queueCounts = dashboardBucket(toyboxDashboard, 'queue');
+  const webhookCounts = dashboardBucket(toyboxDashboard, 'webhooks');
+  const toyboxMetrics = [
+    ['Open Orders', dashboardNumber(toyboxDashboard, 'open_orders'), formatCountSummary(orderCounts)],
+    ['Queue Items', Object.values(queueCounts).reduce((sum, value) => sum + value, 0), formatCountSummary(queueCounts)],
+    ['Blocked', dashboardNumber(toyboxDashboard, 'blocked_queue'), 'Needs mapping, printer, or operator attention'],
+    ['Webhooks', webhookCounts.received ?? 0, dashboardFlag(toyboxDashboard, 'shopify', 'webhooks_enabled') ? 'Signed Shopify intake enabled' : 'Shopify intake disabled'],
+    ['Ready Mappings', dashboardNumber(toyboxDashboard, 'ready_mappings'), 'SKU to print profiles ready'],
+  ];
 
   function useMode(mode: MediaGenerationMode) {
     setSelectedMode(mode);
@@ -4877,6 +4888,17 @@ function MediaView({
             <h3>ToyBox3D Store & Print Farm</h3>
           </div>
           {toyBoxStatus && <p className="panel-copy">{toyBoxStatus.detail}</p>}
+          {toyBoxStatus && (
+            <div className="toybox-metric-grid">
+              {toyboxMetrics.map(([label, value, detail]) => (
+                <article className="toybox-metric-card" key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                  <small>{detail}</small>
+                </article>
+              ))}
+            </div>
+          )}
           <div className="toybox-flow-grid">
             {toyboxLaneCards.map((page) => {
               const Icon = page.icon;
@@ -6039,12 +6061,29 @@ function SettingsView({
           </label>
           <label className="settings-toggle-row">
             <input
+              checked={settingBoolean(draft.toybox, 'shopify_webhooks_enabled', true)}
+              onChange={(event) => updateSetting('toybox', 'shopify_webhooks_enabled', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Accept signed Shopify order webhooks</span>
+          </label>
+          <label className="settings-toggle-row">
+            <input
+              checked={settingBoolean(draft.toybox, 'auto_queue_orders', true)}
+              onChange={(event) => updateSetting('toybox', 'auto_queue_orders', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Auto-create print queue items from mapped Shopify SKUs</span>
+          </label>
+          <label className="settings-toggle-row">
+            <input
               checked={settingBoolean(draft.toybox, 'auto_print_labels', false)}
               onChange={(event) => updateSetting('toybox', 'auto_print_labels', event.target.checked)}
               type="checkbox"
             />
             <span>Auto-print shipping labels after QA approval</span>
           </label>
+          <p className="settings-hint">Webhook endpoint: /api/v1/toybox/shopify/webhooks/orders. Set EDISON_SHOPIFY_WEBHOOK_SECRET on the Edison API service.</p>
           <p className="settings-hint">{toyboxReady} ToyBox lanes are ready. Secret tokens still belong in local env/settings, not source control.</p>
         </article>
         <article className="settings-panel settings-edit-panel">
@@ -6215,6 +6254,8 @@ function defaultRuntimeSettings(): RuntimeSettingsRecord {
     toybox: {
       shopify_store_url: '',
       order_polling_enabled: false,
+      shopify_webhooks_enabled: true,
+      auto_queue_orders: true,
       default_slicer: 'Bambu Studio',
       dymo_printer_name: "Mike's shipping label printer",
       auto_print_labels: false,
@@ -6253,6 +6294,39 @@ function settingNumber(section: Record<string, unknown>, key: string, fallback: 
 function settingBoolean(section: Record<string, unknown>, key: string, fallback: boolean) {
   const value = section[key];
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function dashboardBucket(section: Record<string, unknown>, key: string): Record<string, number> {
+  const value = section[key];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => typeof item === 'number' && Number.isFinite(item))
+      .map(([name, item]) => [name, item as number]),
+  );
+}
+
+function dashboardNumber(section: Record<string, unknown>, key: string) {
+  const value = section[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function dashboardFlag(section: Record<string, unknown>, bucket: string, key: string) {
+  const value = section[bucket];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  return (value as Record<string, unknown>)[key] === true;
+}
+
+function formatCountSummary(counts: Record<string, number>) {
+  const entries = Object.entries(counts).filter(([, value]) => value > 0);
+  if (!entries.length) {
+    return 'No active records';
+  }
+  return entries.map(([key, value]) => `${key.replace('_', ' ')} ${value}`).join(' / ');
 }
 
 function agentItems(): Array<[string, string]> {

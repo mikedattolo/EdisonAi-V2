@@ -31,6 +31,8 @@ class RuntimeSettingsStore:
             "toybox": {
                 "shopify_store_url": "",
                 "order_polling_enabled": False,
+                "shopify_webhooks_enabled": True,
+                "auto_queue_orders": True,
                 "default_slicer": "Bambu Studio",
                 "dymo_printer_name": "Mike's shipping label printer",
                 "auto_print_labels": False,

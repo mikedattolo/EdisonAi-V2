@@ -96,8 +96,37 @@ class ToyBoxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_toybox_queue_status_updated
                     ON toybox_queue(status, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS toybox_webhook_events (
+                    id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    external_order_id TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    received_at TEXT NOT NULL,
+                    UNIQUE(provider, event_id)
+                );
                 """
             )
+
+    def dashboard_summary(self) -> dict[str, object]:
+        with self.database.connect() as connection:
+            order_counts = _count_by_status(connection, "toybox_orders")
+            queue_counts = _count_by_status(connection, "toybox_queue")
+            printer_counts = _count_by_status(connection, "toybox_printers")
+            mapping_counts = _count_by_status(connection, "toybox_product_mappings")
+            webhook_count = int(connection.execute("SELECT COUNT(*) FROM toybox_webhook_events").fetchone()[0])
+        return {
+            "orders": order_counts,
+            "queue": queue_counts,
+            "printers": printer_counts,
+            "mappings": mapping_counts,
+            "webhooks": {"received": webhook_count},
+            "blocked_queue": int(queue_counts.get("blocked", 0)),
+            "open_orders": sum(int(order_counts.get(status, 0)) for status in ("new", "mapped", "queued", "printing", "blocked")),
+            "ready_mappings": int(mapping_counts.get("ready", 0)),
+        }
 
     def list_printers(self) -> list[ToyBoxPrinterProfileRecord]:
         with self.database.connect() as connection:
@@ -300,6 +329,34 @@ class ToyBoxStore:
                 ),
             )
         return order
+
+    def record_webhook_event(
+        self,
+        provider: str,
+        event_id: str,
+        topic: str,
+        external_order_id: str,
+        metadata: dict | None = None,
+    ) -> bool:
+        now = utc_now()
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO toybox_webhook_events (
+                    id, provider, event_id, topic, external_order_id, metadata_json, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"tbw_{uuid4().hex}",
+                    provider,
+                    event_id,
+                    topic,
+                    external_order_id,
+                    _json_dump(metadata or {}),
+                    now.isoformat(),
+                ),
+            )
+        return cursor.rowcount == 1
 
     def queue_order(self, order_id: str) -> list[ToyBoxQueueItemRecord]:
         order = self.get_order(order_id)
@@ -513,3 +570,8 @@ def _positive_int(value, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(parsed, 1)
+
+
+def _count_by_status(connection: sqlite3.Connection, table: str) -> dict[str, int]:
+    rows = connection.execute(f"SELECT status, COUNT(*) AS count FROM {table} GROUP BY status").fetchall()
+    return {str(row["status"]): int(row["count"]) for row in rows}

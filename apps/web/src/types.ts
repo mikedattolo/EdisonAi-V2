@@ -497,6 +497,7 @@ export interface ToyBoxManagerStatus {
   printers: ToyBoxPrinterRecord[];
   notification_channels: ToyBoxNotificationChannel[];
   recommendations: IntegrationRecommendation[];
+  dashboard: Record<string, unknown>;
   detail: string;
 }
 
