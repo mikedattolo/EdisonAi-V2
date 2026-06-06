@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from edison_core.api.dependencies import get_generation_store
 from edison_core.schemas import ArtifactCreate, ArtifactKind, ArtifactRecord, JobCreate, JobEventRecord, JobRecord, JobStatus, JobType
@@ -84,6 +84,28 @@ def download_artifact(
     return FileResponse(candidate, media_type=artifact.mime_type, filename=candidate.name)
 
 
+@router.delete(
+    "/artifacts/{artifact_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
+def delete_artifact(
+    artifact_id: str,
+    request: Request,
+    delete_file: bool = Query(True),
+    store: GenerationStore = Depends(get_generation_store),
+) -> None:
+    try:
+        artifact = store.delete_artifact(artifact_id)
+    except JobNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Artifact not found") from error
+
+    if delete_file:
+        settings = request.app.state.settings
+        _delete_artifact_file(Path(artifact.path), settings.artifact_root)
+
+
 @router.post("/jobs", response_model=JobRecord, status_code=status.HTTP_201_CREATED)
 def create_job(
     payload: JobCreate,
@@ -109,6 +131,22 @@ def get_job(
 ) -> JobRecord:
     try:
         return store.get_job(job_id)
+    except JobNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Job not found") from error
+
+
+@router.delete(
+    "/jobs/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
+def delete_job(
+    job_id: str,
+    store: GenerationStore = Depends(get_generation_store),
+) -> None:
+    try:
+        store.delete_job(job_id)
     except JobNotFoundError as error:
         raise HTTPException(status_code=404, detail="Job not found") from error
 
@@ -143,6 +181,17 @@ def _resolve_artifact_path(path: Path, artifact_root: Path) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _delete_artifact_file(path: Path, artifact_root: Path) -> None:
+    candidate = _resolve_artifact_path(path, artifact_root)
+    if candidate is None or not candidate.is_file():
+        return
+    artifact_root_resolved = artifact_root.resolve()
+    candidate_resolved = candidate.resolve()
+    if not candidate_resolved.is_relative_to(artifact_root_resolved):
+        return
+    candidate_resolved.unlink(missing_ok=True)
 
 
 def _artifact_kind_from_mime(mime_type: str) -> ArtifactKind:

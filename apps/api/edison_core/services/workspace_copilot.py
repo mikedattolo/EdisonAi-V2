@@ -122,6 +122,10 @@ class WorkspaceCopilot:
     def _prompt(self, request: WorkspaceCopilotTaskRequest, context: dict[str, Any]) -> str:
         return (
             "You are Edison Code Space Copilot. Work on the selected existing repository only.\n"
+            "You are not limited to Creator Studio. Edison application code, frontend, backend, scripts, "
+            "configuration, tests, docs, and project files under this workspace root are in scope when they help the user.\n"
+            "Do not claim you cannot modify Edison code. Your job is to propose complete replacement file contents "
+            "for the files that should change.\n"
             "Return JSON only. Do not use markdown fences.\n"
             "Schema:\n"
             "{\n"

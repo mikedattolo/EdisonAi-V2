@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   Upload,
   Video,
   Waypoints,
@@ -529,6 +530,24 @@ export default function App() {
     setComposer('');
     setActiveMode('auto');
     setActiveView('chat');
+  }
+
+  async function deleteConversation(conversation: ConversationRecord) {
+    if (!window.confirm(`Delete chat "${conversation.title}"?`)) {
+      return;
+    }
+    setError(null);
+    try {
+      await edisonApi.deleteConversation(conversation.id);
+      setConversations((current) => current.filter((item) => item.id !== conversation.id));
+      if (activeConversation?.id === conversation.id) {
+        setActiveConversation(null);
+        setComposer('');
+        setActiveMode('auto');
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to delete chat');
+    }
   }
 
   async function handleSend(event: FormEvent<HTMLFormElement>) {
@@ -1078,6 +1097,41 @@ export default function App() {
     }
   }
 
+  async function deleteGalleryArtifact(artifact: ArtifactRecord) {
+    if (!window.confirm(`Delete gallery item "${artifact.title}"?`)) {
+      return;
+    }
+    setError(null);
+    try {
+      await edisonApi.deleteArtifact(artifact.id);
+      setMediaArtifacts((current) => current.filter((item) => item.id !== artifact.id));
+      setMediaJobs((current) => current.map((job) => (
+        job.result_artifact_id === artifact.id
+          ? { ...job, result_artifact_id: null }
+          : job.source_artifact_id === artifact.id
+            ? { ...job, source_artifact_id: null }
+            : job
+      )));
+      await refreshMediaSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to delete gallery item');
+    }
+  }
+
+  async function deleteGalleryJob(job: JobRecord) {
+    if (!window.confirm(`Delete generation job "${job.title}"?`)) {
+      return;
+    }
+    setError(null);
+    try {
+      await edisonApi.deleteJob(job.id);
+      setMediaJobs((current) => current.filter((item) => item.id !== job.id));
+      await refreshMediaSurface();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to delete generation job');
+    }
+  }
+
   async function createMediaReadinessJob(jobType: JobType, title: string, prompt: string) {
     setIsMediaBusy(true);
     setError(null);
@@ -1553,15 +1607,28 @@ export default function App() {
           <div className="section-label">Conversations</div>
           <div className="conversation-list">
             {conversations.map((conversation) => (
-              <button
+              <div
                 className={conversation.id === activeConversation?.id ? 'conversation-item active' : 'conversation-item'}
                 key={conversation.id}
-                onClick={() => void loadConversation(conversation.id)}
-                type="button"
               >
-                <span>{conversation.title}</span>
-                <small>{conversation.mode}</small>
-              </button>
+                <button
+                  className="conversation-open-button"
+                  onClick={() => void loadConversation(conversation.id)}
+                  type="button"
+                >
+                  <span>{conversation.title}</span>
+                  <small>{conversation.mode}</small>
+                </button>
+                <button
+                  aria-label={`Delete chat ${conversation.title}`}
+                  className="conversation-delete-button"
+                  onClick={() => void deleteConversation(conversation)}
+                  title="Delete chat"
+                  type="button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
             {conversations.length === 0 && <div className="empty-line">No conversations</div>}
           </div>
@@ -1699,6 +1766,8 @@ export default function App() {
             runtimeSettings={runtimeSettings}
             toyBoxStatus={toyBoxStatus}
             activeWorkspaceRootId={activeWorkspaceRootId}
+            onDeleteArtifact={deleteGalleryArtifact}
+            onDeleteJob={deleteGalleryJob}
             onCreateMediaJob={createMediaReadinessJob}
             onCreateMediaGeneration={createMediaGeneration}
             onCreateWorkspaceProject={createWorkspaceProject}
@@ -2712,6 +2781,8 @@ function WorkbenchView({
   models,
   runtimeSettings,
   toyBoxStatus,
+  onDeleteArtifact,
+  onDeleteJob,
   onCreateWorkspaceProject,
   onCreateMediaJob,
   onCreateMediaGeneration,
@@ -2785,6 +2856,8 @@ function WorkbenchView({
   models: ModelProfile[];
   runtimeSettings: RuntimeSettingsRecord | null;
   toyBoxStatus: ToyBoxManagerStatus | null;
+  onDeleteArtifact: (artifact: ArtifactRecord) => Promise<void> | void;
+  onDeleteJob: (job: JobRecord) => Promise<void> | void;
   onCreateWorkspaceProject: (name: string, prompt: string) => Promise<void>;
   onCreateMediaJob: (jobType: JobType, title: string, prompt: string) => Promise<void>;
   onCreateMediaGeneration: (mode: MediaGenerationMode, prompt: string, referenceFile?: File | null, metadata?: Record<string, unknown>) => Promise<void>;
@@ -2930,6 +3003,8 @@ function WorkbenchView({
       <GalleryView
         artifacts={artifacts}
         jobs={mediaJobs}
+        onDeleteArtifact={onDeleteArtifact}
+        onDeleteJob={onDeleteJob}
         onRefresh={onRefreshMedia}
         onUseArtifactInChat={onUseArtifactInChat}
         runtimeSettings={runtimeSettings}
@@ -5506,12 +5581,16 @@ function MediaOutputsPanel({
 function GalleryView({
   artifacts,
   jobs,
+  onDeleteArtifact,
+  onDeleteJob,
   onRefresh,
   onUseArtifactInChat,
   runtimeSettings,
 }: {
   artifacts: ArtifactRecord[];
   jobs: JobRecord[];
+  onDeleteArtifact: (artifact: ArtifactRecord) => Promise<void> | void;
+  onDeleteJob: (job: JobRecord) => Promise<void> | void;
   onRefresh: () => Promise<void>;
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
   runtimeSettings: RuntimeSettingsRecord | null;
@@ -5599,6 +5678,10 @@ function GalleryView({
                 <div className="artifact-card-actions">
                   <button className="secondary-button" onClick={() => onUseArtifactInChat(artifact)} type="button">Use in chat</button>
                   <a className="secondary-button" href={downloadUrl} rel="noreferrer" target="_blank">Open</a>
+                  <button className="danger-button" onClick={() => void onDeleteArtifact(artifact)} type="button">
+                    <Trash2 size={14} />
+                    Delete
+                  </button>
                 </div>
               </article>
             );
@@ -5617,7 +5700,18 @@ function GalleryView({
                   <strong>{job.title}</strong>
                   <span>{job.job_type} / {job.backend}</span>
                 </div>
-                <span className={`job-status ${job.status}`}>{job.status}</span>
+                <div className="job-row-actions">
+                  <span className={`job-status ${job.status}`}>{job.status}</span>
+                  <button
+                    aria-label={`Delete generation job ${job.title}`}
+                    className="icon-danger-button"
+                    onClick={() => void onDeleteJob(job)}
+                    title="Delete job"
+                    type="button"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </article>
             ))}
             {jobs.length === 0 && <div className="empty-line">No generation jobs yet.</div>}

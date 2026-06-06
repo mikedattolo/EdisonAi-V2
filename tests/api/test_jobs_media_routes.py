@@ -29,6 +29,40 @@ def test_job_routes_create_list_cancel_and_events(tmp_path):
     assert [event["status"] for event in events.json()] == ["queued", "cancelled"]
 
 
+def test_job_and_artifact_delete_routes(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        comfyui_base_url="",
+        artifact_root=tmp_path / "artifacts",
+    )
+    client = TestClient(create_app(settings))
+    store = client.app.state.generation_store
+
+    job = store.create_job(JobCreate(job_type=JobType.IMAGE, title="Delete job"))
+    output_path = settings.artifact_root / "uploads" / "delete-me.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"image")
+    artifact = store.create_artifact(
+        ArtifactCreate(
+            kind=ArtifactKind.IMAGE,
+            title="Delete artifact",
+            path=output_path.relative_to(settings.artifact_root.parent).as_posix(),
+            mime_type="image/png",
+            source_job_id=job.id,
+        )
+    )
+
+    deleted_artifact = client.delete(f"/api/v1/artifacts/{artifact.id}")
+    deleted_job = client.delete(f"/api/v1/jobs/{job.id}")
+
+    assert deleted_artifact.status_code == 204
+    assert not output_path.exists()
+    assert client.get(f"/api/v1/artifacts/{artifact.id}").status_code == 404
+    assert deleted_job.status_code == 204
+    assert client.get(f"/api/v1/jobs/{job.id}").status_code == 404
+
+
 def test_media_status_and_job_report_setup_required_without_comfyui(tmp_path):
     settings = EdisonSettings(
         database_path=tmp_path / "edison.sqlite3",

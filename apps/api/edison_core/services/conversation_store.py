@@ -144,6 +144,15 @@ class ConversationStore:
             )
         return message
 
+    def delete_conversation(self, conversation_id: str) -> None:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM conversations WHERE id = ?",
+                (conversation_id,),
+            )
+        if cursor.rowcount == 0:
+            raise ConversationNotFoundError(conversation_id)
+
     def _ensure_conversation_exists(self, conversation_id: str) -> None:
         with self.database.connect() as connection:
             row = connection.execute(

@@ -34,12 +34,16 @@ from edison_core.schemas import (
     ConversationCreate,
     InferenceRequest,
     InferenceResponse,
+    JobCreate,
+    JobStatus,
+    JobType,
     MessageCreate,
     MessageRole,
     ModelProfile,
     ModelSelection,
     ModelStatus,
     OrganizerStatus,
+    WorkspaceCopilotTaskRequest,
     WorkspaceIndexSearchRequest,
 )
 from edison_core.services.agent_run_store import AgentRunStore
@@ -50,6 +54,7 @@ from edison_core.services.hardware_devices import CameraCaptureError, HardwareDe
 from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_gateway import ModelGateway
 from edison_core.services.personal_workspace import PersonalWorkspaceStore
+from edison_core.services.workspace_copilot import WorkspaceCopilot
 from edison_core.services.workspace_tools import WorkspaceNotFoundError, WorkspaceTools
 
 
@@ -174,6 +179,44 @@ def create_chat_turn(
             assistant_message=assistant_message,
             inference=desktop_result.inference,
             model_selection=desktop_result.model_selection,
+        )
+
+    workspace_copilot_result = _run_workspace_copilot_chat_action(
+        resolved_payload,
+        gateway,
+        workspace,
+        generation_store,
+    )
+    if workspace_copilot_result is not None:
+        _complete_agent_run_if_needed(agent_run, agent_runs, workspace_copilot_result.inference.finish_reason)
+        assistant_message = conversations.add_message(
+            conversation_id,
+            MessageCreate(
+                role=MessageRole.ASSISTANT,
+                content=workspace_copilot_result.inference.content,
+                model=workspace_copilot_result.inference.model_id,
+                metadata={
+                    "finish_reason": workspace_copilot_result.inference.finish_reason,
+                    "gateway": workspace_copilot_result.inference.metadata,
+                    "model_selection_reason": workspace_copilot_result.model_selection.reason,
+                    "requested_mode": payload.mode.value,
+                    "resolved_mode": resolved_payload.mode.value,
+                    "agent_enabled": payload.agent_enabled,
+                    "intent_router": {**intent_metadata, **workspace_copilot_result.metadata.get("intent_router", {})},
+                    "workspace_context": workspace_metadata,
+                    "knowledge_context": _skipped_knowledge_context("direct_workspace_copilot_tool"),
+                    "personal_context": personal_metadata,
+                    "agent_run_id": agent_run.id if agent_run else None,
+                    "workspace_copilot": workspace_copilot_result.metadata,
+                },
+            ),
+        )
+        return ChatResponse(
+            conversation=conversations.get_conversation(conversation_id),
+            user_message=user_message,
+            assistant_message=assistant_message,
+            inference=workspace_copilot_result.inference,
+            model_selection=workspace_copilot_result.model_selection,
         )
 
     model_messages = context_messages + _openai_messages(conversation.messages)
@@ -380,6 +423,71 @@ def stream_chat_turn(
 
         return StreamingResponse(
             desktop_event_source(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    if _should_route_workspace_copilot(resolved_payload):
+        workspace_copilot_selection = _workspace_copilot_tool_selection(resolved_payload, gateway)
+
+        def workspace_copilot_event_source():
+            yield _sse(
+                "start",
+                {
+                    "conversation_id": conversation_id,
+                    "user_message": user_message.model_dump(mode="json"),
+                    "model_selection": workspace_copilot_selection.model_dump(mode="json"),
+                    "agent_run": agent_run.model_dump(mode="json") if agent_run else None,
+                },
+            )
+            workspace_copilot_result = _run_workspace_copilot_chat_action(
+                resolved_payload,
+                gateway,
+                workspace,
+                generation_store,
+                workspace_copilot_selection,
+            )
+            if workspace_copilot_result is None:
+                _fail_agent_run_if_needed(agent_run, agent_runs, "Code Space Copilot routing was skipped.")
+                yield _sse("error", {"detail": "Code Space Copilot routing was skipped."})
+                return
+
+            yield _sse("token", {"delta": workspace_copilot_result.inference.content})
+            _complete_agent_run_if_needed(agent_run, agent_runs, workspace_copilot_result.inference.finish_reason)
+            assistant_message = conversations.add_message(
+                conversation_id,
+                MessageCreate(
+                    role=MessageRole.ASSISTANT,
+                    content=workspace_copilot_result.inference.content,
+                    model=workspace_copilot_result.inference.model_id,
+                    metadata={
+                        "finish_reason": workspace_copilot_result.inference.finish_reason,
+                        "gateway": workspace_copilot_result.inference.metadata,
+                        "model_selection_reason": workspace_copilot_result.model_selection.reason,
+                        "requested_mode": payload.mode.value,
+                        "resolved_mode": resolved_payload.mode.value,
+                        "agent_enabled": payload.agent_enabled,
+                        "intent_router": {**intent_metadata, **workspace_copilot_result.metadata.get("intent_router", {})},
+                        "workspace_context": workspace_metadata,
+                        "knowledge_context": _skipped_knowledge_context("direct_workspace_copilot_tool"),
+                        "personal_context": personal_metadata,
+                        "streamed": True,
+                        "agent_run_id": agent_run.id if agent_run else None,
+                        "workspace_copilot": workspace_copilot_result.metadata,
+                    },
+                ),
+            )
+            response = ChatResponse(
+                conversation=conversations.get_conversation(conversation_id),
+                user_message=user_message,
+                assistant_message=assistant_message,
+                inference=workspace_copilot_result.inference,
+                model_selection=workspace_copilot_result.model_selection,
+            )
+            yield _sse("done", response.model_dump(mode="json"))
+
+        return StreamingResponse(
+            workspace_copilot_event_source(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -615,6 +723,13 @@ class DesktopBridgeChatResult:
     metadata: dict
 
 
+@dataclass(frozen=True)
+class WorkspaceCopilotChatResult:
+    inference: InferenceResponse
+    model_selection: ModelSelection
+    metadata: dict
+
+
 def _run_desktop_bridge_chat_action(
     payload: ChatRequest,
     bridge: DesktopBridgeClient,
@@ -627,6 +742,90 @@ def _run_desktop_bridge_chat_action(
     if _is_desktop_bridge_inventory_request(message):
         return _run_desktop_bridge_inventory_action(payload, bridge)
     return None
+
+
+def _run_workspace_copilot_chat_action(
+    payload: ChatRequest,
+    gateway: ModelGateway,
+    workspace: WorkspaceTools,
+    store: GenerationStore,
+    selection: ModelSelection | None = None,
+) -> WorkspaceCopilotChatResult | None:
+    if not _should_route_workspace_copilot(payload):
+        return None
+    selection = selection or _workspace_copilot_tool_selection(payload, gateway)
+    job = store.create_job(
+        JobCreate(
+            job_type=JobType.CODE,
+            title=f"Chat code edit: {payload.message[:80]}",
+            prompt=payload.message,
+            backend="workspace-copilot",
+            metadata={
+                "source": "chat",
+                "preferred_model": payload.preferred_model,
+                "workspace_path": payload.workspace_path,
+                "workspace_context_paths": payload.workspace_context_paths,
+                "auto_apply": True,
+                "run_commands": False,
+            },
+        )
+    )
+    try:
+        task_result = WorkspaceCopilot(workspace, gateway, store).run(
+            WorkspaceCopilotTaskRequest(
+                instruction=payload.message,
+                target_paths=_chat_code_target_paths(payload),
+                preferred_model=payload.preferred_model or "qwen3.6-35b-a3b-hauhaucs-coding",
+                auto_apply=True,
+                run_commands=False,
+                max_context_files=8,
+            ),
+            job,
+        )
+    except Exception as error:
+        try:
+            store.update_job_status(job.id, JobStatus.ERROR, f"Code Space Copilot failed: {error}", {"source": "chat"})
+        except Exception:
+            pass
+        metadata = {
+            "tool": "workspace_copilot",
+            "job_id": job.id,
+            "ok": False,
+            "error": str(error),
+            "intent_router": {"tool_action": "workspace_copilot.apply_code_edits"},
+        }
+        return WorkspaceCopilotChatResult(
+            inference=InferenceResponse(
+                model_id=selection.model.id,
+                content=(
+                    "I tried to route this into Code Space Copilot so I could modify the Edison repo directly, "
+                    f"but the tool failed before applying changes.\n\nDetail: {error}"
+                ),
+                finish_reason="error",
+                metadata=metadata,
+            ),
+            model_selection=selection,
+            metadata=metadata,
+        )
+
+    metadata = {
+        "tool": "workspace_copilot",
+        "job_id": task_result.job.id,
+        "ok": task_result.status != "error",
+        "status": task_result.status,
+        "result": _workspace_copilot_metadata(task_result),
+        "intent_router": {"tool_action": "workspace_copilot.apply_code_edits"},
+    }
+    return WorkspaceCopilotChatResult(
+        inference=InferenceResponse(
+            model_id=task_result.model_id or selection.model.id,
+            content=_workspace_copilot_chat_content(task_result),
+            finish_reason="error" if task_result.status == "error" else "stop",
+            metadata=metadata,
+        ),
+        model_selection=selection,
+        metadata=metadata,
+    )
 
 
 def _run_fusion_chat_action(payload: ChatRequest, bridge: DesktopBridgeClient) -> DesktopBridgeChatResult:
@@ -893,6 +1092,128 @@ def _desktop_bridge_tool_selection(mode: ChatMode, reason: str) -> ModelSelectio
         ),
         reason=reason,
     )
+
+
+def _workspace_copilot_tool_selection(payload: ChatRequest, gateway: ModelGateway) -> ModelSelection:
+    try:
+        selection = gateway.router.select_model(
+            mode=ChatMode.CODING,
+            preferred_model=payload.preferred_model,
+        )
+        return selection.model_copy(update={"reason": "Code edit request routed to Code Space Copilot"})
+    except Exception:
+        return ModelSelection(
+            mode=ChatMode.CODING,
+            required_capabilities=[],
+            model=ModelProfile(
+                id=payload.preferred_model or "qwen3.6-35b-a3b-hauhaucs-coding",
+                display_name="Code Space Copilot",
+                provider="workspace-copilot",
+                status=ModelStatus.READY,
+                capabilities=[],
+                context_window=0,
+                max_output_tokens=0,
+            ),
+            reason="Code edit request routed to Code Space Copilot",
+        )
+
+
+def _should_route_workspace_copilot(payload: ChatRequest) -> bool:
+    if payload.mode not in {ChatMode.CODING, ChatMode.AGENT, ChatMode.SWARM}:
+        return False
+    message = payload.message.lower()
+    words = message.split()
+    action_terms = {
+        "add",
+        "build",
+        "change",
+        "create",
+        "delete",
+        "edit",
+        "fix",
+        "free dominion",
+        "give",
+        "implement",
+        "make",
+        "modify",
+        "patch",
+        "refactor",
+        "remove",
+        "rewrite",
+        "update",
+        "wire",
+    }
+    code_scope_terms = {
+        "api",
+        "app",
+        "backend",
+        "code",
+        "component",
+        "css",
+        "edison",
+        "file",
+        "frontend",
+        "function",
+        "repo",
+        "repository",
+        "route",
+        "script",
+        "tsx",
+        "typescript",
+        "ui",
+        "workspace",
+    }
+    if not _has_intent_term(message, words, action_terms):
+        return False
+    return _has_intent_term(message, words, code_scope_terms) or bool(_chat_code_target_paths(payload))
+
+
+def _chat_code_target_paths(payload: ChatRequest) -> list[str]:
+    paths = []
+    if payload.workspace_path:
+        paths.append(payload.workspace_path)
+    paths.extend(payload.workspace_context_paths)
+    return _dedupe_paths(paths)
+
+
+def _workspace_copilot_chat_content(result) -> str:
+    applied = [change for change in result.changes if change.applied]
+    previews = [change for change in result.changes if not change.applied and not change.error]
+    errors = [change for change in result.changes if change.error]
+    lines = [result.summary.strip() or "Code Space Copilot finished.", ""]
+    if applied:
+        lines.append("Updated files:")
+        lines.extend(f"- `{change.path}`: {change.summary or 'updated'}" for change in applied[:12])
+        lines.append("")
+    if previews:
+        lines.append("Prepared changes that still need approval:")
+        lines.extend(f"- `{change.path}`: {change.summary or 'prepared'}" for change in previews[:6])
+        lines.append("")
+    if errors:
+        lines.append("Files that need attention:")
+        lines.extend(f"- `{change.path}`: {change.error}" for change in errors[:6])
+        lines.append("")
+    if result.commands:
+        lines.append("Commands run:")
+        lines.extend(f"- `{command.command}` -> {command.status}" for command in result.commands[:4])
+        lines.append("")
+    if result.followups:
+        lines.append("Next checks:")
+        lines.extend(f"- {item}" for item in result.followups[:4])
+        lines.append("")
+    if not applied and not previews and not errors:
+        lines.append("No file changes were applied.")
+        lines.append("")
+    lines.append(f"Job: `{result.job.id}`")
+    return "\n".join(lines).strip()
+
+
+def _workspace_copilot_metadata(result) -> dict:
+    data = result.model_dump(mode="json")
+    raw_response = data.get("raw_response")
+    if isinstance(raw_response, str) and len(raw_response) > 2000:
+        data["raw_response"] = raw_response[:2000]
+    return data
 
 
 def _is_camera_chat_request(message: str) -> bool:

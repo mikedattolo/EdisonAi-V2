@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from edison_core.api.dependencies import get_conversation_store
 from edison_core.schemas import (
@@ -38,6 +38,22 @@ def get_conversation(
 ) -> ConversationWithMessages:
     try:
         return store.get_conversation(conversation_id)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found") from error
+
+
+@router.delete(
+    "/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
+def delete_conversation(
+    conversation_id: str,
+    store: ConversationStore = Depends(get_conversation_store),
+) -> None:
+    try:
+        store.delete_conversation(conversation_id)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found") from error
 

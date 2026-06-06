@@ -106,6 +106,20 @@ class GenerationStore:
             raise JobNotFoundError(artifact_id)
         return self._artifact_from_row(row)
 
+    def delete_artifact(self, artifact_id: str) -> ArtifactRecord:
+        artifact = self.get_artifact(artifact_id)
+        with self.database.connect() as connection:
+            connection.execute(
+                "UPDATE generation_jobs SET source_artifact_id = NULL WHERE source_artifact_id = ?",
+                (artifact_id,),
+            )
+            connection.execute(
+                "UPDATE generation_jobs SET result_artifact_id = NULL WHERE result_artifact_id = ?",
+                (artifact_id,),
+            )
+            connection.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
+        return artifact
+
     def create_job(self, payload: JobCreate, status: JobStatus = JobStatus.QUEUED) -> JobRecord:
         now = utc_now()
         job = JobRecord(
@@ -170,6 +184,16 @@ class GenerationStore:
         if row is None:
             raise JobNotFoundError(job_id)
         return self._job_from_row(row)
+
+    def delete_job(self, job_id: str) -> JobRecord:
+        job = self.get_job(job_id)
+        with self.database.connect() as connection:
+            connection.execute(
+                "UPDATE artifacts SET source_job_id = NULL WHERE source_job_id = ?",
+                (job_id,),
+            )
+            connection.execute("DELETE FROM generation_jobs WHERE id = ?", (job_id,))
+        return job
 
     def update_job_status(
         self,

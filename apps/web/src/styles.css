@@ -150,6 +150,17 @@ button {
   color: #c8d2df;
 }
 
+.conversation-open-button {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
 .conversation-item span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -159,6 +170,25 @@ button {
 .conversation-item small {
   flex: 0 0 auto;
   color: #85cfbd;
+}
+
+.conversation-delete-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #94a2b4;
+}
+
+.conversation-delete-button:hover {
+  border-color: #805157;
+  background: #3a2329;
+  color: #ffd5d9;
 }
 
 .conversation-item.active,
@@ -273,6 +303,37 @@ button {
 .secondary-button:disabled {
   cursor: not-allowed;
   color: #8995a5;
+}
+
+.danger-button,
+.icon-danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e1b5b8;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #94333a;
+  font-weight: 760;
+}
+
+.danger-button {
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+.icon-danger-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.danger-button:hover:not(:disabled),
+.icon-danger-button:hover:not(:disabled) {
+  border-color: #d8898f;
+  background: #ffecec;
+  color: #7d1f27;
 }
 
 .apply-button {
@@ -3670,6 +3731,14 @@ button {
   min-width: 0;
 }
 
+.job-row-actions {
+  display: flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .job-row strong,
 .media-status-card strong {
   color: #1f2937;
@@ -3681,6 +3750,26 @@ button {
   font-size: 0.84rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.job-row .job-status {
+  color: #586274;
+  font-size: 0.82rem;
+}
+
+.job-row .job-status.complete,
+.job-row .job-status.generating,
+.job-row .job-status.queued {
+  color: #176a58;
+}
+
+.job-row .job-status.setup_required,
+.job-row .job-status.error {
+  color: #8f4b13;
+}
+
+.job-row .job-status.cancelled {
+  color: #586274;
 }
 
 @media (max-width: 960px) {

@@ -148,6 +148,32 @@ def test_conversation_routes_round_trip(tmp_path):
     assert loaded.json()["messages"][0]["content"] == "Keep this local-first."
 
 
+def test_conversation_route_deletes_chat_and_messages(tmp_path):
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+    )
+    client = TestClient(create_app(settings))
+
+    created = client.post(
+        "/api/v1/conversations",
+        json={"title": "Delete me", "mode": "chat", "memory_enabled": True},
+    )
+    conversation_id = created.json()["id"]
+    client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        json={"role": "user", "content": "temporary"},
+    )
+
+    deleted = client.delete(f"/api/v1/conversations/{conversation_id}")
+    loaded = client.get(f"/api/v1/conversations/{conversation_id}")
+    listed = client.get("/api/v1/conversations")
+
+    assert deleted.status_code == 204
+    assert loaded.status_code == 404
+    assert all(conversation["id"] != conversation_id for conversation in listed.json())
+
+
 def test_chat_route_creates_conversation_and_assistant_message(tmp_path):
     settings = EdisonSettings(
         database_path=tmp_path / "edison.sqlite3",
@@ -197,6 +223,36 @@ def test_chat_auto_mode_routes_to_coding_with_workspace_context(tmp_path):
     assert assistant_metadata["requested_mode"] == "auto"
     assert assistant_metadata["resolved_mode"] == "coding"
     assert assistant_metadata["workspace_context"]["enabled"] is True
+
+
+def test_chat_code_edit_request_routes_to_workspace_copilot(tmp_path):
+    (tmp_path / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    settings = EdisonSettings(
+        database_path=tmp_path / "edison.sqlite3",
+        model_registry_path=tmp_path / "missing-models.json",
+        workspace_roots=[tmp_path],
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Update the repo code in main.py to say hello world",
+            "mode": "auto",
+            "workspace_path": "main.py",
+            "memory_enabled": True,
+        },
+    )
+
+    body = response.json()
+    assistant_metadata = body["assistant_message"]["metadata"]
+    jobs = client.get("/api/v1/jobs", params={"job_type": "code"}).json()
+
+    assert response.status_code == 201
+    assert assistant_metadata["intent_router"]["tool_action"] == "workspace_copilot.apply_code_edits"
+    assert assistant_metadata["workspace_copilot"]["tool"] == "workspace_copilot"
+    assert body["inference"]["metadata"]["result"]["status"] == "setup_required"
+    assert any(job["backend"] == "workspace-copilot" for job in jobs)
 
 
 def test_chat_auto_mode_routes_to_agent_when_toggle_enabled(tmp_path):

@@ -431,7 +431,10 @@ def _clean_model_content(content: str) -> str:
 
 def _assistant_system_prompt(mode: ChatMode) -> str:
     mode_guidance = {
-        ChatMode.CODING: "For coding work, cite concrete files and verification steps. Keep diffs and commands scoped.",
+        ChatMode.CODING: (
+            "For coding work, cite concrete files and verification steps. Keep diffs and commands scoped. "
+            "When Edison routes a request through Code Space tools, treat repository code as editable and do not claim you are limited to Creator Studio."
+        ),
         ChatMode.REASONING: "For harder problems, think carefully internally and present the useful reasoning summary, not hidden scratch work.",
         ChatMode.CREATIVE: "For creative work, offer vivid options and make the result easy to act on.",
         ChatMode.MEDIA: "For media work, explain what will be generated, what input is required, and where the result will appear.",

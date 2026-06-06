@@ -165,6 +165,12 @@ export const edisonApi = {
     }),
   getConversation: (conversationId: string) =>
     request<ConversationWithMessages>(`/api/v1/conversations/${conversationId}`),
+  deleteConversation: async (conversationId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/conversations/${conversationId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+  },
   addMessage: (
     conversationId: string,
     payload: {
@@ -260,6 +266,12 @@ export const edisonApi = {
       body: JSON.stringify(payload),
     }),
   listArtifacts: (limit = 24) => request<ArtifactRecord[]>(`/api/v1/artifacts?limit=${limit}`),
+  deleteArtifact: async (artifactId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/artifacts/${artifactId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+  },
   uploadArtifact: async (file: File) => {
     const formData = new FormData();
     formData.set('file', file);
@@ -275,6 +287,12 @@ export const edisonApi = {
   },
   listJobs: (jobType?: JobType) =>
     request<JobRecord[]>(jobType ? `/api/v1/jobs?job_type=${jobType}` : '/api/v1/jobs'),
+  deleteJob: async (jobId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/jobs/${jobId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+  },
   generateMedia: (payload: {
     mode: MediaGenerationMode;
     prompt: string;
