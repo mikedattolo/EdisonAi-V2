@@ -134,6 +134,8 @@ const CHAT_AUTO_PREVIEW_STORAGE_KEY = 'edison-chat-auto-preview';
 const CHAT_CONTEXT_PATHS_STORAGE_KEY = 'edison-chat-context-paths';
 const CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY = 'edison-chat-knowledge-enabled';
 const CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY = 'edison-chat-knowledge-matches';
+const CHAT_QWEN_MODEL_STORAGE_KEY = 'edison-chat-qwen-model-enabled';
+const QWEN_CODING_MODEL_ID = 'qwen3.6-35b-a3b-hauhaucs-coding';
 
 const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
@@ -295,6 +297,8 @@ export default function App() {
   const [chatKnowledgeQuery, setChatKnowledgeQuery] = useState('');
   const [chatKnowledgeMatches, setChatKnowledgeMatches] =
     useState<number>(() => readStoredInt(CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY, 5, 1, 20));
+  const [qwenChatModelEnabled, setQwenChatModelEnabled] =
+    useState<boolean>(() => readStoredBoolean(CHAT_QWEN_MODEL_STORAGE_KEY, false));
   const [chatContextPreviewUpdatedAt, setChatContextPreviewUpdatedAt] = useState<string | null>(null);
   const [isPreviewingContext, setIsPreviewingContext] = useState(false);
   const [composer, setComposer] = useState('');
@@ -365,6 +369,10 @@ export default function App() {
   }, [chatKnowledgeMatches]);
 
   useEffect(() => {
+    writeStoredBoolean(CHAT_QWEN_MODEL_STORAGE_KEY, qwenChatModelEnabled);
+  }, [qwenChatModelEnabled]);
+
+  useEffect(() => {
     if (!activeConversation?.id) {
       setCollapsedContextMessageIds({});
       return;
@@ -391,6 +399,11 @@ export default function App() {
     const pending = models.filter((model) => model.status !== 'ready');
     return { ready, pending };
   }, [models]);
+
+  const qwenChatModel = useMemo(
+    () => models.find((model) => model.id === QWEN_CODING_MODEL_ID),
+    [models],
+  );
 
   const hardwareSummary = useMemo(() => {
     const hailo = hardwareStatus?.accelerators.find((accelerator) => accelerator.kind === 'hailo8');
@@ -539,7 +552,7 @@ export default function App() {
         conversation_id: activeConversation?.id ?? null,
         message: content,
         mode: 'auto' as ChatMode,
-        preferred_model: modelSelection?.model.id ?? null,
+        preferred_model: qwenChatModelEnabled ? QWEN_CODING_MODEL_ID : null,
         agent_enabled: agentModeEnabled,
         memory_enabled: true,
         workspace_path: workspaceTargetPath,
@@ -1593,8 +1606,11 @@ export default function App() {
             isSending={isSending}
             agentModeEnabled={agentModeEnabled}
             modelSelection={modelSelection}
+            qwenChatModel={qwenChatModel}
+            qwenChatModelEnabled={qwenChatModelEnabled}
             setComposer={setComposer}
             setAgentModeEnabled={setAgentModeEnabled}
+            setQwenChatModelEnabled={setQwenChatModelEnabled}
             showWorkspaceContext={showWorkspaceContext}
             setShowWorkspaceContext={setShowWorkspaceContext}
             workspaceContextFilter={workspaceContextFilter}
@@ -1750,8 +1766,11 @@ function ChatView({
   handleSend,
   isSending,
   modelSelection,
+  qwenChatModel,
+  qwenChatModelEnabled,
   setComposer,
   setAgentModeEnabled,
+  setQwenChatModelEnabled,
   showWorkspaceContext,
   setShowWorkspaceContext,
   workspaceContextFilter,
@@ -1793,8 +1812,11 @@ function ChatView({
   handleSend: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   isSending: boolean;
   modelSelection: ModelSelection | null;
+  qwenChatModel?: ModelProfile;
+  qwenChatModelEnabled: boolean;
   setComposer: (value: string) => void;
   setAgentModeEnabled: (value: boolean) => void;
+  setQwenChatModelEnabled: (value: boolean) => void;
   showWorkspaceContext: boolean;
   setShowWorkspaceContext: (value: boolean) => void;
   workspaceContextFilter: ContextFilter;
@@ -1828,7 +1850,16 @@ function ChatView({
   onUseArtifactInChat: (artifact: ArtifactRecord) => void;
   onSelectAgentRun: (runId: string) => Promise<void>;
 }) {
-  const selectedModelName = modelSelection?.model.display_name ?? 'Model lane';
+  const selectedModelName = qwenChatModelEnabled
+    ? qwenChatModel?.display_name ?? 'Qwen3.6 35B A3B'
+    : modelSelection?.model.display_name ?? 'Auto model lane';
+  const modelRouteLabel = qwenChatModelEnabled ? 'Qwen forced' : 'Auto routing';
+  const selectedModelStatus = qwenChatModelEnabled
+    ? qwenChatModel?.status.replace('_', ' ') ?? 'not registered'
+    : modelSelection?.model.status.replace('_', ' ') ?? 'auto';
+  const qwenToggleTitle = qwenChatModelEnabled
+    ? 'Use automatic Edison model routing for normal chat'
+    : 'Force normal chat to use the Qwen3.6 35B GPU model';
   const intentLabel = modelSelection?.mode
     ? `Intent ${modelSelection.mode.replace('_', ' ')}`
     : 'Intent auto';
@@ -2189,8 +2220,18 @@ function ChatView({
       <section className="composer-panel" aria-label="Message composer">
         <div className="composer-meta">
           <span>{intentLabel}</span>
+          <span>{modelRouteLabel}</span>
           <span>{selectedModelName}</span>
-          <span>{modelSelection?.model.status.replace('_', ' ') ?? 'Select a lane'}</span>
+          <span>{selectedModelStatus}</span>
+          <button
+            className={qwenChatModelEnabled ? 'composer-toggle qwen-toggle active' : 'composer-toggle qwen-toggle'}
+            onClick={() => setQwenChatModelEnabled(!qwenChatModelEnabled)}
+            title={qwenToggleTitle}
+            type="button"
+          >
+            <Brain size={14} />
+            <span>{qwenChatModelEnabled ? 'Qwen On' : 'Auto LLM'}</span>
+          </button>
           <button
             className={agentModeEnabled ? 'composer-toggle active' : 'composer-toggle'}
             onClick={() => setAgentModeEnabled(!agentModeEnabled)}

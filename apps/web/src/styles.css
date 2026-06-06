@@ -4897,6 +4897,12 @@ button {
   color: #115e51;
 }
 
+.composer-toggle.qwen-toggle.active {
+  border-color: #526d94;
+  background: #eef4fb;
+  color: #243d63;
+}
+
 .composer {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
