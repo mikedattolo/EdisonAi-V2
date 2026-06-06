@@ -1,4 +1,5 @@
 import httpx
+import json
 
 from edison_core.schemas import ChatMode, InferenceRequest, ModelCapability, ModelProfile, ModelStatus
 from edison_core.services.model_gateway import ModelGateway, ReasoningTraceFilter
@@ -109,6 +110,60 @@ def test_gateway_strips_reasoning_tags_from_chat_response():
     )
 
     assert response.content == "Visible answer."
+
+
+def test_gateway_folds_context_system_messages_to_the_front():
+    captured_messages = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode("utf-8"))
+        captured_messages.extend(payload["messages"])
+        return httpx.Response(
+            200,
+            json={
+                "model": "ready-chat",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    registry = ModelRegistry(
+        [
+            ModelProfile(
+                id="ready-chat",
+                display_name="Ready Chat",
+                provider="local-openai-compatible",
+                status=ModelStatus.READY,
+                capabilities=[ModelCapability.CHAT],
+                endpoint_url="http://model.test/v1",
+            )
+        ]
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    ModelGateway(ModelRouter(registry), http_client=client).complete(
+        InferenceRequest(
+            prompt="hello",
+            mode=ChatMode.CHAT,
+            metadata={
+                "messages": [
+                    {"role": "system", "content": "Knowledge context"},
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "previous reply"},
+                    {"role": "system", "content": "Personal context"},
+                ]
+            },
+        )
+    )
+
+    assert captured_messages[0]["role"] == "system"
+    assert "Knowledge context" in captured_messages[0]["content"]
+    assert "Personal context" in captured_messages[0]["content"]
+    assert [message["role"] for message in captured_messages[1:]] == ["user", "assistant"]
 
 
 def test_reasoning_trace_filter_handles_split_stream_tags():

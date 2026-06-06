@@ -297,16 +297,21 @@ def _messages_from_request(request: InferenceRequest) -> list[dict[str, str]]:
     raw_messages = request.metadata.get("messages")
     system_prompt = _assistant_system_prompt(request.mode)
     if isinstance(raw_messages, list) and raw_messages:
+        system_sections = [system_prompt]
         messages: list[dict[str, str]] = []
         for item in raw_messages:
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role", "user"))
             content = str(item.get("content", ""))
-            if content:
-                messages.append({"role": role, "content": content})
+            if not content:
+                continue
+            if role == "system":
+                system_sections.append(content)
+                continue
+            messages.append({"role": role, "content": content})
         if messages:
-            return [{"role": "system", "content": system_prompt}, *messages]
+            return [{"role": "system", "content": "\n\n".join(system_sections)}, *messages]
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": request.prompt}]
 
 
