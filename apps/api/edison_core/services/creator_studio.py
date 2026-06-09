@@ -2,11 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from edison_core.config import EdisonSettings
-from edison_core.schemas import CreatorStudioAssetRecord, CreatorStudioDatasetRecord, CreatorStudioStatus
+from edison_core.schemas import (
+    ChatMode,
+    CreatorStudioAssetRecord,
+    CreatorStudioAssistAction,
+    CreatorStudioAssistRequest,
+    CreatorStudioAssistResponse,
+    CreatorStudioDatasetRecord,
+    CreatorStudioStatus,
+    InferenceRequest,
+)
+
+if TYPE_CHECKING:
+    from edison_core.services.model_gateway import ModelGateway
 
 
 CREATOR_GUARDRAILS = [
@@ -79,6 +92,63 @@ class CreatorStudioService:
                 "supports_dataset_plans": True,
                 "planning_model": "qwen3.6-35b-a3b-hauhaucs-coding",
             },
+        )
+
+    def assist(self, gateway: "ModelGateway", request: CreatorStudioAssistRequest) -> CreatorStudioAssistResponse:
+        """Run a Creator Studio assistant turn through the local Qwen model.
+
+        Returns a conversational reply plus optional, guardrail-compliant Creator Studio
+        actions the UI can run with one click. Content guardrails are always enforced.
+        """
+        status = self.status()
+        guardrails = status.guardrails or CREATOR_GUARDRAILS
+        messages: list[dict[str, str]] = [{"role": "system", "content": _assist_system_prompt(status, guardrails)}]
+        for turn in request.history[-8:]:
+            content = turn.content.strip()
+            if content:
+                messages.append({"role": turn.role, "content": content})
+        messages.append({"role": "user", "content": request.message.strip()})
+
+        planning_model = request.preferred_model or str(
+            status.metadata.get("planning_model") or "qwen3.6-35b-a3b-hauhaucs-coding"
+        )
+
+        _selection, inference = gateway.complete(
+            InferenceRequest(
+                mode=ChatMode.CODING,
+                preferred_model=planning_model,
+                prompt=request.message.strip(),
+                metadata={
+                    "source": "creator-studio-assistant",
+                    "messages": messages,
+                    "response_format": {"type": "json_object"},
+                    "timeout_seconds": 180,
+                },
+            )
+        )
+
+        if inference.finish_reason == "not_configured":
+            return CreatorStudioAssistResponse(
+                status="setup_required",
+                reply=inference.content,
+                model_id=inference.model_id,
+                guardrails=guardrails,
+            )
+        if inference.finish_reason == "error":
+            return CreatorStudioAssistResponse(
+                status="error",
+                reply=inference.content,
+                model_id=inference.model_id,
+                guardrails=guardrails,
+            )
+
+        reply, actions = _parse_assist_payload(inference.content)
+        return CreatorStudioAssistResponse(
+            status="ok",
+            reply=reply,
+            actions=actions,
+            model_id=inference.model_id,
+            guardrails=guardrails,
         )
 
 
@@ -320,3 +390,93 @@ def _trigger_token(path: Path) -> str:
 def _has_unsafe_path_part(path: Path) -> bool:
     lowered_parts = [part.lower() for part in path.parts]
     return any(any(marker in part for marker in UNSAFE_PATH_PARTS) for part in lowered_parts)
+
+
+ALLOWED_ASSIST_MODES = {"creator_photo", "creator_video", "creator_dataset"}
+
+
+def _assist_system_prompt(status: CreatorStudioStatus, guardrails: list[str]) -> str:
+    dataset_lines = "\n".join(
+        f"- {dataset.name} (id={dataset.id}, {dataset.item_count} items, "
+        f"trigger={dataset.trigger_token or 'creator_ai'}, status={dataset.status})"
+        for dataset in status.datasets[:12]
+    ) or "- (no safe datasets detected yet)"
+    template_lines = "\n".join(f"- {name}" for name in status.workflow_templates[:12]) or "- (no workflow templates found yet)"
+    guardrail_lines = "\n".join(f"- {item}" for item in guardrails)
+    return (
+        "You are the Edison Creator Studio assistant. You help Mike plan and run a SAFE virtual-creator "
+        "workflow for fictional AI personas on his local AI PC. You can converse, and you can propose concrete "
+        "Creator Studio actions for him to run.\n\n"
+        "Hard safety guardrails you must always enforce. Never relax, bypass, or help circumvent these:\n"
+        f"{guardrail_lines}\n"
+        "If a request would violate a guardrail (sexual/explicit content, real-person likeness or celebrity "
+        "impersonation, non-consensual material, or minors / youth-coded content), refuse that part clearly in "
+        "'reply' and return no actions for it.\n\n"
+        "Current studio state:\n"
+        f"- Status: {status.status} - {status.detail}\n"
+        f"- Datasets:\n{dataset_lines}\n"
+        f"- Workflow templates:\n{template_lines}\n\n"
+        "Actions you may propose (use only these modes):\n"
+        "- creator_photo: generate a photoreal, fully clothed, non-explicit fictional-persona image (ComfyUI).\n"
+        "- creator_video: generate a short, safe fictional-persona video clip (Wan/ComfyUI).\n"
+        "- creator_dataset: produce a dataset intake / training handoff PLAN for a fictional persona.\n\n"
+        "Respond with a SINGLE JSON object only, no markdown fences. Schema:\n"
+        "{\n"
+        '  "reply": "your conversational answer in GitHub-flavored markdown",\n'
+        '  "actions": [\n'
+        '    {"mode": "creator_photo|creator_video|creator_dataset", "title": "short label", '
+        '"prompt": "the safe generation prompt", "rationale": "why this helps", "dataset_hint": "dataset name or id (optional)"}\n'
+        "  ]\n"
+        "}\n"
+        "Only include actions when the user actually wants something generated or planned. Keep every prompt safe and "
+        "compliant with the guardrails. Use an empty list for 'actions' when you are only answering or when you refused a request."
+    )
+
+
+def _parse_assist_payload(content: str) -> tuple[str, list[CreatorStudioAssistAction]]:
+    parsed = _first_json_object(content)
+    if not parsed:
+        return (content.strip() or "I could not produce a response."), []
+    reply = str(parsed.get("reply") or "").strip()
+    actions: list[CreatorStudioAssistAction] = []
+    raw_actions = parsed.get("actions")
+    if isinstance(raw_actions, list):
+        for item in raw_actions[:6]:
+            if not isinstance(item, dict):
+                continue
+            mode = str(item.get("mode") or "").strip()
+            if mode not in ALLOWED_ASSIST_MODES:
+                continue
+            rationale = str(item.get("rationale") or "").strip()
+            dataset_hint = str(item.get("dataset_hint") or "").strip()
+            try:
+                actions.append(
+                    CreatorStudioAssistAction(
+                        mode=mode,  # type: ignore[arg-type]
+                        title=(str(item.get("title") or "").strip()[:160] or "Creator action"),
+                        prompt=str(item.get("prompt") or "").strip()[:4000],
+                        rationale=rationale[:600] or None,
+                        dataset_hint=dataset_hint[:160] or None,
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+    if not reply:
+        reply = content.strip() or "Done."
+    return reply, actions
+
+
+def _first_json_object(content: str) -> dict | None:
+    candidates = list(re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL))
+    start = content.find("{")
+    end = content.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidates.append(content[start : end + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None

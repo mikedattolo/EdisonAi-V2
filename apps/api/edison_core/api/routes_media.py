@@ -12,12 +12,15 @@ from edison_core.api.dependencies import (
     get_generation_store,
     get_invokeai_client,
     get_media_orchestrator,
+    get_model_gateway,
     get_modly_client,
     get_wan22_client,
 )
 from edison_core.schemas import (
     ArtifactCreate,
     ArtifactKind,
+    CreatorStudioAssistRequest,
+    CreatorStudioAssistResponse,
     JobCreate,
     JobRecord,
     JobStatus,
@@ -37,11 +40,21 @@ from edison_core.services.creator_studio import CreatorStudioService
 from edison_core.services.generation_store import GenerationStore, JobNotFoundError
 from edison_core.services.invokeai_client import InvokeAIClient
 from edison_core.services.media_orchestrator import MediaOrchestrator
+from edison_core.services.model_gateway import ModelGateway
 from edison_core.services.modly_client import ModlyClient
 from edison_core.services.wan22_client import Wan22Client
 
 
 router = APIRouter(prefix="/api/v1/media", tags=["media"])
+
+
+@router.post("/creator-studio/assist", response_model=CreatorStudioAssistResponse)
+def creator_studio_assist(
+    payload: CreatorStudioAssistRequest,
+    creator_studio: CreatorStudioService = Depends(get_creator_studio_service),
+    gateway: ModelGateway = Depends(get_model_gateway),
+) -> CreatorStudioAssistResponse:
+    return creator_studio.assist(gateway, payload)
 
 
 @router.get("/modes", response_model=list[MediaGenerationModeRecord])

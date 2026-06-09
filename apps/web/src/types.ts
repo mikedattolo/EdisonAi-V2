@@ -714,7 +714,7 @@ export interface WorkspaceCopilotTaskResult {
 
 export interface KnowledgeSourceRecord {
   id: string;
-  kind: 'text' | 'url' | 'wikipedia' | 'local_file' | 'preset';
+  kind: 'text' | 'url' | 'wikipedia' | 'local_file' | 'preset' | 'chat_export';
   title: string;
   uri?: string | null;
   language?: string | null;
@@ -730,6 +730,32 @@ export interface KnowledgeStatus {
   source_count: number;
   chunk_count: number;
   latest_ingest_at?: string | null;
+}
+
+export type ChatImportSource = 'auto' | 'chatgpt' | 'claude';
+
+export interface KnowledgeChatImportResult {
+  detected_source: 'chatgpt' | 'claude' | 'mixed' | 'unknown';
+  conversation_count: number;
+  imported_count: number;
+  skipped_count: number;
+  sources: KnowledgeSourceRecord[];
+}
+
+export interface CreatorStudioAssistAction {
+  mode: 'creator_photo' | 'creator_video' | 'creator_dataset';
+  title: string;
+  prompt: string;
+  rationale?: string | null;
+  dataset_hint?: string | null;
+}
+
+export interface CreatorStudioAssistResponse {
+  status: 'ok' | 'setup_required' | 'error';
+  reply: string;
+  actions: CreatorStudioAssistAction[];
+  model_id?: string | null;
+  guardrails: string[];
 }
 
 export interface KnowledgeSearchMatch {

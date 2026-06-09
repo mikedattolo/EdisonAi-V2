@@ -401,6 +401,33 @@ class CreatorStudioStatus(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreatorStudioAssistMessage(BaseModel):
+    role: Literal["user", "assistant"] = "user"
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class CreatorStudioAssistAction(BaseModel):
+    mode: Literal["creator_photo", "creator_video", "creator_dataset"]
+    title: str = Field(default="Creator action", max_length=160)
+    prompt: str = Field(default="", max_length=4000)
+    rationale: str | None = Field(default=None, max_length=600)
+    dataset_hint: str | None = Field(default=None, max_length=160)
+
+
+class CreatorStudioAssistRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    history: list[CreatorStudioAssistMessage] = Field(default_factory=list)
+    preferred_model: str | None = None
+
+
+class CreatorStudioAssistResponse(BaseModel):
+    status: Literal["ok", "setup_required", "error"] = "ok"
+    reply: str
+    actions: list[CreatorStudioAssistAction] = Field(default_factory=list)
+    model_id: str | None = None
+    guardrails: list[str] = Field(default_factory=list)
+
+
 class MediaSystemStatus(BaseModel):
     service: str = "media"
     comfyui: ComfyUIStatus
@@ -630,7 +657,7 @@ class WorkspaceCopilotTaskResult(BaseModel):
 
 class KnowledgeSourceRecord(BaseModel):
     id: str
-    kind: Literal["text", "url", "wikipedia", "local_file", "preset"]
+    kind: Literal["text", "url", "wikipedia", "local_file", "preset", "chat_export"]
     title: str
     uri: str | None = None
     language: str | None = None
@@ -656,6 +683,14 @@ class KnowledgeStatus(BaseModel):
     source_count: int
     chunk_count: int
     latest_ingest_at: datetime | None = None
+
+
+class KnowledgeChatImportResult(BaseModel):
+    detected_source: Literal["chatgpt", "claude", "mixed", "unknown"] = "unknown"
+    conversation_count: int = 0
+    imported_count: int = 0
+    skipped_count: int = 0
+    sources: list[KnowledgeSourceRecord] = Field(default_factory=list)
 
 
 class KnowledgeIngestTextRequest(BaseModel):

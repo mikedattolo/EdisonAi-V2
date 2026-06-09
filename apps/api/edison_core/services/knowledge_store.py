@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import io
+import json
 import re
 import sqlite3
-from datetime import datetime
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
@@ -11,6 +15,7 @@ import httpx
 
 from edison_core.database import SQLiteDatabase
 from edison_core.schemas import (
+    KnowledgeChatImportResult,
     KnowledgeIngestLocalRequest,
     KnowledgeIngestTextRequest,
     KnowledgeSearchMatch,
@@ -186,6 +191,73 @@ class KnowledgeStore:
                 )
             )
         return records
+
+    def ingest_chat_export(
+        self,
+        raw: bytes,
+        *,
+        filename: str = "",
+        source_hint: str = "auto",
+        max_conversations: int = 1000,
+    ) -> KnowledgeChatImportResult:
+        """Import a ChatGPT or Claude data export into the knowledge base.
+
+        ``raw`` is the bytes of an uploaded file. It may be the ``conversations.json``
+        from a ChatGPT/Claude export, or the original ``.zip`` archive (the JSON is
+        extracted automatically). Each conversation becomes a searchable knowledge source.
+        """
+        text = _extract_export_json_text(raw, filename)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise KnowledgeIngestError(f"File is not valid JSON: {error}") from error
+
+        conversations = _parse_chat_export(data, source_hint)
+        if not conversations:
+            raise KnowledgeIngestError(
+                "No conversations were found. Upload conversations.json (or the export .zip) "
+                "from a ChatGPT or Claude data export."
+            )
+
+        detected_values = {conversation.source for conversation in conversations}
+        detected = next(iter(detected_values)) if len(detected_values) == 1 else "mixed"
+
+        imported: list[KnowledgeSourceRecord] = []
+        skipped = 0
+        for conversation in conversations[:max_conversations]:
+            if not conversation.transcript.strip():
+                skipped += 1
+                continue
+            try:
+                record = self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title=conversation.title[:240],
+                        text=conversation.transcript,
+                        uri=conversation.uri,
+                        metadata={
+                            "source": conversation.source,
+                            "import_kind": "chat_export",
+                            "conversation_id": conversation.conversation_id,
+                            "message_count": conversation.message_count,
+                            "created_at": conversation.created_at,
+                            "origin_filename": filename or None,
+                        },
+                    ),
+                    kind="chat_export",
+                )
+            except KnowledgeIngestError:
+                skipped += 1
+                continue
+            imported.append(record)
+
+        skipped += max(0, len(conversations) - max_conversations)
+        return KnowledgeChatImportResult(
+            detected_source=detected,
+            conversation_count=len(conversations),
+            imported_count=len(imported),
+            skipped_count=skipped,
+            sources=imported,
+        )
 
     def search(self, query: str, max_results: int = 10) -> list[KnowledgeSearchMatch]:
         terms = [term for term in re.split(r"\W+", query.lower()) if len(term) > 1]
@@ -603,3 +675,229 @@ def _json_load(value: str) -> dict:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+@dataclass
+class _ParsedConversation:
+    source: str
+    title: str
+    transcript: str
+    conversation_id: str | None = None
+    message_count: int = 0
+    created_at: str | None = None
+    uri: str | None = None
+
+
+def _extract_export_json_text(raw: bytes, filename: str) -> str:
+    looks_like_zip = raw[:4] == b"PK\x03\x04" or filename.lower().endswith(".zip")
+    if looks_like_zip:
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                target = next(
+                    (name for name in archive.namelist() if name.lower().endswith("conversations.json")),
+                    None,
+                )
+                if target is None:
+                    target = next((name for name in archive.namelist() if name.lower().endswith(".json")), None)
+                if target is None:
+                    raise KnowledgeIngestError("The zip archive does not contain conversations.json.")
+                payload = archive.read(target)
+        except zipfile.BadZipFile as error:
+            raise KnowledgeIngestError("Uploaded file is not a valid .zip archive.") from error
+        return payload.decode("utf-8-sig", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
+
+
+def _parse_chat_export(data: object, source_hint: str) -> list[_ParsedConversation]:
+    parsed: list[_ParsedConversation] = []
+    for convo in _coerce_conversation_list(data):
+        if not isinstance(convo, dict):
+            continue
+        conversation = _render_conversation(convo, source_hint)
+        if conversation is not None:
+            parsed.append(conversation)
+    return parsed
+
+
+def _coerce_conversation_list(data: object) -> list:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("conversations", "data", "items"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+        if "mapping" in data or "chat_messages" in data:
+            return [data]
+    return []
+
+
+def _render_conversation(convo: dict, source_hint: str) -> _ParsedConversation | None:
+    is_chatgpt = isinstance(convo.get("mapping"), dict)
+    is_claude = isinstance(convo.get("chat_messages"), list)
+    if source_hint == "chatgpt" and is_chatgpt:
+        return _render_chatgpt_conversation(convo)
+    if source_hint == "claude" and is_claude:
+        return _render_claude_conversation(convo)
+    if is_chatgpt:
+        return _render_chatgpt_conversation(convo)
+    if is_claude:
+        return _render_claude_conversation(convo)
+    return None
+
+
+def _render_chatgpt_conversation(convo: dict) -> _ParsedConversation | None:
+    mapping = convo.get("mapping")
+    if not isinstance(mapping, dict):
+        return None
+    lines: list[str] = []
+    count = 0
+    for message in _chatgpt_ordered_messages(mapping, convo.get("current_node")):
+        if not isinstance(message, dict):
+            continue
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("is_visually_hidden_from_conversation"):
+            continue
+        author = message.get("author")
+        role = author.get("role") if isinstance(author, dict) else None
+        if role == "system":
+            continue
+        text = _chatgpt_message_text(message)
+        if not text.strip():
+            continue
+        lines.append(f"{_role_label(role or 'unknown')}: {text.strip()}")
+        count += 1
+    if count == 0:
+        return None
+    title = (str(convo.get("title") or "").strip()) or "Untitled ChatGPT conversation"
+    conversation_id = (str(convo.get("conversation_id") or convo.get("id") or "")) or None
+    return _ParsedConversation(
+        source="chatgpt",
+        title=f"ChatGPT · {title}",
+        transcript="\n\n".join(lines),
+        conversation_id=conversation_id,
+        message_count=count,
+        created_at=_epoch_to_iso(convo.get("create_time")),
+        uri=f"chatgpt:conversation/{conversation_id}" if conversation_id else None,
+    )
+
+
+def _chatgpt_ordered_messages(mapping: dict, current_node: object) -> list:
+    if isinstance(current_node, str) and current_node in mapping:
+        chain: list = []
+        cursor: object = current_node
+        guard = 0
+        while isinstance(cursor, str) and cursor in mapping and guard < 100000:
+            node = mapping.get(cursor)
+            guard += 1
+            if not isinstance(node, dict):
+                break
+            message = node.get("message")
+            if message:
+                chain.append(message)
+            cursor = node.get("parent")
+        if chain:
+            chain.reverse()
+            return chain
+    messages = [
+        node["message"]
+        for node in mapping.values()
+        if isinstance(node, dict) and node.get("message")
+    ]
+    messages.sort(key=lambda message: (message.get("create_time") or 0) if isinstance(message, dict) else 0)
+    return messages
+
+
+def _chatgpt_message_text(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, dict):
+        return ""
+    parts = content.get("parts")
+    texts: list[str] = []
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict):
+                if isinstance(part.get("text"), str):
+                    texts.append(part["text"])
+                elif part.get("content_type") == "image_asset_pointer":
+                    texts.append("[image]")
+    if texts:
+        return "\n".join(text for text in texts if text)
+    if isinstance(content.get("text"), str):
+        return content["text"]
+    return ""
+
+
+def _render_claude_conversation(convo: dict) -> _ParsedConversation | None:
+    messages = convo.get("chat_messages")
+    if not isinstance(messages, list):
+        return None
+    lines: list[str] = []
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        sender = message.get("sender") or message.get("role") or "unknown"
+        text = _claude_message_text(message)
+        if not text.strip():
+            continue
+        lines.append(f"{_role_label(str(sender))}: {text.strip()}")
+        count += 1
+    if count == 0:
+        return None
+    title = (str(convo.get("name") or convo.get("title") or "").strip()) or "Untitled Claude conversation"
+    conversation_id = (str(convo.get("uuid") or convo.get("id") or "")) or None
+    return _ParsedConversation(
+        source="claude",
+        title=f"Claude · {title}",
+        transcript="\n\n".join(lines),
+        conversation_id=conversation_id,
+        message_count=count,
+        created_at=_iso_or_none(convo.get("created_at")),
+        uri=f"claude:conversation/{conversation_id}" if conversation_id else None,
+    )
+
+
+def _claude_message_text(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, list):
+        texts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                texts.append(block["text"])
+        if texts:
+            return "\n".join(texts)
+    text = message.get("text")
+    return text if isinstance(text, str) else ""
+
+
+def _role_label(role: str) -> str:
+    normalized = (role or "").lower()
+    if normalized in {"user", "human"}:
+        return "User"
+    if normalized == "assistant":
+        return "Assistant"
+    if normalized == "tool":
+        return "Tool"
+    if normalized == "system":
+        return "System"
+    return (role or "Unknown").capitalize()
+
+
+def _epoch_to_iso(value: object) -> str | None:
+    if isinstance(value, (int, float)) and value > 0:
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
+
+
+def _iso_or_none(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from edison_core.api.dependencies import get_knowledge_store
 from edison_core.schemas import (
+    KnowledgeChatImportResult,
     KnowledgeIngestLocalRequest,
     KnowledgeIngestPresetRequest,
     KnowledgeIngestTextRequest,
@@ -105,3 +106,62 @@ def ingest_preset(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"Preset ingest failed: {error}") from error
+
+
+@router.post(
+    "/ingest/chat-export",
+    response_model=KnowledgeChatImportResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def ingest_chat_export(
+    files: list[UploadFile] = File(...),
+    source: str = Form("auto"),
+    store: KnowledgeStore = Depends(get_knowledge_store),
+) -> KnowledgeChatImportResult:
+    """Import ChatGPT/Claude data exports (conversations.json or the export .zip)."""
+    if source not in {"auto", "chatgpt", "claude"}:
+        raise HTTPException(status_code=400, detail="source must be 'auto', 'chatgpt', or 'claude'.")
+
+    imported: list[KnowledgeSourceRecord] = []
+    total_conversations = 0
+    skipped = 0
+    detected_sources: set[str] = set()
+    errors: list[str] = []
+
+    for upload in files:
+        raw = await upload.read()
+        if not raw:
+            continue
+        if len(raw) > 80 * 1024 * 1024:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{upload.filename or 'file'} is too large (max 80 MB).",
+            )
+        try:
+            result = store.ingest_chat_export(raw, filename=upload.filename or "", source_hint=source)
+        except KnowledgeIngestError as error:
+            errors.append(f"{upload.filename or 'file'}: {error}")
+            continue
+        imported.extend(result.sources)
+        total_conversations += result.conversation_count
+        skipped += result.skipped_count
+        detected_sources.add(result.detected_source)
+
+    if not imported:
+        detail = "; ".join(errors) if errors else "No conversations could be imported from the uploaded files."
+        raise HTTPException(status_code=400, detail=detail)
+
+    if len(detected_sources) == 1:
+        detected = next(iter(detected_sources))
+    elif detected_sources:
+        detected = "mixed"
+    else:
+        detected = "unknown"
+
+    return KnowledgeChatImportResult(
+        detected_source=detected,
+        conversation_count=total_conversations,
+        imported_count=len(imported),
+        skipped_count=skipped,
+        sources=imported[:200],
+    )

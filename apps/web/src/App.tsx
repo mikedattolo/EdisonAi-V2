@@ -46,8 +46,10 @@ import type {
   AgentRunWithEvents,
   ArtifactRecord,
   CapabilityStatus,
+  ChatImportSource,
   ChatMode,
   ConversationRecord,
+  CreatorStudioAssistAction,
   ConversationWithMessages,
   CameraFrameAnalysisResponse,
   CameraVisionStatus,
@@ -2264,28 +2266,6 @@ function ChatView({
         <div ref={messagesEndRef} />
       </section>
 
-      {recentArtifacts.length > 0 && (
-        <section className="artifact-dock" aria-label="Recent generated artifacts">
-          <div className="section-label">Recent Outputs</div>
-          <div className="artifact-dock-list">
-            {recentArtifacts.map((artifact) => (
-              <article className="artifact-card compact" key={artifact.id}>
-                <ArtifactPreview artifact={artifact} url={edisonApi.artifactDownloadUrl(artifact.id)} />
-                <div>
-                  <strong>{artifact.title}</strong>
-                  <span>{artifact.kind} / {artifact.mime_type ?? 'file'}</span>
-                </div>
-                <div className="artifact-card-actions">
-                  <button className="secondary-button" onClick={() => onUseArtifactInChat(artifact)} type="button">
-                    View In Chat
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
       <section className="composer-panel" aria-label="Message composer">
         <div className="composer-meta">
           <span>{intentLabel}</span>
@@ -3112,6 +3092,12 @@ function CreatorStudioView({
   const [prompt, setPrompt] = useState('');
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [assistInput, setAssistInput] = useState('');
+  const [assistThread, setAssistThread] = useState<
+    Array<{ role: 'user' | 'assistant'; content: string; actions?: CreatorStudioAssistAction[] }>
+  >([]);
+  const [assistBusy, setAssistBusy] = useState(false);
+  const [assistError, setAssistError] = useState<string | null>(null);
   const activeMode = safeCreatorModes.find((mode) => mode.id === selectedMode) ?? safeCreatorModes[0];
   const creatorStatus = mediaStatus?.creator_studio;
   const datasets = creatorStatus?.datasets ?? [];
@@ -3151,6 +3137,39 @@ function CreatorStudioView({
     });
     setPrompt('');
     setReferenceFile(null);
+  }
+
+  async function submitCreatorAssist(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const message = assistInput.trim();
+    if (!message || assistBusy) {
+      return;
+    }
+    const history = assistThread.map((entry) => ({ role: entry.role, content: entry.content }));
+    setAssistThread((current) => [...current, { role: 'user', content: message }]);
+    setAssistInput('');
+    setAssistBusy(true);
+    setAssistError(null);
+    try {
+      const result = await edisonApi.creatorStudioAssist({ message, history, preferred_model: creatorPlanningModel });
+      setAssistThread((current) => [...current, { role: 'assistant', content: result.reply, actions: result.actions }]);
+    } catch (error) {
+      setAssistError(error instanceof Error ? error.message : 'Creator assistant request failed.');
+    } finally {
+      setAssistBusy(false);
+    }
+  }
+
+  async function runAssistAction(action: CreatorStudioAssistAction) {
+    await onCreateGeneration(action.mode as MediaGenerationMode, action.prompt, null, {
+      creator_dataset_id: activeDataset?.id ?? null,
+      creator_dataset_name: activeDataset?.name ?? null,
+      creator_trigger_token: activeDataset?.trigger_token ?? 'creator_ai',
+      safety_profile: 'sfw_virtual_creator',
+      source: 'creator-studio-assistant',
+      planning_model: creatorPlanningModel,
+      pixelai_source_path: creatorStatus?.normalized_root ?? creatorStatus?.source_path ?? null,
+    });
   }
 
   return (
@@ -3299,6 +3318,80 @@ function CreatorStudioView({
           </div>
         </section>
       </div>
+
+      <section className="creator-assistant-panel" aria-label="Creator Studio assistant">
+        <div className="section-heading">
+          <Sparkles size={18} />
+          <h3>Studio Assistant</h3>
+          <span className="assistant-model-chip">{creatorPlanningModel}</span>
+        </div>
+        <p className="assistant-intro">
+          Ask the Qwen assistant to plan personas, draft safe prompts, or set up photo / video / dataset jobs.
+          It proposes actions you can run with one click, and stays within the studio guardrails.
+        </p>
+        <div className="creator-assistant-thread">
+          {assistThread.length === 0 && (
+            <div className="empty-line">
+              Try: Plan a safe dataset for a fictional travel-vlogger persona and draft three photo prompts.
+            </div>
+          )}
+          {assistThread.map((entry, index) => (
+            <article className={`assistant-turn ${entry.role}`} key={index}>
+              <div className="assistant-turn-role">{entry.role === 'user' ? 'You' : 'Qwen'}</div>
+              <div className="assistant-turn-body">
+                {entry.role === 'assistant' ? (
+                  <MessageContent content={entry.content} metadata={{}} />
+                ) : (
+                  <p>{entry.content}</p>
+                )}
+                {entry.actions && entry.actions.length > 0 && (
+                  <div className="assistant-action-list">
+                    {entry.actions.map((action, actionIndex) => (
+                      <article className="assistant-action-card" key={actionIndex}>
+                        <div className="assistant-action-info">
+                          <strong>{action.title}</strong>
+                          <span className="assistant-action-mode">{action.mode.replace('creator_', '')}</span>
+                          {action.rationale && <small>{action.rationale}</small>}
+                          {action.prompt && <p className="assistant-action-prompt">{action.prompt}</p>}
+                        </div>
+                        <button
+                          className="apply-button icon-text-button"
+                          disabled={isMediaBusy}
+                          onClick={() => void runAssistAction(action)}
+                          type="button"
+                        >
+                          <Send size={14} />
+                          Run
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+        {assistError && <div className="memory-inline-result error">{assistError}</div>}
+        <form className="creator-assistant-form" onSubmit={(event) => void submitCreatorAssist(event)}>
+          <textarea
+            aria-label="Message the Creator Studio assistant"
+            onChange={(event) => setAssistInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Ask the studio assistant to plan or generate something safe..."
+            rows={3}
+            value={assistInput}
+          />
+          <button className="apply-button icon-text-button" disabled={!assistInput.trim() || assistBusy} type="submit">
+            <Send size={16} />
+            {assistBusy ? 'Thinking' : 'Send'}
+          </button>
+        </form>
+      </section>
 
       <MediaOutputsPanel
         artifacts={creatorArtifacts.length ? creatorArtifacts : artifacts.slice(0, 8)}
@@ -4920,6 +5013,11 @@ function MemoryView({
   const [textTitle, setTextTitle] = useState('');
   const [textUri, setTextUri] = useState('');
   const [textBody, setTextBody] = useState('');
+  const [chatFiles, setChatFiles] = useState<File[]>([]);
+  const [chatSource, setChatSource] = useState<ChatImportSource>('auto');
+  const [chatImporting, setChatImporting] = useState(false);
+  const [chatResult, setChatResult] = useState<string | null>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const presetButtons: Array<{ preset: KnowledgePreset; label: string }> = [
     { preset: 'ai-foundations', label: 'AI Foundations' },
     { preset: 'coding-core', label: 'Coding Core' },
@@ -5103,6 +5201,66 @@ function MemoryView({
               <FileText size={16} />
               Save Text
             </button>
+          </form>
+
+          <form
+            className="memory-import-form chat-import"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!chatFiles.length || chatImporting) {
+                return;
+              }
+              setChatImporting(true);
+              setChatResult(null);
+              void edisonApi
+                .importKnowledgeChatExport(chatFiles, chatSource)
+                .then(async (result) => {
+                  const skippedNote = result.skipped_count ? ` (${result.skipped_count} skipped)` : '';
+                  setChatResult(
+                    `Imported ${result.imported_count} of ${result.conversation_count} ${result.detected_source} conversation${result.conversation_count === 1 ? '' : 's'}${skippedNote}.`,
+                  );
+                  setChatFiles([]);
+                  if (chatInputRef.current) {
+                    chatInputRef.current.value = '';
+                  }
+                  await onRefresh();
+                })
+                .catch((error: unknown) => {
+                  setChatResult(error instanceof Error ? error.message : 'Chat import failed.');
+                })
+                .finally(() => setChatImporting(false));
+            }}
+          >
+            <label htmlFor="knowledge-chat-export">Claude / ChatGPT Chats</label>
+            <input
+              id="knowledge-chat-export"
+              ref={chatInputRef}
+              type="file"
+              accept=".json,.zip,application/json,application/zip"
+              multiple
+              onChange={(event) => setChatFiles(Array.from(event.target.files ?? []))}
+            />
+            <select
+              aria-label="Chat export source"
+              value={chatSource}
+              onChange={(event) => setChatSource(event.target.value as ChatImportSource)}
+            >
+              <option value="auto">Auto-detect</option>
+              <option value="chatgpt">ChatGPT</option>
+              <option value="claude">Claude</option>
+            </select>
+            <button
+              className="secondary-button icon-text-button"
+              disabled={!chatFiles.length || chatImporting || isBusy}
+              type="submit"
+            >
+              <MessageSquare size={16} />
+              {chatImporting ? 'Importing...' : 'Import Chats'}
+            </button>
+            <small className="memory-import-hint">
+              Upload <code>conversations.json</code> or the export <code>.zip</code> from your ChatGPT or Claude data export.
+            </small>
+            {chatResult && <div className="memory-inline-result">{chatResult}</div>}
           </form>
 
           <div className="preset-row">

@@ -28,6 +28,9 @@ import type {
   OrganizerItemRecord,
   OrganizerKind,
   OrganizerStatus,
+  ChatImportSource,
+  CreatorStudioAssistResponse,
+  KnowledgeChatImportResult,
   KnowledgePreset,
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
@@ -257,6 +260,15 @@ export const edisonApi = {
       body: JSON.stringify(payload),
     }),
   getMediaStatus: () => request<MediaSystemStatus>('/api/v1/media/status'),
+  creatorStudioAssist: (payload: {
+    message: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    preferred_model?: string | null;
+  }) =>
+    request<CreatorStudioAssistResponse>('/api/v1/media/creator-studio/assist', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   listMediaModes: () => request<MediaGenerationModeRecord[]>('/api/v1/media/modes'),
   getToyBoxStatus: () => request<ToyBoxManagerStatus>('/api/v1/toybox/status'),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
@@ -420,6 +432,20 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  importKnowledgeChatExport: async (files: File[], source: ChatImportSource = 'auto') => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
+    formData.set('source', source);
+    const response = await fetch(`${API_BASE}/api/v1/knowledge/ingest/chat-export`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Chat import failed with ${response.status}`);
+    }
+    return response.json() as Promise<KnowledgeChatImportResult>;
+  },
   listOrganizerItems: (params: { kind?: OrganizerKind; status?: OrganizerStatus; limit?: number } = {}) =>
     request<OrganizerItemRecord[]>(withQuery('/api/v1/organizer/items', params)),
   createOrganizerItem: (payload: {
