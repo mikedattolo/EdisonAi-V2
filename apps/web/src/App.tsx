@@ -42,6 +42,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 import { edisonApi } from './api';
 import type {
+  AgentChangedFile,
   AgentRunRecord,
   AgentRunWithEvents,
   ArtifactRecord,
@@ -4513,6 +4514,417 @@ function SearchCompareView() {
   );
 }
 
+interface AgentEntry {
+  kind: 'thought' | 'action' | 'observation' | 'edit' | 'command_request' | 'command_result' | 'status' | 'error' | 'done';
+  step: number;
+  text?: string;
+  action?: string;
+  args?: Record<string, unknown>;
+  path?: string;
+  summary?: string;
+  additions?: number;
+  deletions?: number;
+  diff?: string;
+  stepId?: string;
+  command?: string;
+  cwd?: string;
+  reason?: string;
+  status?: string;
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  resolved?: 'approved' | 'denied';
+}
+
+function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: () => Promise<void> }) {
+  const [task, setTask] = useState('');
+  const [running, setRunning] = useState(false);
+  const [autoRun, setAutoRun] = useState(false);
+  const [entries, setEntries] = useState<AgentEntry[]>([]);
+  const [pending, setPending] = useState<{ stepId: string; command: string; cwd: string; reason: string } | null>(null);
+  const [changedFiles, setChangedFiles] = useState<AgentChangedFile[]>([]);
+  const [doneInfo, setDoneInfo] = useState<{ status: string; summary: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const runIdRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const selfEdit = rootId === 'app';
+
+  useEffect(() => {
+    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' });
+  }, [entries.length, pending]);
+
+  function append(entry: AgentEntry) {
+    setEntries((prev) => [...prev, entry]);
+  }
+
+  function handleEvent(event: string, data: any) {
+    switch (event) {
+      case 'start':
+        runIdRef.current = (data?.run_id as string) ?? null;
+        append({
+          kind: 'status',
+          step: 0,
+          text: `Working in ${data?.root_id ?? rootId}${data?.checkpoint?.head ? ` · checkpoint ${String(data.checkpoint.head).slice(0, 7)}` : ''}`,
+        });
+        break;
+      case 'thought':
+        append({ kind: 'thought', step: Number(data?.step ?? 0), text: String(data?.text ?? '') });
+        break;
+      case 'action':
+        append({ kind: 'action', step: Number(data?.step ?? 0), action: String(data?.action ?? ''), args: (data?.args ?? {}) as Record<string, unknown> });
+        break;
+      case 'observation':
+        append({ kind: 'observation', step: Number(data?.step ?? 0), text: String(data?.text ?? ''), path: data?.path });
+        break;
+      case 'file_edit':
+        append({
+          kind: 'edit',
+          step: Number(data?.step ?? 0),
+          path: String(data?.path ?? ''),
+          summary: String(data?.summary ?? ''),
+          additions: Number(data?.additions ?? 0),
+          deletions: Number(data?.deletions ?? 0),
+          diff: String(data?.diff ?? ''),
+        });
+        setChangedFiles((prev) => {
+          const next = prev.filter((item) => item.path !== data?.path);
+          next.push({ path: String(data?.path ?? ''), additions: Number(data?.additions ?? 0), deletions: Number(data?.deletions ?? 0) });
+          return next;
+        });
+        break;
+      case 'command_request': {
+        const info = {
+          stepId: String(data?.step_id ?? ''),
+          command: String(data?.command ?? ''),
+          cwd: String(data?.cwd ?? '.'),
+          reason: String(data?.reason ?? ''),
+        };
+        setPending(info);
+        append({ kind: 'command_request', step: Number(data?.step ?? 0), ...info });
+        break;
+      }
+      case 'command_result':
+        setPending(null);
+        append({
+          kind: 'command_result',
+          step: Number(data?.step ?? 0),
+          command: String(data?.command ?? ''),
+          status: String(data?.status ?? ''),
+          exitCode: data?.exit_code ?? null,
+          stdout: String(data?.stdout ?? ''),
+          stderr: String(data?.stderr ?? ''),
+        });
+        break;
+      case 'command_skipped':
+        setPending(null);
+        append({ kind: 'status', step: Number(data?.step ?? 0), text: `Skipped command: ${data?.command ?? ''} (${data?.reason ?? ''})` });
+        break;
+      case 'status':
+        append({ kind: 'status', step: Number(data?.step ?? 0), text: String(data?.message ?? '') });
+        break;
+      case 'error':
+        setError(String(data?.detail ?? 'Agent error'));
+        append({ kind: 'error', step: 0, text: String(data?.detail ?? 'Agent error') });
+        break;
+      case 'done':
+        setDoneInfo({ status: String(data?.status ?? 'complete'), summary: String(data?.summary ?? '') });
+        if (Array.isArray(data?.changed_files)) {
+          setChangedFiles(
+            data.changed_files.map((item: any) => ({
+              path: String(item?.path ?? ''),
+              additions: Number(item?.additions ?? 0),
+              deletions: Number(item?.deletions ?? 0),
+            })),
+          );
+        }
+        append({ kind: 'done', step: Number(data?.steps ?? 0), status: String(data?.status ?? 'complete'), summary: String(data?.summary ?? '') });
+        break;
+      default:
+        break;
+    }
+  }
+
+  async function start(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = task.trim();
+    if (!trimmed || running) {
+      return;
+    }
+    setRunning(true);
+    setEntries([]);
+    setChangedFiles([]);
+    setDoneInfo(null);
+    setError(null);
+    setPending(null);
+    runIdRef.current = null;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await edisonApi.streamWorkspaceAgent(
+        { task: trimmed, root_id: rootId, auto_run_commands: autoRun, max_steps: 40 },
+        handleEvent,
+        controller.signal,
+      );
+    } catch (caught) {
+      if (!(caught instanceof DOMException && caught.name === 'AbortError')) {
+        const message = caught instanceof Error ? caught.message : 'Agent stream failed.';
+        setError(message);
+        append({ kind: 'error', step: 0, text: message });
+      }
+    } finally {
+      setRunning(false);
+      setPending(null);
+      abortRef.current = null;
+      if (onAfterRun) {
+        try {
+          await onAfterRun();
+        } catch {
+          /* ignore refresh failure */
+        }
+      }
+    }
+  }
+
+  async function decide(approved: boolean) {
+    const runId = runIdRef.current;
+    const current = pending;
+    if (!runId || !current) {
+      return;
+    }
+    setPending(null);
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.kind === 'command_request' && entry.stepId === current.stepId
+          ? { ...entry, resolved: approved ? 'approved' : 'denied' }
+          : entry,
+      ),
+    );
+    try {
+      await edisonApi.controlWorkspaceAgent({ run_id: runId, action: approved ? 'approve' : 'deny', step_id: current.stepId });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function stop() {
+    const runId = runIdRef.current;
+    if (runId) {
+      try {
+        await edisonApi.controlWorkspaceAgent({ run_id: runId, action: 'stop' });
+      } catch {
+        /* ignore */
+      }
+    }
+    abortRef.current?.abort();
+  }
+
+  async function applyAndRestart() {
+    setRestarting(true);
+    try {
+      await edisonApi.restartEdison();
+      append({ kind: 'status', step: 0, text: 'Edison is restarting to apply changes. The page will reconnect shortly.' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Restart request failed.');
+    } finally {
+      window.setTimeout(() => setRestarting(false), 8000);
+    }
+  }
+
+  const doneLabel =
+    doneInfo?.status === 'complete'
+      ? 'Done'
+      : doneInfo?.status === 'cancelled'
+        ? 'Stopped'
+        : doneInfo?.status === 'incomplete'
+          ? 'Paused (step budget reached)'
+          : 'Finished with errors';
+
+  return (
+    <section className="code-agent-panel" aria-label="Edison Code Agent">
+      <div className="section-heading">
+        <Sparkles size={18} />
+        <h3>Code Agent</h3>
+        <span className="agent-target-chip">{selfEdit ? 'editing Edison itself' : `root: ${rootId}`}</span>
+        {running && <span className="agent-live-dot" aria-label="running" />}
+      </div>
+      <p className="assistant-intro">
+        Give the agent a goal. It reads, edits, and verifies step by step, streaming its thinking and changes, and keeps
+        going until the task is done. It asks before running any command.
+      </p>
+
+      <div className="code-agent-transcript" ref={transcriptRef}>
+        {entries.length === 0 && !running && (
+          <div className="empty-line">
+            {selfEdit
+              ? 'e.g. Add a /api/v1/health/ping route that returns {"pong": true}, then run the tests.'
+              : 'Describe what to build or change in this project.'}
+          </div>
+        )}
+        {entries.map((entry, index) => (
+          <AgentEntryView key={index} entry={entry} pendingStepId={pending?.stepId ?? null} onDecide={decide} />
+        ))}
+      </div>
+
+      {doneInfo && (
+        <div className={`agent-done-card ${doneInfo.status}`}>
+          <div className="agent-done-head">
+            <strong>{doneLabel}</strong>
+            <span>{doneInfo.summary}</span>
+          </div>
+          {changedFiles.length > 0 && (
+            <div className="agent-changed-files">
+              {changedFiles.map((file) => (
+                <span key={file.path} className="agent-changed-file">
+                  <FileCode2 size={13} /> {file.path} <small>+{file.additions} -{file.deletions}</small>
+                </span>
+              ))}
+            </div>
+          )}
+          {changedFiles.length > 0 && (
+            <button className="apply-button icon-text-button" disabled={restarting} onClick={() => void applyAndRestart()} type="button">
+              <RefreshCw size={15} />
+              {restarting ? 'Restarting Edison...' : 'Apply & restart Edison'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {error && <div className="memory-inline-result error">{error}</div>}
+
+      <form className="code-agent-form" onSubmit={(event) => void start(event)}>
+        <textarea
+          aria-label="Code agent task"
+          disabled={running}
+          onChange={(event) => setTask(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          placeholder={selfEdit ? 'Tell Edison what to change about itself...' : 'Describe the change...'}
+          rows={3}
+          value={task}
+        />
+        <div className="code-agent-actions">
+          <label className="inline-toggle" title="Run tests/build without asking each time">
+            <input checked={autoRun} disabled={running} onChange={(event) => setAutoRun(event.target.checked)} type="checkbox" />
+            Auto-run commands
+          </label>
+          {running ? (
+            <button className="danger-button icon-text-button" onClick={() => void stop()} type="button">
+              <X size={15} />
+              Stop
+            </button>
+          ) : (
+            <button className="apply-button icon-text-button" disabled={!task.trim()} type="submit">
+              <Send size={15} />
+              Start agent
+            </button>
+          )}
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function AgentEntryView({
+  entry,
+  pendingStepId,
+  onDecide,
+}: {
+  entry: AgentEntry;
+  pendingStepId: string | null;
+  onDecide: (approved: boolean) => Promise<void>;
+}) {
+  if (entry.kind === 'thought') {
+    return (
+      <div className="agent-line thought">
+        <Brain size={14} />
+        <span>{entry.text}</span>
+      </div>
+    );
+  }
+  if (entry.kind === 'action') {
+    const detail = String(entry.args?.path ?? entry.args?.query ?? entry.args?.command ?? '');
+    return (
+      <div className="agent-line action">
+        <span className="agent-tool-chip">{entry.action}</span>
+        {detail ? <code>{detail}</code> : null}
+      </div>
+    );
+  }
+  if (entry.kind === 'observation') {
+    return <div className="agent-line observation">{entry.text}</div>;
+  }
+  if (entry.kind === 'edit') {
+    return (
+      <details className="agent-edit-card">
+        <summary>
+          <FileCode2 size={14} />
+          <strong>{entry.path}</strong>
+          <small className="agent-diff-stat">+{entry.additions} -{entry.deletions}</small>
+          {entry.summary ? <span className="agent-edit-summary">{entry.summary}</span> : null}
+        </summary>
+        <pre className="agent-diff">{entry.diff}</pre>
+      </details>
+    );
+  }
+  if (entry.kind === 'command_request') {
+    const awaiting = pendingStepId === entry.stepId && !entry.resolved;
+    return (
+      <div className={`agent-command-card ${entry.resolved ?? (awaiting ? 'awaiting' : '')}`}>
+        <div className="agent-command-head">
+          <Cpu size={14} />
+          <code>{entry.command}</code>
+          {entry.cwd && entry.cwd !== '.' ? <small>in {entry.cwd}</small> : null}
+        </div>
+        {entry.reason ? <p className="agent-command-reason">{entry.reason}</p> : null}
+        {awaiting ? (
+          <div className="agent-command-actions">
+            <button className="apply-button icon-text-button" onClick={() => void onDecide(true)} type="button">
+              <CheckSquare2 size={14} /> Approve &amp; run
+            </button>
+            <button className="secondary-button icon-text-button" onClick={() => void onDecide(false)} type="button">
+              <X size={14} /> Skip
+            </button>
+          </div>
+        ) : entry.resolved ? (
+          <small className={`agent-command-badge ${entry.resolved}`}>
+            {entry.resolved === 'approved' ? 'approved' : 'skipped'}
+          </small>
+        ) : null}
+      </div>
+    );
+  }
+  if (entry.kind === 'command_result') {
+    const ok = entry.status === 'complete';
+    return (
+      <details className="agent-command-result" open={!ok}>
+        <summary>
+          <Cpu size={14} />
+          <code>{entry.command}</code>
+          <small className={`job-status ${ok ? 'complete' : 'error'}`}>
+            {entry.status}
+            {entry.exitCode != null ? ` (${entry.exitCode})` : ''}
+          </small>
+        </summary>
+        {entry.stdout ? <pre className="agent-output">{entry.stdout}</pre> : null}
+        {entry.stderr ? <pre className="agent-output stderr">{entry.stderr}</pre> : null}
+      </details>
+    );
+  }
+  if (entry.kind === 'error') {
+    return <div className="agent-line error">{entry.text}</div>;
+  }
+  if (entry.kind === 'done') {
+    return null;
+  }
+  return <div className="agent-line status">{entry.text}</div>;
+}
+
 function CodeWorkspaceView({
   activeRootId,
   commandResult,
@@ -4655,10 +5067,12 @@ function CodeWorkspaceView({
         </form>
       </section>
 
-      <section className="workspace-copilot-panel" aria-label="Code Space Copilot">
+      <CodeAgentPanel rootId={activeRootId} onAfterRun={onRefresh} />
+
+      <section className="workspace-copilot-panel" aria-label="Code Space quick task">
         <div className="section-heading">
           <Sparkles size={18} />
-          <h3>Copilot Task</h3>
+          <h3>Quick Task (single pass)</h3>
         </div>
         <form className="workspace-copilot-form" onSubmit={(event) => void handleCopilotTask(event)}>
           <textarea

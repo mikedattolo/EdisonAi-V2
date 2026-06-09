@@ -758,6 +758,34 @@ export interface CreatorStudioAssistResponse {
   guardrails: string[];
 }
 
+export interface WorkspaceAgentStartPayload {
+  task: string;
+  root_id?: string;
+  auto_run_commands?: boolean;
+  max_steps?: number;
+  preferred_model?: string | null;
+  conversation_id?: string | null;
+}
+
+export interface WorkspaceAgentControlResult {
+  accepted: boolean;
+  run_id: string;
+  action: string;
+  detail: string;
+}
+
+export interface EdisonServiceRestartResult {
+  scheduled: boolean;
+  services: string[];
+  detail: string;
+}
+
+export interface AgentChangedFile {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 export interface KnowledgeSearchMatch {
   source_id: string;
   source_title: string;

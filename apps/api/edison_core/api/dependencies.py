@@ -23,6 +23,7 @@ from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
+from edison_core.services.workspace_agent import AgentRunCoordinator, WorkspaceAgent
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
 
@@ -125,3 +126,11 @@ def get_fan_control_service(request: Request) -> GPUFanControlService:
 
 def get_capability_registry(request: Request) -> CapabilityRegistry:
     return request.app.state.capability_registry
+
+
+def get_workspace_agent(request: Request) -> WorkspaceAgent:
+    return request.app.state.workspace_agent
+
+
+def get_agent_run_coordinator(request: Request) -> AgentRunCoordinator:
+    return request.app.state.agent_run_coordinator

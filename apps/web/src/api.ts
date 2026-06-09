@@ -30,6 +30,9 @@ import type {
   OrganizerStatus,
   ChatImportSource,
   CreatorStudioAssistResponse,
+  EdisonServiceRestartResult,
+  WorkspaceAgentControlResult,
+  WorkspaceAgentStartPayload,
   KnowledgeChatImportResult,
   KnowledgePreset,
   KnowledgeSearchMatch,
@@ -523,4 +526,65 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  controlWorkspaceAgent: (payload: { run_id: string; action: 'approve' | 'deny' | 'stop'; step_id?: string }) =>
+    request<WorkspaceAgentControlResult>('/api/v1/workspace/agent/control', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  restartEdison: (services?: Array<'edison-api' | 'edison-web'>) =>
+    request<EdisonServiceRestartResult>('/api/v1/workspace/agent/restart-edison', {
+      method: 'POST',
+      body: JSON.stringify(services ? { services } : {}),
+    }),
+  streamWorkspaceAgent: async (
+    payload: WorkspaceAgentStartPayload,
+    onEvent: (event: string, data: any) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const response = await fetch(`${API_BASE}/api/v1/workspace/agent/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(detail || `Agent stream failed with ${response.status}`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const consume = (block: string) => {
+      const lines = block.split(/\r?\n/);
+      const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
+      const dataLines = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim());
+      if (dataLines.length === 0) {
+        return;
+      }
+      let data: unknown = {};
+      try {
+        data = JSON.parse(dataLines.join('\n'));
+      } catch {
+        data = {};
+      }
+      onEvent(eventName, data);
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\n\n/);
+      buffer = blocks.pop() ?? '';
+      blocks.forEach((block) => {
+        if (block.trim()) {
+          consume(block);
+        }
+      });
+    }
+    if (buffer.trim()) {
+      consume(buffer);
+    }
+  },
 };

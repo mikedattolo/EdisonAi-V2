@@ -233,6 +233,40 @@ class AgentRunWithEvents(AgentRunRecord):
     events: list[AgentRunEventRecord] = Field(default_factory=list)
 
 
+class WorkspaceAgentStartRequest(BaseModel):
+    task: str = Field(min_length=1, max_length=8000)
+    root_id: str = "app"
+    auto_run_commands: bool = False
+    max_steps: int = Field(default=40, ge=1, le=120)
+    preferred_model: str | None = None
+    conversation_id: str | None = None
+
+
+class WorkspaceAgentControlRequest(BaseModel):
+    run_id: str = Field(min_length=1)
+    action: Literal["approve", "deny", "stop"]
+    step_id: str | None = None
+
+
+class WorkspaceAgentControlResult(BaseModel):
+    accepted: bool
+    run_id: str
+    action: str
+    detail: str = ""
+
+
+class EdisonServiceRestartRequest(BaseModel):
+    services: list[Literal["edison-api", "edison-web"]] = Field(
+        default_factory=lambda: ["edison-api", "edison-web"]
+    )
+
+
+class EdisonServiceRestartResult(BaseModel):
+    scheduled: bool
+    services: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=160)
     mode: ChatMode = ChatMode.CHAT

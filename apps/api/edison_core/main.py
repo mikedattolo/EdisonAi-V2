@@ -20,6 +20,7 @@ from edison_core.api import (
     routes_sessions,
     routes_toybox,
     routes_workspace,
+    routes_workspace_agent,
 )
 from edison_core.config import EdisonSettings, load_settings
 from edison_core.database import SQLiteDatabase
@@ -44,6 +45,7 @@ from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
+from edison_core.services.workspace_agent import AgentRunCoordinator, WorkspaceAgent
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
 
@@ -101,6 +103,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     integration_discovery_service = IntegrationDiscoveryService(resolved_settings)
     workspace_tools = WorkspaceTools(resolved_settings.workspace_roots[0])
     workspace_project_manager = WorkspaceProjectManager(resolved_settings)
+    agent_run_coordinator = AgentRunCoordinator()
+    workspace_agent = WorkspaceAgent(model_gateway, agent_run_store, agent_run_coordinator)
     capability_registry = CapabilityRegistry(
         resolved_settings,
         hardware_device_service,
@@ -149,6 +153,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.integration_discovery_service = integration_discovery_service
     app.state.workspace_tools = workspace_tools
     app.state.workspace_project_manager = workspace_project_manager
+    app.state.agent_run_coordinator = agent_run_coordinator
+    app.state.workspace_agent = workspace_agent
     app.state.capability_registry = capability_registry
 
     app.include_router(routes_health.router)
@@ -165,6 +171,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.include_router(routes_media.router)
     app.include_router(routes_toybox.router)
     app.include_router(routes_workspace.router)
+    app.include_router(routes_workspace_agent.router)
     app.include_router(routes_conversations.router)
     app.include_router(routes_sessions.router)
     return app
