@@ -5,6 +5,7 @@ import {
   Brain,
   BookOpen,
   CalendarDays,
+  Download,
   Camera,
   CheckSquare2,
   ChevronUp,
@@ -65,6 +66,7 @@ import type {
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
+  RealtimeContext,
   LocalIntegrationRecord,
   MediaSystemStatus,
   MediaGenerationMode,
@@ -1650,6 +1652,7 @@ export default function App() {
             <h2>{viewTitle(activeView, activeConversation)}</h2>
           </div>
           <div className="status-row">
+            <RealtimeChip />
             <span className={status?.status === 'ok' ? 'status-pill ok' : 'status-pill'}>
               <Activity size={15} /> {status?.status === 'ok' ? 'Connected' : status?.status ?? 'Offline'}
             </span>
@@ -1661,6 +1664,9 @@ export default function App() {
               <Camera size={15} /> {hardwareSummary.readyCameras} cameras
             </span>
             <span className="status-pill"><Fan size={15} /> {fanControls?.controllers.length ?? 0} fan controls</span>
+            {activeView === 'chat' && activeConversation && (
+              <RememberChatButton conversationId={activeConversation.id} />
+            )}
           </div>
         </header>
 
@@ -4546,6 +4552,67 @@ interface AgentEntry {
   resolved?: 'approved' | 'denied';
 }
 
+function RealtimeChip() {
+  const [rt, setRt] = useState<RealtimeContext | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      void edisonApi
+        .getRealtimeContext()
+        .then((data) => {
+          if (active) setRt(data);
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = window.setInterval(load, 10 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  if (!rt) {
+    return null;
+  }
+  const temp = rt.weather?.temperature_f != null ? `${Math.round(rt.weather.temperature_f)}°F` : '';
+  const place = rt.location?.city || rt.location?.region || '';
+  const timeShort = (rt.time?.display || '').split(', ').slice(-1)[0] || rt.time?.display || '';
+  return (
+    <span className="status-pill realtime-pill" title={rt.summary}>
+      <CalendarDays size={15} /> {timeShort}
+      {temp ? ` · ${temp}` : ''}
+      {place ? ` · ${place}` : ''}
+    </span>
+  );
+}
+
+function RememberChatButton({ conversationId }: { conversationId: string }) {
+  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  async function remember() {
+    setState('saving');
+    try {
+      await edisonApi.rememberConversation(conversationId);
+      setState('saved');
+    } catch {
+      setState('error');
+    }
+    window.setTimeout(() => setState('idle'), 4000);
+  }
+  const label =
+    state === 'saving' ? 'Saving...' : state === 'saved' ? 'Remembered' : state === 'error' ? 'Failed' : 'Remember';
+  return (
+    <button
+      className="secondary-button icon-text-button"
+      disabled={state === 'saving'}
+      onClick={() => void remember()}
+      title="Save this conversation to Edison's long-term memory"
+      type="button"
+    >
+      <Brain size={15} /> {label}
+    </button>
+  );
+}
+
 function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: () => Promise<void> }) {
   const [task, setTask] = useState('');
   const [running, setRunning] = useState(false);
@@ -5057,6 +5124,13 @@ function CodeWorkspaceView({
             ))}
           </select>
           <span>{activeRoot?.path ?? summary?.root_path ?? 'Workspace root'}</span>
+          <a
+            className="secondary-button icon-text-button"
+            href={edisonApi.downloadWorkspaceUrl(activeRootId)}
+            title="Download this Code Space as a .zip"
+          >
+            <Download size={15} /> Download .zip
+          </a>
         </div>
         <form className="workspace-project-form" onSubmit={(event) => void handleCreateProject(event)}>
           <input
@@ -5443,6 +5517,9 @@ function MemoryView({
   const [chatImporting, setChatImporting] = useState(false);
   const [chatResult, setChatResult] = useState<string | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const [webQuery, setWebQuery] = useState('');
+  const [webBusy, setWebBusy] = useState(false);
+  const [webResult, setWebResult] = useState<string | null>(null);
   const presetButtons: Array<{ preset: KnowledgePreset; label: string }> = [
     { preset: 'coding-reference', label: 'Coding Reference' },
     { preset: 'ai-foundations', label: 'AI Foundations' },
@@ -5687,6 +5764,50 @@ function MemoryView({
               Upload <code>conversations.json</code> or the export <code>.zip</code> from your ChatGPT or Claude data export.
             </small>
             {chatResult && <div className="memory-inline-result">{chatResult}</div>}
+          </form>
+
+          <form
+            className="memory-import-form web-search-import"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const query = webQuery.trim();
+              if (!query || webBusy) {
+                return;
+              }
+              setWebBusy(true);
+              setWebResult(null);
+              void edisonApi
+                .ingestKnowledgeWebSearch({ query, max_results: 4 })
+                .then(async (sources) => {
+                  setWebResult(`Saved ${sources.length} web result${sources.length === 1 ? '' : 's'} to memory.`);
+                  setWebQuery('');
+                  await onRefresh();
+                })
+                .catch((error: unknown) => {
+                  setWebResult(error instanceof Error ? error.message : 'Web search failed.');
+                })
+                .finally(() => setWebBusy(false));
+            }}
+          >
+            <label htmlFor="knowledge-web-search">Search the web</label>
+            <input
+              id="knowledge-web-search"
+              value={webQuery}
+              onChange={(event) => setWebQuery(event.target.value)}
+              placeholder="Search the internet and remember the top results"
+            />
+            <button
+              className="secondary-button icon-text-button"
+              disabled={!webQuery.trim() || webBusy || isBusy}
+              type="submit"
+            >
+              <Globe2 size={16} />
+              {webBusy ? 'Searching...' : 'Search & Remember'}
+            </button>
+            <small className="memory-import-hint">
+              Runs a DuckDuckGo search, fetches the top pages, and stores them in Edison's knowledge base.
+            </small>
+            {webResult && <div className="memory-inline-result">{webResult}</div>}
           </form>
 
           <div className="preset-row">

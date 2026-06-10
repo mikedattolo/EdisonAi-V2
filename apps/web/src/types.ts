@@ -716,7 +716,7 @@ export interface WorkspaceCopilotTaskResult {
 
 export interface KnowledgeSourceRecord {
   id: string;
-  kind: 'text' | 'url' | 'wikipedia' | 'local_file' | 'preset' | 'chat_export';
+  kind: 'text' | 'url' | 'wikipedia' | 'local_file' | 'preset' | 'chat_export' | 'conversation';
   title: string;
   uri?: string | null;
   language?: string | null;
@@ -732,6 +732,30 @@ export interface KnowledgeStatus {
   source_count: number;
   chunk_count: number;
   latest_ingest_at?: string | null;
+}
+
+export interface RealtimeContext {
+  location: {
+    city?: string | null;
+    region?: string | null;
+    country?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    timezone?: string | null;
+    source?: string;
+  };
+  weather: {
+    temperature_f?: number | null;
+    feels_like_f?: number | null;
+    humidity?: number | null;
+    wind_mph?: number | null;
+    is_day?: boolean;
+    code?: number | null;
+    description?: string | null;
+    observed_at?: string | null;
+  } | null;
+  time: { iso: string; display: string; timezone?: string | null };
+  summary: string;
 }
 
 export type ChatImportSource = 'auto' | 'chatgpt' | 'claude';

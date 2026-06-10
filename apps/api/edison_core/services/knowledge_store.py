@@ -8,7 +8,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from uuid import uuid4
 
 import httpx
@@ -138,6 +138,49 @@ class KnowledgeStore:
                 metadata={"source": "url"},
             ),
             kind="url",
+        )
+
+    def ingest_web_search(self, query: str, max_results: int = 4) -> list[KnowledgeSourceRecord]:
+        """Search the web (DuckDuckGo, no API key), fetch the top results, and store them in memory."""
+        hits = _duckduckgo_search(query, max_results)
+        if not hits:
+            raise KnowledgeIngestError(
+                "No web results were found (web search may be temporarily unavailable). Try a simpler query."
+            )
+        records: list[KnowledgeSourceRecord] = []
+        errors: list[str] = []
+        for title, url in hits:
+            try:
+                records.append(self.ingest_url(url, title=title or None, license_name="web-search"))
+            except Exception as error:  # noqa: BLE001
+                errors.append(f"{url}: {error}")
+        if not records:
+            raise KnowledgeIngestError("Found results but could not fetch any page: " + "; ".join(errors[:3]))
+        return records
+
+    def ingest_conversation(self, conversation) -> KnowledgeSourceRecord:
+        """Store a chat conversation's transcript in memory so Edison can recall it later."""
+        labels = {"user": "User", "assistant": "Assistant", "system": "System", "tool": "Tool"}
+        lines: list[str] = []
+        for message in (getattr(conversation, "messages", None) or []):
+            role = str(getattr(message, "role", "") or "")
+            content = (getattr(message, "content", "") or "").strip()
+            if not content:
+                continue
+            lines.append(f"{labels.get(role, role.capitalize() or 'Note')}: {content}")
+        transcript = "\n\n".join(lines)
+        if not transcript.strip():
+            raise KnowledgeIngestError("This conversation has no text to remember yet.")
+        convo_id = str(getattr(conversation, "id", "") or "")
+        title = (str(getattr(conversation, "title", "") or "").strip()) or "Conversation"
+        return self.ingest_text(
+            KnowledgeIngestTextRequest(
+                title=f"Conversation: {title}"[:240],
+                text=transcript,
+                uri=f"edison:conversation/{convo_id}" if convo_id else None,
+                metadata={"source": "conversation", "conversation_id": convo_id or None},
+            ),
+            kind="conversation",
         )
 
     def ingest_wikipedia_page(self, title: str, language: str = "en") -> KnowledgeSourceRecord:
@@ -925,6 +968,53 @@ def _iso_or_none(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _duckduckgo_search(query: str, max_results: int = 4) -> list[tuple[str, str]]:
+    """Return up to max_results (title, url) pairs from DuckDuckGo's HTML endpoint (no API key)."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0 Safari/537.36"
+        )
+    }
+    try:
+        with httpx.Client(timeout=15.0, headers=headers, follow_redirects=True) as client:
+            response = client.get("https://html.duckduckgo.com/html/", params={"q": query})
+            response.raise_for_status()
+        html = response.text
+    except httpx.HTTPError:
+        return []
+    results: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in re.finditer(
+        r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    ):
+        url = _ddg_resolve_url(match.group(1))
+        title = re.sub(r"<[^>]+>", "", match.group(2)).strip()
+        if url and url.startswith("http") and url not in seen:
+            seen.add(url)
+            results.append((title, url))
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _ddg_resolve_url(href: str) -> str:
+    href = href.strip()
+    if href.startswith("//"):
+        href = "https:" + href
+    try:
+        parsed = urlparse(href)
+    except ValueError:
+        return ""
+    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+        target = parse_qs(parsed.query).get("uddg", [None])[0]
+        if target:
+            return unquote(target)
+    return href
 
 
 CODING_REFERENCE_OVERVIEW = """

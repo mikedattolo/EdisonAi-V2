@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
-from edison_core.api.dependencies import get_knowledge_store
+from edison_core.api.dependencies import get_conversation_store, get_knowledge_store
 from edison_core.schemas import (
     KnowledgeChatImportResult,
+    KnowledgeConversationIngestRequest,
     KnowledgeIngestLocalRequest,
     KnowledgeIngestPresetRequest,
     KnowledgeIngestTextRequest,
@@ -14,7 +15,9 @@ from edison_core.schemas import (
     KnowledgeSearchRequest,
     KnowledgeSourceRecord,
     KnowledgeStatus,
+    KnowledgeWebSearchRequest,
 )
+from edison_core.services.conversation_store import ConversationNotFoundError, ConversationStore
 from edison_core.services.knowledge_store import KnowledgeIngestError, KnowledgeStore
 
 
@@ -165,3 +168,34 @@ async def ingest_chat_export(
         skipped_count=skipped,
         sources=imported[:200],
     )
+
+
+@router.post("/ingest/web-search", response_model=list[KnowledgeSourceRecord], status_code=status.HTTP_201_CREATED)
+def ingest_web_search(
+    payload: KnowledgeWebSearchRequest,
+    store: KnowledgeStore = Depends(get_knowledge_store),
+) -> list[KnowledgeSourceRecord]:
+    """Search the web (DuckDuckGo) and store the top results into the knowledge base."""
+    try:
+        return store.ingest_web_search(payload.query, max_results=payload.max_results)
+    except KnowledgeIngestError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Web search failed: {error}") from error
+
+
+@router.post("/ingest/conversation", response_model=KnowledgeSourceRecord, status_code=status.HTTP_201_CREATED)
+def ingest_conversation(
+    payload: KnowledgeConversationIngestRequest,
+    store: KnowledgeStore = Depends(get_knowledge_store),
+    conversations: ConversationStore = Depends(get_conversation_store),
+) -> KnowledgeSourceRecord:
+    """Remember a conversation by ingesting its transcript into the knowledge base."""
+    try:
+        conversation = conversations.get_conversation(payload.conversation_id)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    try:
+        return store.ingest_conversation(conversation)
+    except KnowledgeIngestError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error

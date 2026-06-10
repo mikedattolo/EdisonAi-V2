@@ -23,6 +23,7 @@ from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
+from edison_core.services.realtime import RealtimeService
 from edison_core.services.workspace_agent import AgentRunCoordinator, WorkspaceAgent
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
@@ -134,3 +135,7 @@ def get_workspace_agent(request: Request) -> WorkspaceAgent:
 
 def get_agent_run_coordinator(request: Request) -> AgentRunCoordinator:
     return request.app.state.agent_run_coordinator
+
+
+def get_realtime_service(request: Request) -> RealtimeService:
+    return request.app.state.realtime_service

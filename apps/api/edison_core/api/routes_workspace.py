@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import io
+import os
+import zipfile
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from edison_core.api.dependencies import get_generation_store, get_model_gateway, get_workspace_project_manager
 from edison_core.schemas import (
@@ -31,6 +37,7 @@ from edison_core.schemas import (
     WorkspaceIndexStatus,
 )
 from edison_core.services.workspace_tools import (
+    EXCLUDED_NAMES,
     WorkspaceAccessError,
     WorkspaceCommandApprovalError,
     WorkspaceCommandNotAllowedError,
@@ -47,6 +54,60 @@ from edison_core.services.workspace_projects import WorkspaceProjectManager
 
 
 router = APIRouter(prefix="/api/v1/workspace", tags=["workspace"])
+
+
+@router.get("/download")
+def download_workspace(
+    root_id: str = Query("app"),
+    path: str = Query(""),
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> StreamingResponse:
+    """Download a workspace root (or a subfolder/file within it) as a .zip."""
+    root = _workspace(root_id, projects).root
+    base = (root / path).resolve() if path.strip() else root.resolve()
+    try:
+        base.relative_to(root.resolve())
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail="Path is outside the workspace root.") from error
+    if not base.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path or '.'}")
+
+    top = base.name or root.name or "workspace"
+    buffer = io.BytesIO()
+    file_count = 0
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if base.is_file():
+            archive.write(base, top)
+            file_count = 1
+        else:
+            for current, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_NAMES]
+                for name in filenames:
+                    if name in EXCLUDED_NAMES:
+                        continue
+                    file_path = Path(current) / name
+                    if not file_path.is_file():
+                        continue
+                    try:
+                        if file_path.stat().st_size > 50 * 1024 * 1024:
+                            continue
+                    except OSError:
+                        continue
+                    archive.write(file_path, f"{top}/{file_path.relative_to(base).as_posix()}")
+                    file_count += 1
+                    if file_count >= 8000:
+                        break
+                if file_count >= 8000:
+                    break
+    data = buffer.getvalue()
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{top}.zip"',
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 @router.get("/roots", response_model=list[WorkspaceRootRecord])

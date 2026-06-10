@@ -38,6 +38,7 @@ import type {
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
+  RealtimeContext,
   SessionStateRecord,
   SearchCompareResponse,
   SearchProvider,
@@ -435,6 +436,20 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  ingestKnowledgeWebSearch: (payload: { query: string; max_results?: number }) =>
+    request<KnowledgeSourceRecord[]>('/api/v1/knowledge/ingest/web-search', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  rememberConversation: (conversationId: string) =>
+    request<KnowledgeSourceRecord>('/api/v1/knowledge/ingest/conversation', {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
+    }),
+  downloadWorkspaceUrl: (rootId = 'app', path = '') =>
+    `${API_BASE}${withQuery('/api/v1/workspace/download', { root_id: rootId, path })}`,
+  getRealtimeContext: (latitude?: number, longitude?: number) =>
+    request<RealtimeContext>(withQuery('/api/v1/realtime/context', { latitude, longitude })),
   importKnowledgeChatExport: async (files: File[], source: ChatImportSource = 'auto') => {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));

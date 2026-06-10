@@ -694,7 +694,7 @@ class WorkspaceCopilotTaskResult(BaseModel):
 
 class KnowledgeSourceRecord(BaseModel):
     id: str
-    kind: Literal["text", "url", "wikipedia", "local_file", "preset", "chat_export"]
+    kind: Literal["text", "url", "wikipedia", "local_file", "preset", "chat_export", "conversation"]
     title: str
     uri: str | None = None
     language: str | None = None
@@ -768,6 +768,15 @@ class KnowledgeIngestPresetRequest(BaseModel):
         "business-product-ops",
         "coding-reference",
     ]
+
+
+class KnowledgeWebSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=400)
+    max_results: int = Field(default=4, ge=1, le=8)
+
+
+class KnowledgeConversationIngestRequest(BaseModel):
+    conversation_id: str = Field(min_length=1)
 
 
 class MCPServerRecord(BaseModel):
