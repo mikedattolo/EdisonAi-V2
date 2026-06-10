@@ -367,17 +367,22 @@ class WorkspaceAgent:
             if not query:
                 yield ("__observation__", {"text": "search requires a 'query'."})
                 return
-            try:
-                matches = workspace.search(WorkspaceSearchRequest(query=query, max_results=14, include_content=True))
-            except (WorkspaceAccessError, WorkspaceNotFoundError) as error:
-                yield ("__observation__", {"text": f"search failed: {error}"})
-                return
-            rendered = "\n".join(
-                f"{match.path}:{getattr(match, 'line_number', '') or ''} {getattr(match, 'snippet', '') or ''}".strip()
-                for match in matches
-            )
+            matches = _grep_workspace(workspace.root, query, max_results=40)
+            rendered = "\n".join(matches)
             yield ("observation", {"text": f"Search \"{query}\": {len(matches)} matches", "step": step, "kind": "search"})
-            yield ("__observation__", {"text": f"SEARCH \"{query}\" ({len(matches)} matches):\n{rendered[:MAX_OBSERVATION_CHARS] or 'No matches.'}"})
+            yield (
+                "__observation__",
+                {
+                    "text": (
+                        f"SEARCH \"{query}\" - {len(matches)} matches (path:line:text):\n"
+                        + (
+                            rendered[:MAX_OBSERVATION_CHARS]
+                            if rendered
+                            else "No matches. Try a single distinctive word or an identifier, or open a file from the REPO FILE TREE directly."
+                        )
+                    )
+                },
+            )
             return
 
         if name == "edit_file":
@@ -543,31 +548,44 @@ class WorkspaceAgent:
         )
 
     def _initial_messages(self, workspace: WorkspaceTools, request: WorkspaceAgentStartRequest) -> list[dict[str, str]]:
-        context: dict[str, Any] = {}
-        try:
-            context["summary"] = workspace.summarize().model_dump(mode="json")
-        except Exception:  # noqa: BLE001
-            context["summary"] = {}
+        stacks: Any = []
+        commands: list[Any] = []
         try:
             scan = workspace.scan().model_dump(mode="json")
-            context["commands"] = scan.get("commands", [])
-            context["stacks"] = scan.get("stacks", [])
-            context["test_targets"] = scan.get("test_targets", [])
+            stacks = scan.get("stacks", [])
+            commands = [
+                command.get("command") if isinstance(command, dict) else command
+                for command in (scan.get("commands") or [])
+            ][:10]
         except Exception:  # noqa: BLE001
             pass
         try:
-            matches = workspace.search_index(WorkspaceIndexSearchRequest(query=request.task, max_results=10))
-            context["relevant_files"] = [match.path for match in matches]
+            file_tree = _repo_file_tree(workspace.root)
         except Exception:  # noqa: BLE001
-            context["relevant_files"] = []
+            file_tree = []
+        try:
+            matches = workspace.search_index(WorkspaceIndexSearchRequest(query=request.task, max_results=8))
+            relevant = [match.path for match in matches]
+        except Exception:  # noqa: BLE001
+            relevant = []
 
-        root_label = "the Edison app itself (you are editing your own source)" if request.root_id == "app" else f"project '{request.root_id}'"
+        root_label = (
+            "the Edison app itself (you are editing your own source)"
+            if request.root_id == "app"
+            else f"project '{request.root_id}'"
+        )
+        repo_map = EDISON_REPO_MAP if request.root_id == "app" else ""
         # NOTE: use replace (not .format) - the prompt contains literal JSON braces.
-        system = AGENT_SYSTEM_PROMPT.replace("{root_label}", root_label)
+        system = AGENT_SYSTEM_PROMPT.replace("{root_label}", root_label).replace("{repo_map}", repo_map)
+
+        tree_text = "\n".join(file_tree)
         user = (
             f"TASK:\n{request.task.strip()}\n\n"
-            f"WORKSPACE CONTEXT (root={request.root_id}):\n{json.dumps(context, indent=2)[:8000]}\n\n"
-            "Begin now. Respond with exactly one JSON action."
+            f"REPO FILE TREE (root={request.root_id}, {len(file_tree)} files):\n{tree_text[:9000]}\n\n"
+            f"Detected stacks: {stacks}\nRunnable commands: {commands}\n"
+            f"Index guess at relevant files: {relevant}\n\n"
+            "Use the REPO FILE TREE above to open the right files directly, and the search action to locate "
+            "identifiers. Then make the change. Respond with exactly one JSON action."
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -597,18 +615,41 @@ AGENT_SYSTEM_PROMPT = (
     "Fields by action:\n"
     '- read_file: {"path": "relative/path"}\n'
     '- list_dir:  {"path": "relative/dir"}   (use "" for the root)\n'
-    '- search:    {"query": "text or symbol to find"}\n'
+    '- search:    {"query": "word or identifier"}\n'
     '- edit_file: {"path": "relative/path", "content": "<COMPLETE new file content>", "summary": "<short what changed>"}\n'
     '- run_command: {"command": "<cmd>", "cwd": "relative dir or .", "reason": "<why>"}\n'
     '- finish:    {"summary": "<what changed, files touched, how to verify>"}\n\n'
+    "FINDING CODE (important - this is where agents usually fail):\n"
+    "- A REPO FILE TREE is given in the first message. Use it to open the right files DIRECTLY - you usually do not "
+    "need to search just to find a path.\n"
+    "- The search action is a case-insensitive code grep. Search for ONE distinctive word or identifier, NOT a "
+    "sentence. Multi-word queries match flexibly across separators, so \"creator studio\" also matches "
+    "\"Creator Studio\", \"creator-studio\", \"creator_studio\", and \"creatorStudio\".\n"
+    "- Always read_file before editing so you have the exact current contents.\n"
+    "{repo_map}"
     "Rules:\n"
-    "- edit_file REPLACES the entire file with \"content\". Read a file before editing it (unless creating a new one). "
-    "Always provide complete, working file contents - never partial snippets, placeholders, or \"...\".\n"
+    "- edit_file REPLACES the entire file with \"content\". Always provide complete, working file contents - never "
+    "partial snippets, placeholders, or \"...\".\n"
     "- Match the existing code style. Make focused changes and verify as you go.\n"
     "- You may ONLY run safe commands: test runners (pytest, npm test), builds (npm run ...), and read-only git "
     "(status/diff/log). Anything else is blocked. Commands require the user's approval before running.\n"
     "- Frontend edits (apps/web) need a build; backend edits need an Edison restart to take effect - mention this in finish.\n"
     "- If a step fails, read the error and adapt; do not repeat the same failing action.\n"
+)
+
+
+EDISON_REPO_MAP = (
+    "\nEDISON REPO MAP (you are editing this app - use these exact locations):\n"
+    "- Frontend is ONE React single-page app. apps/web/src/App.tsx holds ALL views as components: the chat, "
+    "CreatorStudioView (Creator Studio), CodeWorkspaceView + CodeAgentPanel (Code Space), MemoryView (Knowledge), "
+    "media, gallery, settings. apps/web/src/styles.css holds ALL styling (class-based: .creator-* = Creator Studio, "
+    ".code-agent-* = this agent, .message/.composer = chat). apps/web/src/api.ts = API client, "
+    "apps/web/src/types.ts = shared types.\n"
+    "- Backend is FastAPI under apps/api/edison_core: api/routes_*.py = HTTP routes, services/*.py = logic "
+    "(creator_studio.py, knowledge_store.py, workspace_agent.py, model_gateway.py, ...), schemas.py = pydantic "
+    "models, main.py = wiring.\n"
+    "- Example: 'Creator Studio' UI text/styles live in apps/web/src/App.tsx (search CreatorStudioView) and "
+    "apps/web/src/styles.css (the .creator-* rules); its backend is apps/api/edison_core/services/creator_studio.py.\n\n"
 )
 
 
@@ -619,6 +660,141 @@ def request_command_timeout(command: str) -> int:
     if "pytest" in lowered or "test" in lowered:
         return 420
     return 240
+
+
+_GREP_EXCLUDE_DIRS = (
+    ".git", "node_modules", ".venv", "venv", "dist", "build", "__pycache__",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".vite", "artifacts",
+    "data", "logs", "vendor", "edison-copilot",
+)
+
+
+def _grep_workspace(root: Path, query: str, max_results: int = 40) -> list[str]:
+    """Case-insensitive code grep that tolerates phrases and separator/case variants.
+
+    Ranks files by how many query tokens they contain (plus a flexible-phrase bonus),
+    with the app source dirs first, so real code beats noisy scripts/docs.
+    "creator studio" also finds "Creator Studio", "creator-studio", and "creatorStudio".
+    Returns up to ``max_results`` "path:line:text" strings.
+    """
+    raw_tokens = [token for token in re.split(r"\s+", query.strip()) if token]
+    tokens = [re.sub(r"[^A-Za-z0-9]+", "", token) for token in raw_tokens]
+    tokens = [token for token in tokens if len(token) >= 3]
+    if not tokens:
+        fallback = re.sub(r"[^A-Za-z0-9]+", "", query.strip())
+        tokens = [fallback] if len(fallback) >= 2 else []
+    if not tokens:
+        return []
+
+    exclude_args: list[str] = []
+    for name in _GREP_EXCLUDE_DIRS:
+        exclude_args += ["--exclude-dir", name]
+
+    def _run(mode: str, pattern: str) -> str:
+        try:
+            completed = subprocess.run(
+                ["grep", "-rIn", "-i", mode, *exclude_args, "-e", pattern, "."],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            return completed.stdout
+        except Exception:  # noqa: BLE001
+            return ""
+
+    patterns: list[tuple[str, str, bool]] = [(token, "-F", False) for token in tokens]
+    if len(tokens) >= 2:
+        patterns.append(("[ _-]?".join(tokens[:2]), "-E", True))
+
+    file_hits: dict[str, dict[str, Any]] = {}
+    for pattern, mode, is_phrase in patterns:
+        for line in _run(mode, pattern).splitlines():
+            cleaned = line[2:] if line.startswith("./") else line
+            parts = cleaned.split(":", 2)
+            if len(parts) < 3:
+                continue
+            fpath, lno, text = parts[0], parts[1], parts[2]
+            entry = file_hits.setdefault(fpath, {"tokens": set(), "phrase": False, "lines": []})
+            entry["tokens"].add("__phrase__" if is_phrase else pattern)
+            if is_phrase:
+                entry["phrase"] = True
+            sample = f"{fpath}:{lno}:{text.strip()[:140]}"
+            if len(entry["lines"]) < 3 and sample not in entry["lines"]:
+                entry["lines"].append(sample)
+
+    def _dir_rank(path: str) -> int:
+        if path.startswith("apps/web/src/"):
+            return 0
+        if path.startswith("apps/api/"):
+            return 1
+        if path.startswith("apps/"):
+            return 2
+        if path.startswith(("scripts/", "config/")):
+            return 3
+        return 4
+
+    def _score(item: tuple[str, dict[str, Any]]) -> tuple[int, int, str]:
+        path, entry = item
+        relevance = len(entry["tokens"]) + (2 if entry["phrase"] else 0)
+        return (-relevance, _dir_rank(path), path)
+
+    results: list[str] = []
+    for path, entry in sorted(file_hits.items(), key=_score):
+        for sample in entry["lines"]:
+            results.append(sample[:220])
+            if len(results) >= max_results:
+                return results
+    return results
+
+
+def _repo_file_tree(root: Path, max_files: int = 700) -> list[str]:
+    """A compact list of source file paths (git-tracked first), source dirs ranked first."""
+    files: list[str] = []
+    try:
+        completed = subprocess.run(
+            ["git", "ls-files"], cwd=root, capture_output=True, text=True, timeout=15, check=False
+        )
+        if completed.returncode == 0:
+            files = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    except Exception:  # noqa: BLE001
+        files = []
+    if not files:
+        try:
+            for path in sorted(root.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative_parts = path.relative_to(root).parts
+                if any(part in _GREP_EXCLUDE_DIRS for part in relative_parts):
+                    continue
+                files.append(path.relative_to(root).as_posix())
+                if len(files) >= max_files * 2:
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+
+    image_ext = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg", ".pdf", ".lock"}
+    drop_prefixes = ("vendor/", "edison-copilot/")
+    filtered = [
+        path
+        for path in files
+        if not path.startswith(drop_prefixes) and Path(path).suffix.lower() not in image_ext
+    ]
+
+    def _rank(path: str) -> int:
+        if path.startswith("apps/web/src/"):
+            return 0
+        if path.startswith("apps/api/"):
+            return 1
+        if path.startswith("apps/"):
+            return 2
+        if path.startswith(("scripts/", "config/")):
+            return 3
+        return 4
+
+    filtered.sort(key=lambda path: (_rank(path), path))
+    return filtered[:max_files]
 
 
 def _run_command_safe(root: Path, command: str, cwd: str, timeout: int = 240) -> dict[str, Any]:

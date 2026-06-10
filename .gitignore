@@ -31,3 +31,4 @@ projects/slicer-jobs/
 *.sqlite3-wal
 
 .DS_Store
+edison-copilot/

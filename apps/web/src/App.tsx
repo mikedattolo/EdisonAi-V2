@@ -283,7 +283,7 @@ export default function App() {
   const [activeMode, setActiveMode] = useState<ChatMode>('auto');
   const [agentModeEnabled, setAgentModeEnabled] = useState(false);
   const [showWorkspaceContext, setShowWorkspaceContext] =
-    useState<boolean>(() => readStoredBoolean(CONTEXT_VISIBILITY_STORAGE_KEY, true));
+    useState<boolean>(() => readStoredBoolean(CONTEXT_VISIBILITY_STORAGE_KEY, false));
   const [workspaceContextFilter, setWorkspaceContextFilter] =
     useState<ContextFilter>(() => readStoredContextFilter(CONTEXT_FILTER_STORAGE_KEY, 'all'));
   const [collapsedContextMessageIds, setCollapsedContextMessageIds] = useState<Record<string, boolean>>({});
@@ -2173,11 +2173,21 @@ function ChatView({
       )}
         </div>
       </details>
-      <AgentRunDock
-        activeRun={activeAgentRun}
-        runs={agentRuns}
-        onSelectRun={onSelectAgentRun}
-      />
+      {(agentRuns.length > 0 || activeAgentRun) && (
+        <details className="context-drawer agent-run-drawer">
+          <summary>
+            <span><Waypoints size={16} /> Agent runs</span>
+            <small>{activeAgentRun ? activeAgentRun.title : `${agentRuns.length} run${agentRuns.length === 1 ? '' : 's'}`}</small>
+          </summary>
+          <div className="context-drawer-content">
+            <AgentRunDock
+              activeRun={activeAgentRun}
+              runs={agentRuns}
+              onSelectRun={onSelectAgentRun}
+            />
+          </div>
+        </details>
+      )}
       <section className="chat-surface" aria-label="Conversation messages">
         {activeConversation?.messages.map((message) => {
           const parsedContext =
