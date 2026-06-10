@@ -10,6 +10,7 @@ app itself, so the agent can modify its own source.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
 import shlex
@@ -167,24 +168,45 @@ class WorkspaceAgent:
                 step += 1
                 self._set_progress(run_id, step, request.max_steps)
 
-                try:
-                    _selection, inference = self.gateway.complete(
-                        InferenceRequest(
-                            mode=ChatMode.CODING,
-                            preferred_model=request.preferred_model,
-                            prompt=request.task,
-                            metadata={
-                                "source": "code-agent",
-                                "messages": transcript,
-                                "response_format": {"type": "json_object"},
-                                "timeout_seconds": 220,
-                            },
-                        )
-                    )
-                except Exception as error:  # noqa: BLE001 - surface model/transport errors to the stream
-                    yield ("error", {"detail": f"Model call failed: {error}"})
+                # Run the (blocking) model call in a thread and emit heartbeats while waiting, so the
+                # SSE stream never goes silent long enough for the proxy/browser to drop it ("network error").
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = pool.submit(
+                    self.gateway.complete,
+                    InferenceRequest(
+                        mode=ChatMode.CODING,
+                        preferred_model=request.preferred_model,
+                        prompt=request.task,
+                        metadata={
+                            "source": "code-agent",
+                            "messages": transcript,
+                            "response_format": {"type": "json_object"},
+                            "timeout_seconds": 220,
+                        },
+                    ),
+                )
+                inference = None
+                model_error: Exception | None = None
+                while True:
+                    try:
+                        _selection, inference = future.result(timeout=HEARTBEAT_SECONDS)
+                        break
+                    except concurrent.futures.TimeoutError:
+                        if control.cancelled:
+                            break
+                        yield ("heartbeat", {"step": step, "phase": "thinking"})
+                    except Exception as error:  # noqa: BLE001 - surface model/transport errors to the stream
+                        model_error = error
+                        break
+                pool.shutdown(wait=False)
+                if control.cancelled:
+                    break
+                if model_error is not None:
+                    yield ("error", {"detail": f"Model call failed: {model_error}"})
                     final_status = "error"
-                    last_summary = f"Model call failed: {error}"
+                    last_summary = f"Model call failed: {model_error}"
+                    break
+                if inference is None:
                     break
 
                 if inference.finish_reason == "not_configured":
@@ -466,7 +488,17 @@ class WorkspaceAgent:
                     metadata={"path": preview.path, "step": step},
                 ),
             )
-            yield ("__observation__", {"text": f"Replaced text in {preview.path} (+{preview.additions} -{preview.deletions})."})
+            yield (
+                "__observation__",
+                {
+                    "text": (
+                        f"Replaced text in {preview.path} (+{preview.additions} -{preview.deletions}). "
+                        f"The change is applied to disk. Diff:\n{preview.diff[:1500]}\n"
+                        "Do NOT re-read the file to confirm - the diff above is the confirmation. "
+                        "If the task is complete, respond with the finish action."
+                    )
+                },
+            )
             return
 
         if name == "list_dir":
@@ -511,6 +543,25 @@ class WorkspaceAgent:
             if not path or not isinstance(content, str):
                 yield ("__observation__", {"text": "edit_file requires 'path' and full 'content' (a string)."})
                 return
+            try:
+                existing_content = workspace.read_file(path).content
+            except (WorkspaceAccessError, WorkspaceNotFoundError, WorkspaceUnsupportedFileError):
+                existing_content = None
+            if existing_content is not None:
+                old_lines = len(existing_content.splitlines())
+                new_lines = len(content.splitlines())
+                if old_lines >= 25 and new_lines < max(10, int(old_lines * 0.6)):
+                    yield (
+                        "__observation__",
+                        {
+                            "text": (
+                                f"edit_file refused: replacing {path} would shrink it from {old_lines} to {new_lines} "
+                                "lines, which looks like a truncated rewrite. To change PART of an existing file, use the "
+                                "replace action (old_text -> new_text). edit_file is only for a new file or a complete rewrite."
+                            )
+                        },
+                    )
+                    return
             try:
                 preview = workspace.preview_patch(
                     WorkspacePatchRequest(path=path, proposed_content=content, summary=summary, create_if_missing=True)
@@ -558,7 +609,17 @@ class WorkspaceAgent:
                     metadata={"path": preview.path, "step": step},
                 ),
             )
-            yield ("__observation__", {"text": f"Applied edit to {preview.path} (+{preview.additions} -{preview.deletions})."})
+            yield (
+                "__observation__",
+                {
+                    "text": (
+                        f"Applied edit to {preview.path} (+{preview.additions} -{preview.deletions}). "
+                        f"The change is applied to disk. Diff:\n{preview.diff[:1500]}\n"
+                        "Do NOT re-read the file to confirm - the diff above is the confirmation. "
+                        "If the task is complete, respond with the finish action."
+                    )
+                },
+            )
             return
 
         if name == "run_command":
