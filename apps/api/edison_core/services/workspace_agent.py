@@ -344,10 +344,104 @@ class WorkspaceAgent:
             except (WorkspaceAccessError, WorkspaceNotFoundError, WorkspaceUnsupportedFileError) as error:
                 yield ("__observation__", {"text": f"read_file failed: {error}"})
                 return
-            yield ("observation", {"text": f"Read {record.path} ({len(record.content)} chars)", "step": step, "kind": "read", "path": record.path})
-            body = record.content[:MAX_OBSERVATION_CHARS]
-            suffix = "\n...[truncated]" if len(record.content) > MAX_OBSERVATION_CHARS else ""
-            yield ("__observation__", {"text": f"FILE {record.path} (language={record.language}):\n{body}{suffix}"})
+            file_lines = record.content.splitlines()
+            total = len(file_lines)
+            start = _coerce_int(action.get("start_line"))
+            end = _coerce_int(action.get("end_line"))
+            if start or end:
+                start_idx = max((start or 1) - 1, 0)
+                end_idx = min(end or (start_idx + 220), total)
+                if end_idx <= start_idx:
+                    end_idx = min(start_idx + 220, total)
+            else:
+                start_idx = 0
+                end_idx = min(220, total)
+            window = file_lines[start_idx:end_idx]
+            numbered = "\n".join(f"{start_idx + offset + 1}\t{text}" for offset, text in enumerate(window))
+            if len(numbered) > MAX_OBSERVATION_CHARS:
+                numbered = numbered[:MAX_OBSERVATION_CHARS] + "\n...[truncated - request a narrower line range]"
+            more = ""
+            if end_idx < total:
+                more = f"\n... {total - end_idx} more lines below. Use {{\"start_line\": {end_idx + 1}}} to continue."
+            yield ("observation", {"text": f"Read {record.path} lines {start_idx + 1}-{end_idx}/{total}", "step": step, "kind": "read", "path": record.path})
+            yield (
+                "__observation__",
+                {"text": f"FILE {record.path} (lines {start_idx + 1}-{end_idx} of {total}, language={record.language}):\n{numbered}{more}"},
+            )
+            return
+
+        if name == "replace":
+            path = str(action.get("path") or "").strip()
+            old_text = action.get("old_text")
+            new_text = action.get("new_text")
+            summary = str(action.get("summary") or "").strip()
+            if not path or not isinstance(old_text, str) or not isinstance(new_text, str):
+                yield ("__observation__", {"text": "replace requires 'path', 'old_text', and 'new_text' (strings)."})
+                return
+            if not old_text:
+                yield ("__observation__", {"text": "replace 'old_text' must not be empty. Use edit_file to create a new file."})
+                return
+            try:
+                record = workspace.read_file(path)
+            except (WorkspaceAccessError, WorkspaceNotFoundError, WorkspaceUnsupportedFileError) as error:
+                yield ("__observation__", {"text": f"replace could not read {path}: {error}"})
+                return
+            occurrences = record.content.count(old_text)
+            if occurrences == 0:
+                yield ("__observation__", {"text": f"replace: 'old_text' was not found in {path}. Read the file (with line ranges) and copy the exact text, including indentation."})
+                return
+            if occurrences > 1:
+                yield ("__observation__", {"text": f"replace: 'old_text' appears {occurrences} times in {path}. Add more surrounding lines so it matches exactly once."})
+                return
+            new_content = record.content.replace(old_text, new_text, 1)
+            try:
+                preview = workspace.preview_patch(
+                    WorkspacePatchRequest(path=path, proposed_content=new_content, summary=summary, create_if_missing=False)
+                )
+                workspace.apply_patch(
+                    WorkspacePatchApplyRequest(
+                        path=path,
+                        proposed_content=new_content,
+                        summary=summary,
+                        create_if_missing=False,
+                        expected_sha256=preview.current_sha256,
+                        approved=True,
+                    )
+                )
+            except (
+                WorkspaceAccessError,
+                WorkspaceNotFoundError,
+                WorkspaceUnsupportedFileError,
+                WorkspacePatchConflictError,
+            ) as error:
+                yield ("__observation__", {"text": f"replace failed to apply: {error}"})
+                return
+            changed_files[preview.path] = {
+                "path": preview.path,
+                "additions": preview.additions,
+                "deletions": preview.deletions,
+            }
+            yield (
+                "file_edit",
+                {
+                    "path": preview.path,
+                    "summary": summary,
+                    "additions": preview.additions,
+                    "deletions": preview.deletions,
+                    "diff": preview.diff[:8000],
+                    "step": step,
+                },
+            )
+            self.store.add_event(
+                run_id,
+                AgentRunEventCreate(
+                    kind=AgentRunEventKind.TOOL_RESULT,
+                    title=f"Edited {preview.path}",
+                    body=f"+{preview.additions} -{preview.deletions}: {summary}"[:500],
+                    metadata={"path": preview.path, "step": step},
+                ),
+            )
+            yield ("__observation__", {"text": f"Replaced text in {preview.path} (+{preview.additions} -{preview.deletions})."})
             return
 
         if name == "list_dir":
@@ -446,7 +540,7 @@ class WorkspaceAgent:
             yield from self._run_command(root, request, run_id, control, step, action)
             return
 
-        yield ("__observation__", {"text": f"Unknown action '{name}'. Valid actions: read_file, list_dir, search, edit_file, run_command, finish."})
+        yield ("__observation__", {"text": f"Unknown action '{name}'. Valid actions: read_file, list_dir, search, replace, edit_file, run_command, finish."})
 
     def _run_command(
         self,
@@ -611,25 +705,32 @@ AGENT_SYSTEM_PROMPT = (
     "no markdown fences, no extra text. Keep going until the task is fully complete; do not stop early. Use the "
     "\"finish\" action only when the work is genuinely done (and verified when relevant).\n\n"
     "Action object schema (one per turn):\n"
-    '{"thought": "<1-3 sentence reasoning>", "action": "read_file|list_dir|search|edit_file|run_command|finish", ...}\n'
+    '{"thought": "<1-3 sentence reasoning>", "action": "read_file|list_dir|search|replace|edit_file|run_command|finish", ...}\n'
     "Fields by action:\n"
-    '- read_file: {"path": "relative/path"}\n'
+    '- read_file: {"path": "relative/path", "start_line": <int optional>, "end_line": <int optional>}\n'
     '- list_dir:  {"path": "relative/dir"}   (use "" for the root)\n'
     '- search:    {"query": "word or identifier"}\n'
+    '- replace:   {"path": "relative/path", "old_text": "<exact existing snippet>", "new_text": "<replacement>", "summary": "<short>"}\n'
     '- edit_file: {"path": "relative/path", "content": "<COMPLETE new file content>", "summary": "<short what changed>"}\n'
     '- run_command: {"command": "<cmd>", "cwd": "relative dir or .", "reason": "<why>"}\n'
     '- finish:    {"summary": "<what changed, files touched, how to verify>"}\n\n'
     "FINDING CODE (important - this is where agents usually fail):\n"
     "- A REPO FILE TREE is given in the first message. Use it to open the right files DIRECTLY - you usually do not "
     "need to search just to find a path.\n"
-    "- The search action is a case-insensitive code grep. Search for ONE distinctive word or identifier, NOT a "
-    "sentence. Multi-word queries match flexibly across separators, so \"creator studio\" also matches "
-    "\"Creator Studio\", \"creator-studio\", \"creator_studio\", and \"creatorStudio\".\n"
-    "- Always read_file before editing so you have the exact current contents.\n"
+    "- The search action is a case-insensitive code grep that returns path:line:text. Search for ONE distinctive word "
+    "or identifier, NOT a sentence. Multi-word queries match flexibly across separators, so \"creator studio\" also "
+    "matches \"Creator Studio\", \"creator-studio\", \"creator_studio\", and \"creatorStudio\".\n"
+    "- Files can be LARGE. read_file returns numbered lines and only a window (~220 lines). To see a specific "
+    "section, pass start_line/end_line (use the line numbers from search). Do NOT re-read the same file from the "
+    "top repeatedly - page through it with start_line.\n"
     "{repo_map}"
+    "EDITING (important):\n"
+    "- To change an EXISTING file, use replace: copy the exact current snippet into old_text (it must match exactly "
+    "ONCE, including indentation) and put the changed code in new_text. NEVER paste a whole large file into "
+    "edit_file.\n"
+    "- Use edit_file (full content) ONLY to create a NEW file or rewrite a very small one.\n"
+    "- read_file the exact lines first so old_text matches. After an edit, you can read_file again to confirm.\n"
     "Rules:\n"
-    "- edit_file REPLACES the entire file with \"content\". Always provide complete, working file contents - never "
-    "partial snippets, placeholders, or \"...\".\n"
     "- Match the existing code style. Make focused changes and verify as you go.\n"
     "- You may ONLY run safe commands: test runners (pytest, npm test), builds (npm run ...), and read-only git "
     "(status/diff/log). Anything else is blocked. Commands require the user's approval before running.\n"
@@ -886,6 +987,16 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...[truncated]"
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
 
 
 def _title_from_task(task: str) -> str:
