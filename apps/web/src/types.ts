@@ -777,6 +777,8 @@ export interface WorkspaceAgentControlResult {
 export interface EdisonServiceRestartResult {
   scheduled: boolean;
   services: string[];
+  web_build?: string;
+  backend_ok?: boolean;
   detail: string;
 }
 

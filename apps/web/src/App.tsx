@@ -4732,13 +4732,14 @@ function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: (
 
   async function applyAndRestart() {
     setRestarting(true);
+    append({ kind: 'status', step: 0, text: 'Building the web app and verifying the backend, then restarting...' });
     try {
-      await edisonApi.restartEdison();
-      append({ kind: 'status', step: 0, text: 'Edison is restarting to apply changes. The page will reconnect shortly.' });
+      const result = await edisonApi.restartEdison();
+      append({ kind: 'status', step: 0, text: result.detail || 'Edison is restarting; the page will reconnect shortly.' });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Restart request failed.');
     } finally {
-      window.setTimeout(() => setRestarting(false), 8000);
+      window.setTimeout(() => setRestarting(false), 12000);
     }
   }
 
@@ -4795,7 +4796,7 @@ function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: (
           {changedFiles.length > 0 && (
             <button className="apply-button icon-text-button" disabled={restarting} onClick={() => void applyAndRestart()} type="button">
               <RefreshCw size={15} />
-              {restarting ? 'Restarting Edison...' : 'Apply & restart Edison'}
+              {restarting ? 'Building & restarting...' : 'Apply & restart Edison'}
             </button>
           )}
         </div>

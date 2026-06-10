@@ -159,6 +159,7 @@ class WorkspaceAgent:
             )
 
             transcript = self._initial_messages(workspace, request)
+            recent_sigs: list[str] = []
 
             while step < request.max_steps:
                 if control.cancelled:
@@ -233,8 +234,22 @@ class WorkspaceAgent:
                     final_status = "complete"
                     break
 
+                signature = _action_signature(name, action)
+                recent_sigs.append(signature)
+                recent_sigs = recent_sigs[-6:]
+                repeats = sum(1 for item in recent_sigs if item == signature)
+                if repeats >= 4:
+                    final_status = "incomplete"
+                    last_summary = (
+                        "Stopped: the agent repeated the same step several times without progress. "
+                        "Re-run with a more specific instruction, or check whether the edit already applied."
+                    )
+                    yield ("status", {"message": "Stopped - repeated the same step without progress."})
+                    break
+
                 # Execute the action; yields any UI events and returns an observation string.
                 observation = ""
+                edits_before = len(changed_files)
                 for event in self._execute(workspace, root, request, run_id, control, step, name, action, changed_files):
                     if event[0] == "__observation__":
                         observation = event[1]["text"]
@@ -244,7 +259,18 @@ class WorkspaceAgent:
                 if control.cancelled:
                     break
 
-                transcript.append({"role": "user", "content": f"OBSERVATION (step {step}):\n{observation}"[:MAX_OBSERVATION_CHARS]})
+                steer = ""
+                if repeats == 3:
+                    steer += (
+                        "\n\nNOTE: you have repeated this exact action. If the edit already applied (see the diffs "
+                        "above), call finish. If an edit keeps failing to match, read the exact lines with read_file "
+                        "(start_line/end_line) and copy them verbatim into old_text."
+                    )
+                if len(changed_files) > edits_before:
+                    steer += "\n\nThe edit was applied successfully. If the task is now complete, respond with the finish action."
+                transcript.append(
+                    {"role": "user", "content": f"OBSERVATION (step {step}):\n{observation}{steer}"[:MAX_OBSERVATION_CHARS]}
+                )
                 transcript = _trim_transcript(transcript)
             else:
                 # Loop ran out of steps without a finish action.
@@ -386,14 +412,13 @@ class WorkspaceAgent:
             except (WorkspaceAccessError, WorkspaceNotFoundError, WorkspaceUnsupportedFileError) as error:
                 yield ("__observation__", {"text": f"replace could not read {path}: {error}"})
                 return
-            occurrences = record.content.count(old_text)
-            if occurrences == 0:
-                yield ("__observation__", {"text": f"replace: 'old_text' was not found in {path}. Read the file (with line ranges) and copy the exact text, including indentation."})
+            new_content, status, match_note = _compute_replacement(record.content, old_text, new_text)
+            if new_content is None:
+                if status == "ambiguous":
+                    yield ("__observation__", {"text": f"replace: 'old_text' matches {match_note} places in {path}. Add more surrounding lines so it matches exactly once."})
+                else:
+                    yield ("__observation__", {"text": f"replace: 'old_text' was not found in {path}. Open the exact lines with read_file (start_line/end_line) and copy them verbatim into old_text (indentation included)."})
                 return
-            if occurrences > 1:
-                yield ("__observation__", {"text": f"replace: 'old_text' appears {occurrences} times in {path}. Add more surrounding lines so it matches exactly once."})
-                return
-            new_content = record.content.replace(old_text, new_text, 1)
             try:
                 preview = workspace.preview_patch(
                     WorkspacePatchRequest(path=path, proposed_content=new_content, summary=summary, create_if_missing=False)
@@ -997,6 +1022,52 @@ def _coerce_int(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+def _action_signature(name: str, action: dict[str, Any]) -> str:
+    parts = [name]
+    for field in ("path", "query", "command", "start_line", "end_line"):
+        value = action.get(field)
+        if value is not None and str(value).strip():
+            parts.append(f"{field}={str(value)[:120]}")
+    old_text = action.get("old_text")
+    if isinstance(old_text, str) and old_text:
+        parts.append(f"old={old_text[:160]}")
+    return "|".join(parts)
+
+
+def _compute_replacement(content: str, old_text: str, new_text: str) -> tuple[str | None, str, str]:
+    """Locate old_text and return the new content, tolerant of CRLF and trailing whitespace.
+
+    Returns (new_content | None, status, note). status is "exact"/"normalized" on success,
+    or "ambiguous"/"notfound" on failure (note holds the match count).
+    """
+    count = content.count(old_text)
+    if count == 1:
+        return content.replace(old_text, new_text, 1), "exact", "1"
+    if count > 1:
+        return None, "ambiguous", str(count)
+
+    content_lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    old_lines = old_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while len(old_lines) > 1 and old_lines[-1] == "":
+        old_lines = old_lines[:-1]
+    if not old_lines or (len(old_lines) == 1 and old_lines[0] == ""):
+        return None, "notfound", "0"
+    new_lines = new_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    span = len(old_lines)
+
+    for normalize in (lambda line: line.rstrip(), lambda line: line.strip()):
+        target = [normalize(line) for line in old_lines]
+        haystack = [normalize(line) for line in content_lines]
+        hits = [index for index in range(0, len(haystack) - span + 1) if haystack[index : index + span] == target]
+        if len(hits) == 1:
+            start = hits[0]
+            spliced = content_lines[:start] + new_lines + content_lines[start + span :]
+            return "\n".join(spliced), "normalized", "1"
+        if len(hits) > 1:
+            return None, "ambiguous", str(len(hits))
+    return None, "notfound", "0"
 
 
 def _title_from_task(task: str) -> str:

@@ -259,11 +259,14 @@ class EdisonServiceRestartRequest(BaseModel):
     services: list[Literal["edison-api", "edison-web"]] = Field(
         default_factory=lambda: ["edison-api", "edison-web"]
     )
+    build_web: bool = True
 
 
 class EdisonServiceRestartResult(BaseModel):
     scheduled: bool
     services: list[str] = Field(default_factory=list)
+    web_build: str = "skipped"
+    backend_ok: bool = True
     detail: str = ""
 
 
