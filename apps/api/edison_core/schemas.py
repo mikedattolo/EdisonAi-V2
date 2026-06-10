@@ -766,6 +766,7 @@ class KnowledgeIngestPresetRequest(BaseModel):
         "mcp-agents",
         "local-ai-hardware",
         "business-product-ops",
+        "coding-reference",
     ]
 
 

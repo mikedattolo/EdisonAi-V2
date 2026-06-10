@@ -403,6 +403,26 @@ class KnowledgeStore:
                     kind="preset",
                 )
             )
+        elif preset == "coding-reference":
+            records.append(
+                self.ingest_text(
+                    KnowledgeIngestTextRequest(
+                        title="Edison Coding Reference Overview",
+                        text=CODING_REFERENCE_OVERVIEW,
+                        uri="edison:preset/coding-reference",
+                        metadata={"source": "preset", "preset": preset},
+                    ),
+                    kind="preset",
+                )
+            )
+            try:
+                records.extend(
+                    self.ingest_local(
+                        KnowledgeIngestLocalRequest(path="docs/coding", glob="**/*.md", max_files=50)
+                    )
+                )
+            except KnowledgeIngestError:
+                pass
         else:
             raise KnowledgeIngestError(f"Unknown preset: {preset}")
         return records
@@ -616,13 +636,17 @@ def _chunk_text(text: str, chunk_size: int = 1400, overlap: int = 180) -> list[s
 
     chunks: list[str] = []
     cursor = 0
-    while cursor < len(cleaned):
+    total = len(cleaned)
+    while cursor < total:
         window = cleaned[cursor: cursor + chunk_size]
-        if cursor + chunk_size < len(cleaned):
+        at_end = cursor + chunk_size >= total
+        if not at_end:
             split_point = window.rfind(" ")
             if split_point > chunk_size // 2:
                 window = window[:split_point]
         chunks.append(window.strip())
+        if at_end:
+            break
         cursor += max(len(window) - overlap, 1)
     return [chunk for chunk in chunks if chunk]
 
@@ -901,3 +925,18 @@ def _iso_or_none(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+CODING_REFERENCE_OVERVIEW = """
+Edison Coding Reference: a built-in knowledge base for writing and editing code on this machine.
+Detailed guides live in docs/coding/ and cover:
+- edison-environment: the Ubuntu box, repo layout, services, how to edit/build/run/restart, and how to get dependencies here.
+- dependency-management: how to add/install/pin dependencies in Python (pip+venv), Node (npm/pnpm/yarn), Java (Maven/Gradle), and system packages (apt).
+- python, javascript-typescript, java: language syntax, tooling, idioms, and common gotchas.
+- html, css, react-vite: web frontend - page structure, styling, and Edison's own React + Vite + TypeScript stack.
+- bash-linux: shell and Linux commands for operating the box.
+- git: version-control workflow (the code agent uses read-only git only).
+- debugging-and-testing: a reliable debugging loop and how to verify changes per stack.
+When coding, prefer the project's existing tools and patterns. On Edison that means pip + the .venv for the API and npm for the web app, surgical edits over full-file rewrites, and an import-check/build plus a service restart to apply changes.
+""".strip()
+

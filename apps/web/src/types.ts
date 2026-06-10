@@ -429,7 +429,9 @@ export type KnowledgePreset =
   | 'edison-ops'
   | 'odysseus-features'
   | 'mcp-agents'
-  | 'local-ai-hardware';
+  | 'local-ai-hardware'
+  | 'business-product-ops'
+  | 'coding-reference';
 
 export interface MCPServerRecord {
   id: string;

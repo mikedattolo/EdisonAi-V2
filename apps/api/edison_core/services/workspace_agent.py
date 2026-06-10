@@ -113,10 +113,17 @@ class AgentRunCoordinator:
 
 
 class WorkspaceAgent:
-    def __init__(self, gateway: ModelGateway, store: AgentRunStore, coordinator: AgentRunCoordinator) -> None:
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        store: AgentRunStore,
+        coordinator: AgentRunCoordinator,
+        knowledge_store=None,
+    ) -> None:
         self.gateway = gateway
         self.store = store
         self.coordinator = coordinator
+        self.knowledge_store = knowledge_store
 
     def stream(self, workspace: WorkspaceTools, request: WorkspaceAgentStartRequest) -> Iterator[StreamEvent]:
         root = workspace.root
@@ -749,6 +756,15 @@ class WorkspaceAgent:
         except Exception:  # noqa: BLE001
             relevant = []
 
+        knowledge_refs: list[str] = []
+        if self.knowledge_store is not None:
+            try:
+                for match in self.knowledge_store.search(request.task, max_results=4):
+                    snippet = (getattr(match, "snippet", "") or "").strip().replace("\n", " ")
+                    knowledge_refs.append(f"- [{match.source_title}] {snippet[:280]}")
+            except Exception:  # noqa: BLE001
+                knowledge_refs = []
+
         root_label = (
             "the Edison app itself (you are editing your own source)"
             if request.root_id == "app"
@@ -759,8 +775,14 @@ class WorkspaceAgent:
         system = AGENT_SYSTEM_PROMPT.replace("{root_label}", root_label).replace("{repo_map}", repo_map)
 
         tree_text = "\n".join(file_tree)
+        knowledge_section = (
+            "REFERENCE KNOWLEDGE (Edison's coding knowledge base - use it for syntax, commands, and dependencies):\n"
+            + "\n".join(knowledge_refs)
+            + "\n\n"
+        ) if knowledge_refs else ""
         user = (
             f"TASK:\n{request.task.strip()}\n\n"
+            f"{knowledge_section}"
             f"REPO FILE TREE (root={request.root_id}, {len(file_tree)} files):\n{tree_text[:9000]}\n\n"
             f"Detected stacks: {stacks}\nRunnable commands: {commands}\n"
             f"Index guess at relevant files: {relevant}\n\n"

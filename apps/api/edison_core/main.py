@@ -104,7 +104,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     workspace_tools = WorkspaceTools(resolved_settings.workspace_roots[0])
     workspace_project_manager = WorkspaceProjectManager(resolved_settings)
     agent_run_coordinator = AgentRunCoordinator()
-    workspace_agent = WorkspaceAgent(model_gateway, agent_run_store, agent_run_coordinator)
+    workspace_agent = WorkspaceAgent(model_gateway, agent_run_store, agent_run_coordinator, knowledge_store)
     capability_registry = CapabilityRegistry(
         resolved_settings,
         hardware_device_service,

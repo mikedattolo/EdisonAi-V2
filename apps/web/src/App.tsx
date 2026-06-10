@@ -5444,6 +5444,7 @@ function MemoryView({
   const [chatResult, setChatResult] = useState<string | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
   const presetButtons: Array<{ preset: KnowledgePreset; label: string }> = [
+    { preset: 'coding-reference', label: 'Coding Reference' },
     { preset: 'ai-foundations', label: 'AI Foundations' },
     { preset: 'coding-core', label: 'Coding Core' },
     { preset: 'edison-ops', label: 'Edison Ops' },
