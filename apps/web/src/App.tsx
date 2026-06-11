@@ -384,21 +384,14 @@ export default function App() {
             });
             const latest = voiceEvents[voiceEvents.length - 1];
             setVoiceToast({ transcript: latest.transcript, reply: latest.reply, conversationId: latest.conversation_id });
-            try {
-              if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(new SpeechSynthesisUtterance(stripForSpeech(latest.reply)));
-              }
-            } catch {
-              /* tts unavailable */
-            }
+            speakText(latest.reply);
           }
         }
       } catch {
         /* voice api unavailable */
       }
       if (!cancelled) {
-        timer = window.setTimeout(() => void poll(), 3500);
+        timer = window.setTimeout(() => void poll(), 1500);
       }
     }
     void poll();
@@ -1971,6 +1964,64 @@ function stripForSpeech(text: string): string {
     .slice(0, 700);
 }
 
+let cachedVoice: SpeechSynthesisVoice | null = null;
+let voiceListenerAttached = false;
+
+function pickJarvisVoice(): SpeechSynthesisVoice | null {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    return null;
+  }
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) {
+    return null;
+  }
+  const preferred = ['Google UK English Male', 'Microsoft Ryan', 'Microsoft George', 'Microsoft Thomas', 'Daniel', 'Arthur', 'Oliver'];
+  for (const name of preferred) {
+    const match = voices.find((voice) => voice.name === name) ?? voices.find((voice) => voice.name.includes(name));
+    if (match) {
+      return match;
+    }
+  }
+  const gbMale = voices.find((voice) => voice.lang === 'en-GB' && /male|ryan|george|daniel|arthur|thomas|oliver/i.test(voice.name));
+  if (gbMale) {
+    return gbMale;
+  }
+  return voices.find((voice) => voice.lang === 'en-GB') ?? voices.find((voice) => voice.lang.startsWith('en')) ?? voices[0];
+}
+
+function speakText(text: string, handlers: { onStart?: () => void; onEnd?: () => void } = {}): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    return;
+  }
+  const clean = stripForSpeech(text);
+  if (!clean) {
+    return;
+  }
+  if (!voiceListenerAttached) {
+    voiceListenerAttached = true;
+    window.speechSynthesis.onvoiceschanged = () => {
+      cachedVoice = pickJarvisVoice();
+    };
+  }
+  if (!cachedVoice) {
+    cachedVoice = pickJarvisVoice();
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(clean);
+  if (cachedVoice) {
+    utterance.voice = cachedVoice;
+  }
+  utterance.lang = cachedVoice?.lang ?? 'en-GB';
+  utterance.rate = 1.07;
+  utterance.pitch = 0.9;
+  if (handlers.onStart) {
+    utterance.onstart = handlers.onStart;
+  }
+  utterance.onend = () => handlers.onEnd?.();
+  utterance.onerror = () => handlers.onEnd?.();
+  window.speechSynthesis.speak(utterance);
+}
+
 function useVoice(onTranscript: (text: string) => void) {
   const [enabled, setEnabled] = useState(false);
   const [listening, setListening] = useState(false);
@@ -2005,15 +2056,7 @@ function useVoice(onTranscript: (text: string) => void) {
 
   const speak = useCallback((text: string) => {
     if (!ttsSupported) return;
-    const clean = stripForSpeech(text);
-    if (!clean) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(clean);
-    utterance.rate = 1.03;
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utterance);
+    speakText(text, { onStart: () => setSpeaking(true), onEnd: () => setSpeaking(false) });
   }, [ttsSupported]);
 
   const cancelSpeak = useCallback(() => {

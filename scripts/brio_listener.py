@@ -18,7 +18,8 @@ DEVICE = os.environ.get("BRIO_ALSA", "plughw:CARD=BRIO")
 RATE = 16000
 FRAME_MS = 30
 FRAME_BYTES = int(RATE * FRAME_MS / 1000) * 2  # 480 samples * 2 bytes = 960
-SILENCE_FRAMES = int(0.8 * 1000 / FRAME_MS)     # ~0.8s of trailing silence ends an utterance
+SILENCE_FRAMES = int(0.6 * 1000 / FRAME_MS)     # ~0.6s of trailing silence ends an utterance
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base.en")  # English-only is faster + accurate
 WAKE_PHRASES = ("hey edison", "hey, edison", "hey addison", "a edison", "hey edson", "hey eddison", "okay edison")
 
 
@@ -58,8 +59,8 @@ def transcribe(model: WhisperModel, audio: bytes) -> str:
 
 
 def main() -> None:
-    print("loading whisper base model...", flush=True)
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    print(f"loading whisper model {WHISPER_MODEL}...", flush=True)
+    model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
     vad = webrtcvad.Vad(2)
     proc = ffmpeg_stream()
     print(f"listening on {DEVICE}", flush=True)

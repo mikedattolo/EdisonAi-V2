@@ -53,12 +53,19 @@ class VoiceBridgeService:
             conversation.id,
             MessageCreate(role=MessageRole.USER, content=transcript, metadata={"source": f"voice-{source}"}),
         )
+        voice_system = (
+            "You are Edison, a friendly British AI voice assistant in the style of Jarvis. "
+            "Answer in 1-3 short, natural spoken sentences. Be direct and conversational. "
+            "Never use markdown, lists, code blocks, or emoji - your reply is read aloud."
+        )
+        framed = f"{voice_system}\n\nUser: {transcript}\nEdison:"
         try:
             _selection, inference = self.gateway.complete(
                 InferenceRequest(
-                    prompt=transcript,
+                    prompt=framed,
                     mode=ChatMode.CHAT,
-                    metadata={"source": f"voice-{source}", "timeout_seconds": 180},
+                    preferred_model="local-fast-chat",
+                    metadata={"source": f"voice-{source}", "timeout_seconds": 60},
                 )
             )
             reply = inference.content if inference.finish_reason not in ("error", "not_configured") else (
