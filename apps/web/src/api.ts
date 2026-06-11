@@ -51,6 +51,7 @@ import type {
   RuntimeSettingsRecord,
   ToyBoxManagerStatus,
   WorkspaceCommandRunResult,
+  WorkspaceInstallResult,
   WorkspaceCopilotTaskRequest,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -537,6 +538,11 @@ export const edisonApi = {
     }),
   downloadWorkspaceUrl: (rootId = 'app', path = '') =>
     `${API_BASE}${withQuery('/api/v1/workspace/download', { root_id: rootId, path })}`,
+  installWorkspaceDeps: (payload: { root_id?: string; package?: string | null; cwd?: string }) =>
+    request<WorkspaceInstallResult>('/api/v1/workspace/install', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getRealtimeContext: (latitude?: number, longitude?: number) =>
     request<RealtimeContext>(withQuery('/api/v1/realtime/context', { latitude, longitude })),
   importKnowledgeChatExport: async (files: File[], source: ChatImportSource = 'auto') => {

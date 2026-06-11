@@ -458,6 +458,43 @@
   padding: 3px 8px;
   cursor: pointer;
 }
+.vsc-term-deps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2a2a2a;
+}
+.vsc-term-deps button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #0e639c;
+  border: none;
+  border-radius: 5px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.vsc-term-deps button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.vsc-term-deps input {
+  flex: 1;
+  min-width: 160px;
+  background: #3c3c3c;
+  border: 1px solid #1b1b1b;
+  border-radius: 5px;
+  color: #ccc;
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: 12px;
+}
 .vsc-problem { color: #f48771; padding: 2px 0; }
 .vsc-output pre { white-space: pre-wrap; color: #cfcfcf; }
 

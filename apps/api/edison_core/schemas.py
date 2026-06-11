@@ -692,6 +692,24 @@ class WorkspaceEntrypoint(BaseModel):
     description: str
 
 
+class WorkspaceInstallRequest(BaseModel):
+    root_id: str = "app"
+    package: str | None = Field(default=None, max_length=200)
+    cwd: str = "."
+
+
+class WorkspaceInstallResult(BaseModel):
+    manager: str
+    command: str
+    cwd: str = "."
+    status: Literal["complete", "error", "timeout"]
+    exit_code: int | None = None
+    duration_ms: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    output_truncated: bool = False
+
+
 class WorkspaceCommand(BaseModel):
     name: str
     command: str

@@ -93,6 +93,7 @@ import type {
   ToyBoxManagerStatus,
   WorkspaceCommand,
   WorkspaceCommandRunResult,
+  WorkspaceInstallResult,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
   WorkspaceFile,
@@ -5517,6 +5518,9 @@ function CodeWorkspaceView({
   const [sidebarView, setSidebarView] = useState<'explorer' | 'search' | 'scm'>('explorer');
   const [bottomTab, setBottomTab] = useState<'terminal' | 'problems' | 'output'>('terminal');
   const [bottomOpen, setBottomOpen] = useState(true);
+  const [installPkg, setInstallPkg] = useState('');
+  const [installing, setInstalling] = useState(false);
+  const [installOut, setInstallOut] = useState<WorkspaceInstallResult | null>(null);
   const topLanguages = Object.entries(summary?.languages ?? {}).slice(0, 3);
   const commandPreview = scan?.commands.slice(0, 6) ?? [];
   const entrypointPreview = scan?.entrypoints.slice(0, 5) ?? [];
@@ -5563,6 +5567,32 @@ function CodeWorkspaceView({
     }
     await onRunCommand(customCommand);
     setCustomCommand('');
+  }
+
+  async function runInstall(pkg?: string) {
+    setInstalling(true);
+    setBottomTab('terminal');
+    setBottomOpen(true);
+    try {
+      const result = await edisonApi.installWorkspaceDeps({ root_id: activeRootId, package: pkg ?? null, cwd: path || '.' });
+      setInstallOut(result);
+      if (pkg) setInstallPkg('');
+      await onRefresh();
+    } catch (error) {
+      setInstallOut({
+        manager: 'install',
+        command: pkg ? `install ${pkg}` : 'install dependencies',
+        cwd: path || '.',
+        status: 'error',
+        exit_code: null,
+        duration_ms: 0,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : 'Install failed',
+        output_truncated: false,
+      });
+    } finally {
+      setInstalling(false);
+    }
   }
 
   return (
@@ -5754,6 +5784,31 @@ function CodeWorkspaceView({
                           {commandPreview.map((command) => (
                             <button disabled={isBusy} key={`${command.cwd}-${command.command}`} onClick={() => void onRunCommand(command)} type="button">{command.command}</button>
                           ))}
+                        </div>
+                      )}
+                      <div className="vsc-term-deps">
+                        <button disabled={installing} onClick={() => void runInstall()} type="button">
+                          <Download size={13} /> {installing ? 'Installing…' : 'Install dependencies'}
+                        </button>
+                        <input
+                          aria-label="Add a package"
+                          onChange={(event) => setInstallPkg(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && installPkg.trim()) {
+                              event.preventDefault();
+                              void runInstall(installPkg.trim());
+                            }
+                          }}
+                          placeholder="add a package — axios, requests, …"
+                          value={installPkg}
+                        />
+                        <button disabled={installing || !installPkg.trim()} onClick={() => void runInstall(installPkg.trim())} type="button">Add</button>
+                      </div>
+                      {installOut && (
+                        <div className="vsc-term-block">
+                          <div className="vsc-term-cmd">$ {installOut.command} <span className="vsc-term-meta">({installOut.manager} · {installOut.status})</span></div>
+                          {installOut.stdout && <pre>{installOut.stdout}</pre>}
+                          {installOut.stderr && <pre className="err">{installOut.stderr}</pre>}
                         </div>
                       )}
                     </div>

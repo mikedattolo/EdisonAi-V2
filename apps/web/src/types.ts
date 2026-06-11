@@ -606,6 +606,18 @@ export interface WorkspaceEntrypoint {
   description: string;
 }
 
+export interface WorkspaceInstallResult {
+  manager: string;
+  command: string;
+  cwd: string;
+  status: 'complete' | 'error' | 'timeout';
+  exit_code?: number | null;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+}
+
 export interface WorkspaceCommand {
   name: string;
   command: string;

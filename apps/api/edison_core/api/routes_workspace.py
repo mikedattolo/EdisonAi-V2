@@ -20,6 +20,8 @@ from edison_core.schemas import (
     WorkspaceFile,
     WorkspaceCommandRunRequest,
     WorkspaceCommandRunResult,
+    WorkspaceInstallRequest,
+    WorkspaceInstallResult,
     WorkspaceCopilotTaskRequest,
     WorkspaceCopilotTaskResult,
     WorkspacePatchApplyRequest,
@@ -142,6 +144,19 @@ def workspace_scan(
     projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
 ) -> WorkspaceScan:
     return _workspace(root_id, projects).scan()
+
+
+@router.post("/install", response_model=WorkspaceInstallResult)
+def install_dependencies(
+    payload: WorkspaceInstallRequest,
+    projects: WorkspaceProjectManager = Depends(get_workspace_project_manager),
+) -> WorkspaceInstallResult:
+    try:
+        return _workspace(payload.root_id, projects).install_dependencies(payload.package, payload.cwd)
+    except WorkspaceCommandNotAllowedError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except WorkspaceNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error))
 
 
 @router.get("/files", response_model=list[WorkspaceEntry])

@@ -7,6 +7,7 @@ import hashlib
 import fnmatch
 from datetime import datetime, timezone
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from edison_core.schemas import (
     WorkspaceSummary,
     WorkspaceCommandRunRequest,
     WorkspaceCommandRunResult,
+    WorkspaceInstallResult,
     WorkspaceInstructionContext,
     WorkspaceInstructionFile,
     WorkspaceIndexSearchMatch,
@@ -368,6 +370,117 @@ class WorkspaceTools:
                 stderr=stderr,
                 output_truncated=stdout_truncated or stderr_truncated,
             )
+
+    def install_dependencies(self, package: str | None = None, cwd: str = ".") -> WorkspaceInstallResult:
+        cwd = (cwd or ".").strip()
+        cwd_path = self._resolve(cwd if cwd != "." else "")
+        if not cwd_path.exists() or not cwd_path.is_dir():
+            raise WorkspaceNotFoundError(f"Working directory not found: {cwd}")
+        manager, command, needs_venv = self._build_install_command(cwd_path, package)
+        if command is None:
+            raise WorkspaceCommandNotAllowedError(
+                "No dependency manifest found here (package.json, requirements.txt, pyproject.toml, Cargo.toml, go.mod). "
+                "Open the project's folder first."
+            )
+        if needs_venv:
+            python = self._ensure_python_env(cwd_path)
+            if python is None:
+                raise WorkspaceCommandNotAllowedError("Could not create a Python virtual environment for installing packages.")
+            command = command.replace("{python}", python)
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                shlex.split(command),
+                cwd=cwd_path,
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=900,
+            )
+            duration_ms = int((time.monotonic() - started) * 1000)
+            stdout, stdout_truncated = self._truncate_output(completed.stdout)
+            stderr, stderr_truncated = self._truncate_output(completed.stderr)
+            return WorkspaceInstallResult(
+                manager=manager,
+                command=command,
+                cwd=cwd,
+                exit_code=completed.returncode,
+                status="complete" if completed.returncode == 0 else "error",
+                duration_ms=duration_ms,
+                stdout=stdout,
+                stderr=stderr,
+                output_truncated=stdout_truncated or stderr_truncated,
+            )
+        except subprocess.TimeoutExpired as error:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            stdout, stdout_truncated = self._truncate_output(error.stdout or "")
+            stderr, stderr_truncated = self._truncate_output(error.stderr or "")
+            return WorkspaceInstallResult(
+                manager=manager,
+                command=command,
+                cwd=cwd,
+                exit_code=None,
+                status="timeout",
+                duration_ms=duration_ms,
+                stdout=stdout,
+                stderr=stderr,
+                output_truncated=stdout_truncated or stderr_truncated,
+            )
+        except FileNotFoundError:
+            raise WorkspaceCommandNotAllowedError(f"'{manager}' is not installed on this machine.")
+
+    def _build_install_command(self, cwd_path: Path, package: str | None) -> tuple[str | None, str | None, bool]:
+        clean = (package or "").strip() or None
+        if clean is not None:
+            safe = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@/+~^<>=-[] ")
+            if any(character not in safe for character in clean):
+                raise WorkspaceCommandNotAllowedError("Invalid package name.")
+        if (cwd_path / "package.json").exists():
+            manager = self._node_package_manager(cwd_path)
+            if clean:
+                verb = "add" if manager == "yarn" else "install"
+                return (manager, f"{manager} {verb} {clean}", False)
+            return (manager, f"{manager} install", False)
+        if (cwd_path / "requirements.txt").exists():
+            if clean:
+                return ("pip", f"{{python}} -m pip install {clean}", True)
+            return ("pip", "{python} -m pip install -r requirements.txt", True)
+        if (cwd_path / "pyproject.toml").exists():
+            if clean:
+                return ("pip", f"{{python}} -m pip install {clean}", True)
+            return ("pip", "{python} -m pip install -e .", True)
+        if (cwd_path / "Cargo.toml").exists():
+            return ("cargo", f"cargo add {clean}" if clean else "cargo fetch", False)
+        if (cwd_path / "go.mod").exists():
+            return ("go", f"go get {clean}" if clean else "go mod download", False)
+        if clean:
+            return ("pip", f"{{python}} -m pip install {clean}", True)
+        return (None, None, False)
+
+    def _ensure_python_env(self, cwd_path: Path) -> str | None:
+        """Return a project-local venv python, creating .venv if none exists.
+        Avoids PEP-668 'externally-managed-environment' errors from the system python."""
+        for name in (".venv", "venv", "env"):
+            candidate = cwd_path / name / "bin" / "python"
+            if candidate.exists():
+                return str(candidate)
+        base = shutil.which("python3") or shutil.which("python")
+        if base is None:
+            return None
+        target = cwd_path / ".venv"
+        try:
+            subprocess.run(
+                [base, "-m", "venv", str(target)],
+                cwd=cwd_path,
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        candidate = target / "bin" / "python"
+        return str(candidate) if candidate.exists() else None
 
     def list_instruction_files(self, limit: int = 200) -> list[WorkspaceInstructionFile]:
         instruction_files: list[WorkspaceInstructionFile] = []
