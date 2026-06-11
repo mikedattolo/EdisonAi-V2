@@ -465,6 +465,147 @@ class CreatorStudioAssistResponse(BaseModel):
     guardrails: list[str] = Field(default_factory=list)
 
 
+# --- Creator Lab: managed datasets, LoRA/workflow toggles, VLM critique, training ---
+
+
+class CreatorLabImage(BaseModel):
+    id: str
+    filename: str
+    url: str
+    size_bytes: int | None = None
+    width: int | None = None
+    height: int | None = None
+    caption: str | None = None
+
+
+class CreatorLabDataset(BaseModel):
+    id: str
+    name: str
+    trigger_token: str
+    lora_type: str = "sdxl"
+    base_model: str | None = None
+    workflow: str | None = None
+    notes: str | None = None
+    status: Literal["empty", "ready"] = "empty"
+    image_count: int = 0
+    created_at: str | None = None
+    images: list[CreatorLabImage] = Field(default_factory=list)
+
+
+class CreatorLabLoraType(BaseModel):
+    id: str
+    label: str
+    base: str
+    available: bool = False
+    detail: str | None = None
+
+
+class CreatorLabWorkflow(BaseModel):
+    id: str
+    label: str
+    kind: Literal["image", "video"] = "image"
+    builtin: bool = True
+    node_count: int = 0
+    detail: str | None = None
+
+
+class CreatorLabGpu(BaseModel):
+    index: int
+    name: str
+    memory_total_mb: int | None = None
+    memory_used_mb: int | None = None
+    utilization: int | None = None
+    temperature: int | None = None
+
+
+class CreatorLabOverview(BaseModel):
+    status: Literal["ready"] = "ready"
+    root_path: str | None = None
+    datasets: list[CreatorLabDataset] = Field(default_factory=list)
+    lora_types: list[CreatorLabLoraType] = Field(default_factory=list)
+    workflows: list[CreatorLabWorkflow] = Field(default_factory=list)
+    gpus: list[CreatorLabGpu] = Field(default_factory=list)
+    active_dataset_id: str | None = None
+    active_lora_type: str | None = None
+    active_workflow: str | None = None
+    training_available: bool = False
+    guardrails: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreatorLabDatasetCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    lora_type: str = "sdxl"
+    trigger_token: str | None = Field(default=None, max_length=64)
+    workflow: str | None = None
+    notes: str | None = Field(default=None, max_length=600)
+
+
+class CreatorLabSelectionRequest(BaseModel):
+    active_dataset_id: str | None = None
+    active_lora_type: str | None = None
+    active_workflow: str | None = None
+
+
+class CreatorWorkflowNode(BaseModel):
+    id: str
+    type: str
+    title: str | None = None
+    summary: str | None = None
+
+
+class CreatorWorkflowGraph(BaseModel):
+    id: str
+    label: str
+    nodes: list[CreatorWorkflowNode] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreatorVlmCritiqueRequest(BaseModel):
+    prompt: str = Field(default="", max_length=4000)
+    question: str | None = Field(default=None, max_length=1000)
+    image_url: str | None = None
+    dataset_id: str | None = None
+    image_id: str | None = None
+
+
+class CreatorVlmCritique(BaseModel):
+    status: Literal["ok", "error", "unavailable"] = "ok"
+    score: int | None = None
+    matches: bool | None = None
+    verdict: str | None = None
+    notes: str | None = None
+    suggestions: list[str] = Field(default_factory=list)
+    model_id: str | None = None
+
+
+class CreatorTrainingConfig(BaseModel):
+    dataset_id: str
+    lora_name: str | None = Field(default=None, max_length=80)
+    base_model: str | None = None
+    steps: int = Field(default=1600, ge=100, le=20000)
+    resolution: int = Field(default=1024, ge=512, le=1536)
+    network_dim: int = Field(default=16, ge=4, le=128)
+    learning_rate: float = Field(default=1e-4, gt=0, le=1e-2)
+    gpu_ids: list[int] = Field(default_factory=list)
+
+
+class CreatorTrainingJob(BaseModel):
+    id: str
+    dataset_id: str
+    status: Literal["queued", "preparing", "running", "completed", "failed", "cancelled"] = "queued"
+    progress: float = 0.0
+    current_step: int = 0
+    total_steps: int = 0
+    gpu_ids: list[int] = Field(default_factory=list)
+    lora_name: str | None = None
+    output_path: str | None = None
+    log_tail: list[str] = Field(default_factory=list)
+    detail: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+
 class MediaSystemStatus(BaseModel):
     service: str = "media"
     comfyui: ComfyUIStatus

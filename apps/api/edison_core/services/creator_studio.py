@@ -29,6 +29,33 @@ CREATOR_GUARDRAILS = [
     "No minors or youth-coded creator content",
 ]
 
+# Canonical content-safety term lists. These protect against CSAM / NCII and
+# non-consensual likeness datasets and must not be relaxed.
+EXPLICIT_TERMS = {
+    "onlyfans", "nude", "naked", "porn", "porno", "sex", "sexual", "explicit",
+    "blowjob", "handjob", "masturbat", "orgasm", "penetrat", "genital", "vagina",
+    "penis", "breasts exposed", "topless", "nsfw",
+}
+MINOR_TERMS = {
+    "teen", "minor", "underage", "schoolgirl", "school boy", "schoolboy",
+    "child", "kid", "young-looking", "preteen", "loli", "shota",
+}
+REAL_PERSON_TERMS = {
+    "celebrity", "real person", "looks like", "deepfake", "impersonate",
+}
+
+
+def creator_guard_reason(text: str) -> str | None:
+    """Return a refusal reason if the text violates Creator Studio content safety, else None."""
+    lowered = (text or "").lower()
+    if any(term in lowered for term in EXPLICIT_TERMS):
+        return "Creator Studio supports safe virtual creator content only: non-nude, non-explicit personas."
+    if any(term in lowered for term in MINOR_TERMS):
+        return "Creator Studio only supports fictional adult personas and blocks minor or youth-coded content."
+    if any(term in lowered for term in REAL_PERSON_TERMS):
+        return "Creator Studio cannot use real-person likenesses, celebrity impersonations, or deepfakes."
+    return None
+
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 SAFE_DATASET_NAMES = {"sfw", "training_ready", "datasets"}

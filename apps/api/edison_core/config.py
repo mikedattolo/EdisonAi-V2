@@ -36,6 +36,7 @@ class EdisonSettings(BaseModel):
     modly_base_url: str | None = None
     modly_timeout_seconds: float = 2.0
     creator_studio_source_path: Path | None = PROJECT_ROOT / "vendor" / "pixelai_creator_studio"
+    creator_lab_root: Path = PROJECT_ROOT / "data" / "creator_lab"
     workflow_root: Path = PROJECT_ROOT / "workflows"
     integration_discovery_path: Path = PROJECT_ROOT / "config" / "integration-discovery.local.json"
     runtime_settings_path: Path = PROJECT_ROOT / "config" / "runtime-settings.local.json"
@@ -63,6 +64,16 @@ def load_settings(config_path: str | Path | None = None) -> EdisonSettings:
     hardware = raw.get("hardware", {})
     security = raw.get("security", {})
 
+    artifact_root_value = _resolve_path(
+        os.getenv("EDISON_ARTIFACT_ROOT", storage.get("artifact_root", "artifacts"))
+    )
+    creator_lab_default = os.getenv("EDISON_CREATOR_LAB_ROOT") or media.get("creator_lab_root")
+    creator_lab_value = (
+        _resolve_path(creator_lab_default)
+        if creator_lab_default
+        else artifact_root_value.parent / "creator_lab"
+    )
+
     settings = EdisonSettings(
         app_name=os.getenv("EDISON_APP_NAME", app.get("name", "EDISON V2")),
         environment=os.getenv("EDISON_ENVIRONMENT", app.get("environment", "local")),
@@ -73,9 +84,8 @@ def load_settings(config_path: str | Path | None = None) -> EdisonSettings:
         database_path=_resolve_path(
             os.getenv("EDISON_DATABASE_PATH", storage.get("database_path", "data/edison.sqlite3"))
         ),
-        artifact_root=_resolve_path(
-            os.getenv("EDISON_ARTIFACT_ROOT", storage.get("artifact_root", "artifacts"))
-        ),
+        artifact_root=artifact_root_value,
+        creator_lab_root=creator_lab_value,
         log_root=_resolve_path(os.getenv("EDISON_LOG_ROOT", storage.get("log_root", "logs"))),
         project_root=_resolve_path(os.getenv("EDISON_PROJECT_ROOT", storage.get("project_root", "projects"))),
         model_registry_path=_resolve_path(

@@ -30,6 +30,11 @@ import type {
   OrganizerStatus,
   ChatImportSource,
   CreatorStudioAssistResponse,
+  CreatorLabOverview,
+  CreatorLabDataset,
+  CreatorWorkflowGraph,
+  CreatorVlmCritique,
+  CreatorTrainingJob,
   EdisonServiceRestartResult,
   WorkspaceAgentControlResult,
   WorkspaceAgentStartPayload,
@@ -273,6 +278,90 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getCreatorLabOverview: () => request<CreatorLabOverview>('/api/v1/creator-lab/overview'),
+  getCreatorDataset: (datasetId: string) => request<CreatorLabDataset>(`/api/v1/creator-lab/datasets/${datasetId}`),
+  createCreatorDataset: (payload: {
+    name: string;
+    lora_type?: string;
+    trigger_token?: string | null;
+    workflow?: string | null;
+    notes?: string | null;
+  }) =>
+    request<CreatorLabDataset>('/api/v1/creator-lab/datasets', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteCreatorDataset: async (datasetId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/creator-lab/datasets/${datasetId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+    return response.json();
+  },
+  uploadCreatorImages: async (datasetId: string, files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append('files', file));
+    const response = await fetch(`${API_BASE}/api/v1/creator-lab/datasets/${datasetId}/images`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Upload failed with ${response.status}`);
+    }
+    return (await response.json()) as CreatorLabDataset;
+  },
+  deleteCreatorImage: async (datasetId: string, imageId: string) => {
+    const response = await fetch(
+      `${API_BASE}/api/v1/creator-lab/datasets/${datasetId}/images/${encodeURIComponent(imageId)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+    return (await response.json()) as CreatorLabDataset;
+  },
+  creatorImageUrl: (datasetId: string, imageId: string) =>
+    `${API_BASE}/api/v1/creator-lab/datasets/${datasetId}/images/${encodeURIComponent(imageId)}`,
+  setCreatorSelection: (payload: {
+    active_dataset_id?: string | null;
+    active_lora_type?: string | null;
+    active_workflow?: string | null;
+  }) =>
+    request<CreatorLabOverview>('/api/v1/creator-lab/selection', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getCreatorWorkflowGraph: (workflowId: string) =>
+    request<CreatorWorkflowGraph>(`/api/v1/creator-lab/workflows/${workflowId}/graph`),
+  creatorVlmCritique: (payload: {
+    prompt?: string;
+    question?: string | null;
+    image_url?: string | null;
+    dataset_id?: string | null;
+    image_id?: string | null;
+  }) =>
+    request<CreatorVlmCritique>('/api/v1/creator-lab/vlm-critique', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  startCreatorTraining: (payload: {
+    dataset_id: string;
+    lora_name?: string | null;
+    base_model?: string | null;
+    steps?: number;
+    resolution?: number;
+    network_dim?: number;
+    learning_rate?: number;
+    gpu_ids?: number[];
+  }) =>
+    request<CreatorTrainingJob>('/api/v1/creator-lab/training/start', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listCreatorTrainingJobs: () => request<CreatorTrainingJob[]>('/api/v1/creator-lab/training/jobs'),
+  getCreatorTrainingJob: (jobId: string) => request<CreatorTrainingJob>(`/api/v1/creator-lab/training/jobs/${jobId}`),
+  cancelCreatorTraining: (jobId: string) =>
+    request<CreatorTrainingJob>(`/api/v1/creator-lab/training/jobs/${jobId}/cancel`, { method: 'POST' }),
   listMediaModes: () => request<MediaGenerationModeRecord[]>('/api/v1/media/modes'),
   getToyBoxStatus: () => request<ToyBoxManagerStatus>('/api/v1/toybox/status'),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),

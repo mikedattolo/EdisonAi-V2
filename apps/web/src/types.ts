@@ -784,6 +784,111 @@ export interface CreatorStudioAssistResponse {
   guardrails: string[];
 }
 
+export interface CreatorLabImage {
+  id: string;
+  filename: string;
+  url: string;
+  size_bytes?: number | null;
+  width?: number | null;
+  height?: number | null;
+  caption?: string | null;
+}
+
+export interface CreatorLabDataset {
+  id: string;
+  name: string;
+  trigger_token: string;
+  lora_type: string;
+  base_model?: string | null;
+  workflow?: string | null;
+  notes?: string | null;
+  status: 'empty' | 'ready';
+  image_count: number;
+  created_at?: string | null;
+  images: CreatorLabImage[];
+}
+
+export interface CreatorLabLoraType {
+  id: string;
+  label: string;
+  base: string;
+  available: boolean;
+  detail?: string | null;
+}
+
+export interface CreatorLabWorkflow {
+  id: string;
+  label: string;
+  kind: 'image' | 'video';
+  builtin: boolean;
+  node_count: number;
+  detail?: string | null;
+}
+
+export interface CreatorLabGpu {
+  index: number;
+  name: string;
+  memory_total_mb?: number | null;
+  memory_used_mb?: number | null;
+  utilization?: number | null;
+  temperature?: number | null;
+}
+
+export interface CreatorLabOverview {
+  status: 'ready';
+  root_path?: string | null;
+  datasets: CreatorLabDataset[];
+  lora_types: CreatorLabLoraType[];
+  workflows: CreatorLabWorkflow[];
+  gpus: CreatorLabGpu[];
+  active_dataset_id?: string | null;
+  active_lora_type?: string | null;
+  active_workflow?: string | null;
+  training_available: boolean;
+  guardrails: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface CreatorWorkflowNode {
+  id: string;
+  type: string;
+  title?: string | null;
+  summary?: string | null;
+}
+
+export interface CreatorWorkflowGraph {
+  id: string;
+  label: string;
+  nodes: CreatorWorkflowNode[];
+  raw: Record<string, unknown>;
+}
+
+export interface CreatorVlmCritique {
+  status: 'ok' | 'error' | 'unavailable';
+  score?: number | null;
+  matches?: boolean | null;
+  verdict?: string | null;
+  notes?: string | null;
+  suggestions: string[];
+  model_id?: string | null;
+}
+
+export interface CreatorTrainingJob {
+  id: string;
+  dataset_id: string;
+  status: 'queued' | 'preparing' | 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  current_step: number;
+  total_steps: number;
+  gpu_ids: number[];
+  lora_name?: string | null;
+  output_path?: string | null;
+  log_tail: string[];
+  detail?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
 export interface WorkspaceAgentStartPayload {
   task: string;
   root_id?: string;

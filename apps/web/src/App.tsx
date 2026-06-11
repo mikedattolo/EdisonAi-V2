@@ -37,10 +37,11 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
+import './creator-lab.css';
 import { edisonApi } from './api';
 import type {
   AgentChangedFile,
@@ -52,6 +53,11 @@ import type {
   ChatMode,
   ConversationRecord,
   CreatorStudioAssistAction,
+  CreatorLabOverview,
+  CreatorLabDataset,
+  CreatorWorkflowGraph,
+  CreatorVlmCritique,
+  CreatorTrainingJob,
   ConversationWithMessages,
   CameraFrameAnalysisResponse,
   CameraVisionStatus,
@@ -3083,6 +3089,423 @@ function FeatureView({ icon: Icon, title, items }: { icon: IconType; title: stri
   );
 }
 
+function CreatorLabPanel({
+  creatorArtifacts,
+  lastPrompt,
+}: {
+  creatorArtifacts: ArtifactRecord[];
+  lastPrompt: string;
+}) {
+  const [overview, setOverview] = useState<CreatorLabOverview | null>(null);
+  const [activeDataset, setActiveDataset] = useState<CreatorLabDataset | null>(null);
+  const [graph, setGraph] = useState<CreatorWorkflowGraph | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newLora, setNewLora] = useState('sdxl');
+  const [reviewPrompt, setReviewPrompt] = useState('');
+  const [reviewImageId, setReviewImageId] = useState('');
+  const [critique, setCritique] = useState<CreatorVlmCritique | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [autoReview, setAutoReview] = useState<CreatorVlmCritique | null>(null);
+  const [trainSteps, setTrainSteps] = useState(1600);
+  const [trainDim, setTrainDim] = useState(16);
+  const [trainGpus, setTrainGpus] = useState<number[]>([]);
+  const [jobs, setJobs] = useState<CreatorTrainingJob[]>([]);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const lastReviewedRef = useRef<string>('');
+
+  const loadOverview = useCallback(async () => {
+    try {
+      const data = await edisonApi.getCreatorLabOverview();
+      setOverview(data);
+      setError(null);
+      if (data.active_dataset_id) {
+        const dataset = await edisonApi.getCreatorDataset(data.active_dataset_id).catch(() => null);
+        setActiveDataset(dataset);
+      } else {
+        setActiveDataset(null);
+      }
+      const workflowId = data.active_workflow ?? data.workflows[0]?.id;
+      if (workflowId) {
+        const wf = await edisonApi.getCreatorWorkflowGraph(workflowId).catch(() => null);
+        setGraph(wf);
+      }
+      if (!trainGpus.length && data.gpus.length) {
+        const best = [...data.gpus].sort(
+          (a, b) => (b.memory_total_mb ?? 0) - (b.memory_used_mb ?? 0) - ((a.memory_total_mb ?? 0) - (a.memory_used_mb ?? 0)),
+        )[0];
+        setTrainGpus(best ? [best.index] : [data.gpus[0].index]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load Creator Lab.');
+    }
+  }, [trainGpus.length]);
+
+  useEffect(() => {
+    void loadOverview();
+  }, [loadOverview]);
+
+  // Poll training jobs while any are active.
+  useEffect(() => {
+    let timer: number | undefined;
+    const tick = async () => {
+      const list = await edisonApi.listCreatorTrainingJobs().catch(() => [] as CreatorTrainingJob[]);
+      setJobs(list);
+      if (list.some((job) => job.status === 'running' || job.status === 'preparing' || job.status === 'queued')) {
+        timer = window.setTimeout(() => void tick(), 5000);
+      }
+    };
+    void tick();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [overview?.root_path]);
+
+  // Auto-review the newest creator render against the prompt (user opted in).
+  useEffect(() => {
+    const latest = creatorArtifacts.find((art) => art.kind === 'image' || (art.mime_type ?? '').startsWith('image'));
+    if (!latest || latest.id === lastReviewedRef.current) {
+      return;
+    }
+    lastReviewedRef.current = latest.id;
+    const target = latest.path || edisonApi.artifactDownloadUrl(latest.id);
+    void edisonApi
+      .creatorVlmCritique({ image_url: target, prompt: lastPrompt || String(latest.metadata?.prompt ?? '') })
+      .then((result) => setAutoReview(result))
+      .catch(() => undefined);
+  }, [creatorArtifacts, lastPrompt]);
+
+  async function selectLora(id: string) {
+    setOverview((cur) => (cur ? { ...cur, active_lora_type: id } : cur));
+    await edisonApi.setCreatorSelection({ active_lora_type: id }).catch(() => undefined);
+  }
+  async function selectWorkflow(id: string) {
+    setOverview((cur) => (cur ? { ...cur, active_workflow: id } : cur));
+    const wf = await edisonApi.getCreatorWorkflowGraph(id).catch(() => null);
+    setGraph(wf);
+    await edisonApi.setCreatorSelection({ active_workflow: id }).catch(() => undefined);
+  }
+  async function selectDataset(id: string) {
+    setBusy(true);
+    await edisonApi.setCreatorSelection({ active_dataset_id: id }).catch(() => undefined);
+    const dataset = await edisonApi.getCreatorDataset(id).catch(() => null);
+    setActiveDataset(dataset);
+    setReviewImageId(dataset?.images[0]?.id ?? '');
+    setOverview((cur) => (cur ? { ...cur, active_dataset_id: id } : cur));
+    setBusy(false);
+  }
+  async function createDataset() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const dataset = await edisonApi.createCreatorDataset({ name, lora_type: newLora });
+      setNewName('');
+      await loadOverview();
+      await selectDataset(dataset.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create dataset.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function importPhotos(files: FileList | null) {
+    if (!files || !files.length || !activeDataset) return;
+    setBusy(true);
+    try {
+      const updated = await edisonApi.uploadCreatorImages(activeDataset.id, Array.from(files));
+      setActiveDataset(updated);
+      if (!reviewImageId && updated.images[0]) setReviewImageId(updated.images[0].id);
+      await loadOverview();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+  async function removeImage(imageId: string) {
+    if (!activeDataset) return;
+    const updated = await edisonApi.deleteCreatorImage(activeDataset.id, imageId).catch(() => null);
+    if (updated) setActiveDataset(updated);
+  }
+  async function removeDataset() {
+    if (!activeDataset) return;
+    await edisonApi.deleteCreatorDataset(activeDataset.id).catch(() => undefined);
+    setActiveDataset(null);
+    await loadOverview();
+  }
+  async function runReview() {
+    if (!activeDataset || !reviewImageId) return;
+    setReviewing(true);
+    setCritique(null);
+    try {
+      const result = await edisonApi.creatorVlmCritique({
+        dataset_id: activeDataset.id,
+        image_id: reviewImageId,
+        prompt: reviewPrompt.trim() || `${activeDataset.trigger_token} persona reference`,
+      });
+      setCritique(result);
+    } catch (err) {
+      setCritique({ status: 'error', notes: err instanceof Error ? err.message : 'Review failed.', suggestions: [] });
+    } finally {
+      setReviewing(false);
+    }
+  }
+  function toggleTrainGpu(index: number) {
+    setTrainGpus((cur) => (cur.includes(index) ? cur.filter((g) => g !== index) : [...cur, index]));
+  }
+  async function startTraining() {
+    if (!activeDataset || !activeDataset.image_count) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await edisonApi.startCreatorTraining({
+        dataset_id: activeDataset.id,
+        steps: trainSteps,
+        network_dim: trainDim,
+        gpu_ids: trainGpus,
+      });
+      const list = await edisonApi.listCreatorTrainingJobs().catch(() => [] as CreatorTrainingJob[]);
+      setJobs(list);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start training.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function cancelTraining(jobId: string) {
+    await edisonApi.cancelCreatorTraining(jobId).catch(() => undefined);
+    const list = await edisonApi.listCreatorTrainingJobs().catch(() => [] as CreatorTrainingJob[]);
+    setJobs(list);
+  }
+
+  if (!overview) {
+    return (
+      <section className="creator-lab-panel" aria-label="Creator Lab">
+        <div className="section-heading"><Box size={18} /><h3>Creator Lab</h3></div>
+        <div className="empty-line">{error ?? 'Loading datasets, LoRA types, and GPUs...'}</div>
+      </section>
+    );
+  }
+
+  const datasets = overview.datasets;
+  const activeLora = overview.active_lora_type ?? 'sdxl';
+  const activeWorkflow = overview.active_workflow ?? overview.workflows[0]?.id;
+  const datasetReady = (activeDataset?.image_count ?? 0) > 0;
+
+  return (
+    <section className="creator-lab-panel" aria-label="Creator Lab">
+      <div className="section-heading">
+        <Box size={18} />
+        <h3>Creator Lab — Datasets, LoRA &amp; Training</h3>
+        <button className="secondary-button icon-text-button" onClick={() => void loadOverview()} type="button">
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+      {error && <div className="memory-inline-result error">{error}</div>}
+
+      {/* GPU strip */}
+      <div className="creator-gpu-strip">
+        {overview.gpus.map((gpu) => {
+          const used = gpu.memory_used_mb ?? 0;
+          const total = gpu.memory_total_mb ?? 1;
+          const pct = Math.min(100, Math.round((used / total) * 100));
+          return (
+            <article className="creator-gpu-card" key={gpu.index}>
+              <div className="creator-gpu-head"><Cpu size={14} /> GPU {gpu.index} · {gpu.name.replace('NVIDIA GeForce ', '')}</div>
+              <div className="creator-gpu-bar"><span style={{ width: `${pct}%` }} /></div>
+              <small>{Math.round(used / 1024)}/{Math.round(total / 1024)} GB · {gpu.utilization ?? 0}% · {gpu.temperature ?? '–'}°C</small>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="creator-lab-grid">
+        {/* Left: toggles + datasets */}
+        <div className="creator-lab-col">
+          <div className="creator-toggle-block">
+            <span className="section-label"><SlidersHorizontal size={13} /> LoRA model type</span>
+            <div className="creator-mode-tabs">
+              {overview.lora_types.map((lora) => (
+                <button
+                  className={activeLora === lora.id ? 'mode-button active' : 'mode-button'}
+                  disabled={!lora.available}
+                  key={lora.id}
+                  onClick={() => void selectLora(lora.id)}
+                  title={lora.detail ?? undefined}
+                  type="button"
+                >
+                  {lora.label}{!lora.available && ' ·needs model'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="creator-toggle-block">
+            <span className="section-label"><Waypoints size={13} /> Workflow</span>
+            <div className="creator-mode-tabs">
+              {overview.workflows.map((wf) => (
+                <button
+                  className={activeWorkflow === wf.id ? 'mode-button active' : 'mode-button'}
+                  key={wf.id}
+                  onClick={() => void selectWorkflow(wf.id)}
+                  title={wf.detail ?? undefined}
+                  type="button"
+                >
+                  {wf.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="creator-toggle-block">
+            <span className="section-label"><Database size={13} /> Datasets</span>
+            <div className="creator-dataset-chips">
+              {datasets.map((dataset) => (
+                <button
+                  className={overview.active_dataset_id === dataset.id ? 'dataset-chip active' : 'dataset-chip'}
+                  key={dataset.id}
+                  onClick={() => void selectDataset(dataset.id)}
+                  type="button"
+                >
+                  {dataset.name} <span>{dataset.image_count}</span>
+                </button>
+              ))}
+              {datasets.length === 0 && <div className="empty-line">No datasets yet — create one below.</div>}
+            </div>
+            <div className="creator-new-dataset">
+              <input onChange={(e) => setNewName(e.target.value)} placeholder="New dataset name" value={newName} />
+              <button className="secondary-button icon-text-button" disabled={!newName.trim() || busy} onClick={() => void createDataset()} type="button">
+                <Database size={14} /> Create
+              </button>
+            </div>
+          </div>
+
+          {activeDataset && (
+            <div className="creator-dataset-detail">
+              <div className="creator-dataset-detail-head">
+                <strong>{activeDataset.name}</strong>
+                <span className="assistant-model-chip">trigger: {activeDataset.trigger_token}</span>
+                <button className="icon-button" onClick={() => void removeDataset()} title="Delete dataset" type="button"><Trash2 size={14} /></button>
+              </div>
+              <div className="creator-image-grid">
+                {activeDataset.images.map((img) => (
+                  <div className="creator-image-thumb" key={img.id}>
+                    <img alt={img.filename} loading="lazy" src={`${edisonApi.apiBase}${img.url}`} />
+                    <button className="thumb-remove" onClick={() => void removeImage(img.id)} title="Remove" type="button"><X size={12} /></button>
+                  </div>
+                ))}
+                <button className="creator-image-add" disabled={busy} onClick={() => fileRef.current?.click()} type="button">
+                  <Upload size={18} /><span>Import photos</span>
+                </button>
+                <input accept="image/*" hidden multiple onChange={(e) => void importPhotos(e.target.files)} ref={fileRef} type="file" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: ComfyUI workflow side panel */}
+        <aside className="creator-workflow-side" aria-label="ComfyUI workflow">
+          <div className="section-label"><Waypoints size={13} /> ComfyUI workflow {graph ? `· ${graph.label}` : ''}</div>
+          <div className="creator-node-list">
+            {graph?.nodes.map((node, idx) => (
+              <article className="creator-node" key={node.id}>
+                <div className="creator-node-top"><span className="creator-node-idx">{idx + 1}</span><strong>{node.title}</strong></div>
+                <span className="creator-node-type">{node.type}</span>
+                {node.summary && <small>{node.summary}</small>}
+              </article>
+            ))}
+            {!graph && <div className="empty-line">Select a workflow to view its graph.</div>}
+          </div>
+        </aside>
+      </div>
+
+      {/* VLM review */}
+      <div className="creator-review-block">
+        <div className="section-heading"><Sparkles size={16} /><h3>VLM Result Review</h3><span className="assistant-model-chip">{String(overview.metadata?.vision_model ?? 'qwen2.5-VL')}</span></div>
+        <p className="assistant-intro">Renders are auto-scored against your prompt by the vision model. You can also test any dataset image here.</p>
+        {autoReview && (
+          <div className={`creator-critique ${autoReview.matches ? 'good' : 'warn'}`}>
+            <strong>Latest render · {autoReview.score ?? '–'}/100 · {autoReview.verdict ?? autoReview.status}</strong>
+            {autoReview.notes && <p>{autoReview.notes}</p>}
+            {autoReview.suggestions.length > 0 && <ul>{autoReview.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul>}
+          </div>
+        )}
+        {activeDataset && activeDataset.images.length > 0 && (
+          <div className="creator-review-controls">
+            <select onChange={(e) => setReviewImageId(e.target.value)} value={reviewImageId}>
+              {activeDataset.images.map((img) => <option key={img.id} value={img.id}>{img.filename}</option>)}
+            </select>
+            <input onChange={(e) => setReviewPrompt(e.target.value)} placeholder="What should this image show?" value={reviewPrompt} />
+            <button className="secondary-button icon-text-button" disabled={reviewing || !reviewImageId} onClick={() => void runReview()} type="button">
+              <Sparkles size={14} /> {reviewing ? 'Reviewing…' : 'Test with VLM'}
+            </button>
+          </div>
+        )}
+        {critique && (
+          <div className={`creator-critique ${critique.matches ? 'good' : 'warn'}`}>
+            <strong>{critique.score ?? '–'}/100 · {critique.verdict ?? critique.status}</strong>
+            {critique.notes && <p>{critique.notes}</p>}
+            {critique.suggestions.length > 0 && <ul>{critique.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul>}
+          </div>
+        )}
+      </div>
+
+      {/* Training */}
+      <div className="creator-training-block">
+        <div className="section-heading"><Zap size={16} /><h3>LoRA Training</h3>{!overview.training_available && <span className="backend-status offline">toolchain missing</span>}</div>
+        <p className="assistant-intro">
+          Train an SDXL LoRA on the selected dataset across your GPUs (kohya sd-scripts). The finished LoRA is published to ComfyUI automatically.
+        </p>
+        <div className="creator-train-controls">
+          <label>Steps<input min={100} max={20000} onChange={(e) => setTrainSteps(Number(e.target.value) || 1600)} type="number" value={trainSteps} /></label>
+          <label>Network dim<input min={4} max={128} onChange={(e) => setTrainDim(Number(e.target.value) || 16)} type="number" value={trainDim} /></label>
+          <div className="creator-gpu-pick">
+            <span className="section-label"><Cpu size={13} /> GPUs</span>
+            {overview.gpus.map((gpu) => (
+              <button
+                className={trainGpus.includes(gpu.index) ? 'gpu-chip active' : 'gpu-chip'}
+                key={gpu.index}
+                onClick={() => toggleTrainGpu(gpu.index)}
+                type="button"
+              >
+                {gpu.index}:{gpu.name.includes('3090') ? '3090' : gpu.name.replace('NVIDIA GeForce RTX ', '')}
+              </button>
+            ))}
+          </div>
+          <button
+            className="apply-button icon-text-button"
+            disabled={!datasetReady || !overview.training_available || busy || !trainGpus.length}
+            onClick={() => void startTraining()}
+            type="button"
+          >
+            <Zap size={15} /> Train LoRA
+          </button>
+        </div>
+        {!datasetReady && <small className="creator-train-hint">Select a dataset with images to enable training.</small>}
+        <div className="creator-job-list">
+          {jobs.map((job) => (
+            <article className={`creator-job ${job.status}`} key={job.id}>
+              <div className="creator-job-head">
+                <strong>{job.lora_name ?? job.id}</strong>
+                <span className={`backend-status ${job.status === 'completed' ? 'ready' : job.status === 'failed' ? 'offline' : 'degraded'}`}>{job.status}</span>
+              </div>
+              <div className="creator-job-bar"><span style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
+              <small>{job.current_step}/{job.total_steps} steps · GPU {job.gpu_ids.join(',')} {job.detail ? `· ${job.detail}` : ''}</small>
+              {(job.status === 'running' || job.status === 'preparing') && (
+                <button className="icon-button" onClick={() => void cancelTraining(job.id)} title="Cancel" type="button"><X size={13} /> stop</button>
+              )}
+            </article>
+          ))}
+          {jobs.length === 0 && <div className="empty-line">No training runs yet.</div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function CreatorStudioView({
   artifacts,
   isMediaBusy,
@@ -3109,6 +3532,7 @@ function CreatorStudioView({
   const [prompt, setPrompt] = useState('');
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [lastGeneratedPrompt, setLastGeneratedPrompt] = useState('');
   const [assistInput, setAssistInput] = useState('');
   const [assistThread, setAssistThread] = useState<
     Array<{ role: 'user' | 'assistant'; content: string; actions?: CreatorStudioAssistAction[] }>
@@ -3143,6 +3567,7 @@ function CreatorStudioView({
     if (!trimmedPrompt || isMediaBusy || !activeMode) {
       return;
     }
+    setLastGeneratedPrompt(trimmedPrompt);
     await onCreateGeneration(activeMode.id, trimmedPrompt, referenceFile, {
       creator_dataset_id: activeDataset?.id ?? null,
       creator_dataset_name: activeDataset?.name ?? null,
@@ -3178,6 +3603,7 @@ function CreatorStudioView({
   }
 
   async function runAssistAction(action: CreatorStudioAssistAction) {
+    setLastGeneratedPrompt(action.prompt);
     await onCreateGeneration(action.mode as MediaGenerationMode, action.prompt, null, {
       creator_dataset_id: activeDataset?.id ?? null,
       creator_dataset_name: activeDataset?.name ?? null,
@@ -3233,6 +3659,8 @@ function CreatorStudioView({
           </article>
         ))}
       </div>
+
+      <CreatorLabPanel creatorArtifacts={creatorArtifacts} lastPrompt={lastGeneratedPrompt} />
 
       <div className="creator-shell">
         <section className="creator-control-panel" aria-label="Creator generation controls">

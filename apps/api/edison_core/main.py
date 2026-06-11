@@ -8,6 +8,7 @@ from edison_core.api import (
     routes_capabilities,
     routes_chat,
     routes_conversations,
+    routes_creator_lab,
     routes_desktop_bridge,
     routes_hardware,
     routes_health,
@@ -29,7 +30,9 @@ from edison_core.services.agent_run_store import AgentRunStore
 from edison_core.services.capability_registry import CapabilityRegistry
 from edison_core.services.comfyui_client import ComfyUIClient
 from edison_core.services.conversation_store import ConversationStore
+from edison_core.services.creator_lab import CreatorLabService
 from edison_core.services.creator_studio import CreatorStudioService
+from edison_core.services.creator_training import CreatorTrainingService
 from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.generation_store import GenerationStore
 from edison_core.services.hardware_devices import HardwareDeviceService
@@ -92,6 +95,9 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
         timeout_seconds=resolved_settings.modly_timeout_seconds,
     )
     creator_studio_service = CreatorStudioService(resolved_settings)
+    creator_lab_service = CreatorLabService(resolved_settings.creator_lab_root)
+    creator_lab_service.initialize()
+    creator_training_service = CreatorTrainingService(resolved_settings.creator_lab_root)
     media_orchestrator = MediaOrchestrator(
         resolved_settings,
         comfyui_client,
@@ -149,6 +155,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.wan22_client = wan22_client
     app.state.modly_client = modly_client
     app.state.creator_studio_service = creator_studio_service
+    app.state.creator_lab_service = creator_lab_service
+    app.state.creator_training_service = creator_training_service
     app.state.media_orchestrator = media_orchestrator
     app.state.status_service = status_service
     app.state.fan_control_service = fan_control_service
@@ -177,6 +185,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.include_router(routes_workspace.router)
     app.include_router(routes_workspace_agent.router)
     app.include_router(routes_realtime.router)
+    app.include_router(routes_creator_lab.router)
     app.include_router(routes_conversations.router)
     app.include_router(routes_sessions.router)
     return app
