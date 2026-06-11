@@ -42,6 +42,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 import './creator-lab.css';
+import './code-space.css';
 import { edisonApi } from './api';
 import type {
   AgentChangedFile,
@@ -5493,12 +5494,29 @@ function CodeWorkspaceView({
   const [copilotInstruction, setCopilotInstruction] = useState('');
   const [copilotRunCommands, setCopilotRunCommands] = useState(false);
   const [customCommand, setCustomCommand] = useState('');
+  const [openTabs, setOpenTabs] = useState<WorkspaceEntry[]>([]);
   const topLanguages = Object.entries(summary?.languages ?? {}).slice(0, 3);
   const commandPreview = scan?.commands.slice(0, 6) ?? [];
   const entrypointPreview = scan?.entrypoints.slice(0, 5) ?? [];
   const configPreview = scan?.config_files.slice(0, 6) ?? [];
   const draftChanged = Boolean(file && draftContent !== file.content);
   const activeRoot = roots.find((root) => root.id === activeRootId);
+
+  // Track opened files as editor tabs (VS Code style). Clicking a tab re-opens it.
+  useEffect(() => {
+    if (!file) {
+      return;
+    }
+    setOpenTabs((tabs) =>
+      tabs.some((tab) => tab.path === file.path)
+        ? tabs
+        : [...tabs, { path: file.path, name: file.name, kind: 'file', language: file.language ?? null, size_bytes: file.size_bytes }],
+    );
+  }, [file?.path]);
+
+  function closeTab(targetPath: string) {
+    setOpenTabs((tabs) => tabs.filter((tab) => tab.path !== targetPath));
+  }
 
   async function handleCreateProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5790,6 +5808,21 @@ function CodeWorkspaceView({
         </aside>
 
         <article className="code-preview-panel" aria-label="File preview">
+          {openTabs.length > 0 && (
+            <div className="editor-tab-bar" role="tablist">
+              {openTabs.map((tab) => (
+                <div className={file?.path === tab.path ? 'editor-tab active' : 'editor-tab'} key={tab.path}>
+                  <button className="editor-tab-label" onClick={() => void onOpenEntry(tab)} title={tab.path} type="button">
+                    <FileCode2 size={13} />
+                    {tab.name}
+                  </button>
+                  <button aria-label={`Close ${tab.name}`} className="editor-tab-close" onClick={() => closeTab(tab.path)} type="button">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {file ? (
             <>
               <div className="code-preview-header">
@@ -5857,7 +5890,24 @@ function CodeWorkspaceView({
               {patchPreview.risk_flags.map((flag) => <span key={flag}>{flag.replace(/_/g, ' ')}</span>)}
             </div>
           )}
-          <pre className="diff-preview"><code>{patchPreview.diff || 'No changes'}</code></pre>
+          <pre className="diff-preview">
+            {(patchPreview.diff || 'No changes').split('\n').map((line, index) => (
+              <div
+                className={
+                  line.startsWith('+') && !line.startsWith('+++')
+                    ? 'diff-add'
+                    : line.startsWith('-') && !line.startsWith('---')
+                      ? 'diff-del'
+                      : line.startsWith('@@')
+                        ? 'diff-hunk'
+                        : undefined
+                }
+                key={index}
+              >
+                {line || ' '}
+              </div>
+            ))}
+          </pre>
         </section>
       )}
 
