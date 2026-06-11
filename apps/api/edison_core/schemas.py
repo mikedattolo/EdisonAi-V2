@@ -751,6 +751,28 @@ class ScheduledTasksStatus(BaseModel):
     tasks: list[ScheduledTaskRecord] = Field(default_factory=list)
 
 
+class VoiceCommandRequest(BaseModel):
+    transcript: str = Field(min_length=1, max_length=2000)
+    source: str = "brio"
+
+
+class VoiceEvent(BaseModel):
+    id: int
+    source: str = "brio"
+    transcript: str
+    reply: str
+    conversation_id: str | None = None
+    created_at: str
+
+
+class VoiceStatus(BaseModel):
+    listening: bool = False
+    last_heard_at: str | None = None
+    last_transcript: str | None = None
+    event_count: int = 0
+    events: list[VoiceEvent] = Field(default_factory=list)
+
+
 class WorkspaceCommand(BaseModel):
     name: str
     command: str

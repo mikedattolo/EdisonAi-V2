@@ -99,6 +99,7 @@ import type {
   WorkspaceInstallResult,
   ScheduledTaskRecord,
   ScheduledTasksStatus,
+  VoiceStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
   WorkspaceFile,
@@ -263,6 +264,9 @@ export default function App() {
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [autoStartVoice, setAutoStartVoice] = useState(false);
+  const [brioStatus, setBrioStatus] = useState<VoiceStatus | null>(null);
+  const [voiceToast, setVoiceToast] = useState<{ transcript: string; reply: string; conversationId?: string | null } | null>(null);
+  const lastVoiceIdRef = useRef<number>(-1);
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus | null>(null);
   const [models, setModels] = useState<ModelProfile[]>([]);
@@ -360,6 +364,51 @@ export default function App() {
       void refreshKnowledgeSurface();
     }
   }, [activeView]);
+
+  // Poll the on-box Brio voice listener: speak new answers + surface a toast.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    async function poll() {
+      try {
+        const status = await edisonApi.getVoiceStatus();
+        if (cancelled) return;
+        setBrioStatus(status);
+        if (lastVoiceIdRef.current < 0) {
+          lastVoiceIdRef.current = status.event_count;
+        } else {
+          const voiceEvents = await edisonApi.getVoiceEvents(lastVoiceIdRef.current);
+          if (!cancelled && voiceEvents.length) {
+            voiceEvents.forEach((event) => {
+              lastVoiceIdRef.current = Math.max(lastVoiceIdRef.current, event.id);
+            });
+            const latest = voiceEvents[voiceEvents.length - 1];
+            setVoiceToast({ transcript: latest.transcript, reply: latest.reply, conversationId: latest.conversation_id });
+            try {
+              if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(new SpeechSynthesisUtterance(stripForSpeech(latest.reply)));
+              }
+            } catch {
+              /* tts unavailable */
+            }
+          }
+        }
+      } catch {
+        /* voice api unavailable */
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), 3500);
+      }
+    }
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     writeStoredBoolean(CONTEXT_VISIBILITY_STORAGE_KEY, showWorkspaceContext);
@@ -1632,6 +1681,34 @@ export default function App() {
             <span>{wakeWordEnabled ? 'Hey Edison: On' : 'Hey Edison'}</span>
             {wakeWordEnabled && <span className="wake-word-dot" />}
           </button>
+        )}
+        {brioStatus?.listening && (
+          <div className="brio-pill" title={brioStatus.last_transcript ? `last heard: ${brioStatus.last_transcript}` : 'The Brio mic on the Edison box is listening for "hey edison"'}>
+            <Mic size={13} /> Brio mic listening
+          </div>
+        )}
+        {voiceToast && (
+          <div className="voice-toast" role="status">
+            <div className="voice-toast-head">
+              <Mic size={14} /> Heard via Brio
+              <button className="voice-toast-close" onClick={() => setVoiceToast(null)} type="button"><X size={13} /></button>
+            </div>
+            <div className="voice-toast-q">“{voiceToast.transcript}”</div>
+            <div className="voice-toast-a">{voiceToast.reply.slice(0, 240)}</div>
+            {voiceToast.conversationId && (
+              <button
+                className="voice-toast-open"
+                onClick={() => {
+                  const id = voiceToast.conversationId;
+                  setVoiceToast(null);
+                  if (id) void loadConversation(id);
+                }}
+                type="button"
+              >
+                Open chat
+              </button>
+            )}
+          </div>
         )}
 
         <nav className="nav-stack">

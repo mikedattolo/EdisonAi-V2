@@ -639,6 +639,23 @@ export interface ScheduledTasksStatus {
   tasks: ScheduledTaskRecord[];
 }
 
+export interface VoiceEvent {
+  id: number;
+  source: string;
+  transcript: string;
+  reply: string;
+  conversation_id?: string | null;
+  created_at: string;
+}
+
+export interface VoiceStatus {
+  listening: boolean;
+  last_heard_at?: string | null;
+  last_transcript?: string | null;
+  event_count: number;
+  events: VoiceEvent[];
+}
+
 export interface WorkspaceCommand {
   name: string;
   command: string;

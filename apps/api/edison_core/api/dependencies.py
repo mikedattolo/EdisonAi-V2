@@ -24,6 +24,7 @@ from edison_core.services.runtime_settings import RuntimeSettingsStore
 from edison_core.services.scheduled_task_store import ScheduledTaskStore
 from edison_core.services.scheduler_service import SchedulerService
 from edison_core.services.session_state import SessionStateStore
+from edison_core.services.voice_bridge import VoiceBridgeService
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
@@ -131,6 +132,10 @@ def get_scheduled_task_store(request: Request) -> ScheduledTaskStore:
 
 def get_scheduler_service(request: Request) -> SchedulerService:
     return request.app.state.scheduler_service
+
+
+def get_voice_bridge_service(request: Request) -> VoiceBridgeService:
+    return request.app.state.voice_bridge_service
 
 
 def get_media_orchestrator(request: Request) -> MediaOrchestrator:

@@ -1,0 +1,17 @@
+[Unit]
+Description=Edison Brio voice listener (hey edison wake word)
+After=network.target
+
+[Service]
+Type=simple
+User=mike
+SupplementaryGroups=audio
+Environment=EDISON_API=http://127.0.0.1:8000
+Environment=BRIO_ALSA=plughw:CARD=BRIO
+WorkingDirectory=/srv/edison-data/voice
+ExecStart=/srv/edison-data/voice/.venv/bin/python /srv/edison-data/voice/brio_listener.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

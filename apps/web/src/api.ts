@@ -54,6 +54,8 @@ import type {
   WorkspaceInstallResult,
   ScheduledTaskRecord,
   ScheduledTasksStatus,
+  VoiceEvent,
+  VoiceStatus,
   WorkspaceCopilotTaskRequest,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -566,6 +568,8 @@ export const edisonApi = {
     }
     return response.json();
   },
+  getVoiceStatus: () => request<VoiceStatus>('/api/v1/voice/status'),
+  getVoiceEvents: (after = 0) => request<VoiceEvent[]>(withQuery('/api/v1/voice/events', { after })),
   getRealtimeContext: (latitude?: number, longitude?: number) =>
     request<RealtimeContext>(withQuery('/api/v1/realtime/context', { latitude, longitude })),
   importKnowledgeChatExport: async (files: File[], source: ChatImportSource = 'auto') => {
