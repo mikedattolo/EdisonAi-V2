@@ -52,6 +52,8 @@ import type {
   ToyBoxManagerStatus,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
+  ScheduledTaskRecord,
+  ScheduledTasksStatus,
   WorkspaceCopilotTaskRequest,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -543,6 +545,27 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  listScheduledTasks: () => request<ScheduledTasksStatus>('/api/v1/scheduler/tasks'),
+  createScheduledTask: (payload: {
+    title: string;
+    prompt: string;
+    schedule_kind: 'daily' | 'interval';
+    time_of_day?: string;
+    interval_minutes?: number;
+    enabled?: boolean;
+    include_briefing?: boolean;
+  }) => request<ScheduledTaskRecord>('/api/v1/scheduler/tasks', { method: 'POST', body: JSON.stringify(payload) }),
+  updateScheduledTask: (taskId: string, payload: Partial<{ enabled: boolean; title: string; prompt: string; schedule_kind: 'daily' | 'interval'; time_of_day: string; interval_minutes: number; include_briefing: boolean }>) =>
+    request<ScheduledTaskRecord>(`/api/v1/scheduler/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  runScheduledTask: (taskId: string) =>
+    request<ScheduledTaskRecord>(`/api/v1/scheduler/tasks/${taskId}/run`, { method: 'POST' }),
+  deleteScheduledTask: async (taskId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/scheduler/tasks/${taskId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+    return response.json();
+  },
   getRealtimeContext: (latitude?: number, longitude?: number) =>
     request<RealtimeContext>(withQuery('/api/v1/realtime/context', { latitude, longitude })),
   importKnowledgeChatExport: async (files: File[], source: ChatImportSource = 'auto') => {

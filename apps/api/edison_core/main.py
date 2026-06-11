@@ -23,6 +23,7 @@ from edison_core.api import (
     routes_workspace,
     routes_workspace_agent,
     routes_realtime,
+    routes_scheduler,
 )
 from edison_core.config import EdisonSettings, load_settings
 from edison_core.database import SQLiteDatabase
@@ -50,6 +51,8 @@ from edison_core.services.system_status import GPUFanControlService, SystemStatu
 from edison_core.services.toybox_store import ToyBoxStore
 from edison_core.services.wan22_client import Wan22Client
 from edison_core.services.realtime import RealtimeService
+from edison_core.services.scheduled_task_store import ScheduledTaskStore
+from edison_core.services.scheduler_service import SchedulerService
 from edison_core.services.workspace_agent import AgentRunCoordinator, WorkspaceAgent
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
@@ -114,6 +117,9 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     agent_run_coordinator = AgentRunCoordinator()
     workspace_agent = WorkspaceAgent(model_gateway, agent_run_store, agent_run_coordinator, knowledge_store)
     realtime_service = RealtimeService()
+    scheduled_task_store = ScheduledTaskStore(database)
+    scheduled_task_store.initialize()
+    scheduler_service = SchedulerService(scheduled_task_store, model_gateway, realtime_service)
     capability_registry = CapabilityRegistry(
         resolved_settings,
         hardware_device_service,
@@ -167,6 +173,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.agent_run_coordinator = agent_run_coordinator
     app.state.workspace_agent = workspace_agent
     app.state.realtime_service = realtime_service
+    app.state.scheduled_task_store = scheduled_task_store
+    app.state.scheduler_service = scheduler_service
     app.state.capability_registry = capability_registry
 
     app.include_router(routes_health.router)
@@ -185,7 +193,13 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.include_router(routes_workspace.router)
     app.include_router(routes_workspace_agent.router)
     app.include_router(routes_realtime.router)
+    app.include_router(routes_scheduler.router)
     app.include_router(routes_creator_lab.router)
     app.include_router(routes_conversations.router)
     app.include_router(routes_sessions.router)
+
+    @app.on_event("startup")
+    async def _start_scheduler() -> None:  # pragma: no cover - background loop
+        scheduler_service.start()
+
     return app

@@ -710,6 +710,47 @@ class WorkspaceInstallResult(BaseModel):
     output_truncated: bool = False
 
 
+class ScheduledTaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    prompt: str = Field(min_length=1, max_length=4000)
+    schedule_kind: Literal["daily", "interval"] = "daily"
+    time_of_day: str = "08:00"
+    interval_minutes: int = Field(default=60, ge=5, le=10080)
+    enabled: bool = True
+    include_briefing: bool = False
+
+
+class ScheduledTaskUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=160)
+    prompt: str | None = Field(default=None, max_length=4000)
+    schedule_kind: Literal["daily", "interval"] | None = None
+    time_of_day: str | None = None
+    interval_minutes: int | None = Field(default=None, ge=5, le=10080)
+    enabled: bool | None = None
+    include_briefing: bool | None = None
+
+
+class ScheduledTaskRecord(BaseModel):
+    id: str
+    title: str
+    prompt: str
+    schedule_kind: Literal["daily", "interval"] = "daily"
+    time_of_day: str = "08:00"
+    interval_minutes: int = 60
+    enabled: bool = True
+    include_briefing: bool = False
+    last_run_at: str | None = None
+    last_status: str | None = None
+    last_result: str | None = None
+    next_run_at: str | None = None
+    created_at: str
+
+
+class ScheduledTasksStatus(BaseModel):
+    server_time: str
+    tasks: list[ScheduledTaskRecord] = Field(default_factory=list)
+
+
 class WorkspaceCommand(BaseModel):
     name: str
     command: str

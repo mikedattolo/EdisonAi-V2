@@ -618,6 +618,27 @@ export interface WorkspaceInstallResult {
   output_truncated: boolean;
 }
 
+export interface ScheduledTaskRecord {
+  id: string;
+  title: string;
+  prompt: string;
+  schedule_kind: 'daily' | 'interval';
+  time_of_day: string;
+  interval_minutes: number;
+  enabled: boolean;
+  include_briefing: boolean;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  last_result?: string | null;
+  next_run_at?: string | null;
+  created_at: string;
+}
+
+export interface ScheduledTasksStatus {
+  server_time: string;
+  tasks: ScheduledTaskRecord[];
+}
+
 export interface WorkspaceCommand {
   name: string;
   command: string;

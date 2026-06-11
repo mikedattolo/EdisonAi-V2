@@ -21,6 +21,8 @@ from edison_core.services.knowledge_store import KnowledgeStore
 from edison_core.services.model_registry import ModelRegistry, ModelRouter
 from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.runtime_settings import RuntimeSettingsStore
+from edison_core.services.scheduled_task_store import ScheduledTaskStore
+from edison_core.services.scheduler_service import SchedulerService
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.toybox_store import ToyBoxStore
@@ -121,6 +123,14 @@ def get_creator_lab_service(request: Request) -> CreatorLabService:
 
 def get_creator_training_service(request: Request) -> CreatorTrainingService:
     return request.app.state.creator_training_service
+
+
+def get_scheduled_task_store(request: Request) -> ScheduledTaskStore:
+    return request.app.state.scheduled_task_store
+
+
+def get_scheduler_service(request: Request) -> SchedulerService:
+    return request.app.state.scheduler_service
 
 
 def get_media_orchestrator(request: Request) -> MediaOrchestrator:

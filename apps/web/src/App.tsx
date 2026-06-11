@@ -46,6 +46,7 @@ import Editor from '@monaco-editor/react';
 import './creator-lab.css';
 import './code-space.css';
 import './voice.css';
+import './scheduled.css';
 import { edisonApi } from './api';
 import type {
   AgentChangedFile,
@@ -96,6 +97,8 @@ import type {
   WorkspaceCommand,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
+  ScheduledTaskRecord,
+  ScheduledTasksStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
   WorkspaceFile,
@@ -123,6 +126,7 @@ type ViewId =
   | 'creator'
   | 'gallery'
   | 'memory'
+  | 'scheduled'
   | 'system'
   | 'settings';
 type IconType = typeof MessageSquare;
@@ -165,6 +169,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'creator', label: 'Creator', icon: Sparkles },
   { id: 'gallery', label: 'Gallery', icon: Image },
   { id: 'memory', label: 'Memory', icon: Brain },
+  { id: 'scheduled', label: 'Scheduled', icon: CalendarDays },
   { id: 'system', label: 'System', icon: Server },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -3282,6 +3287,9 @@ function WorkbenchView({
       />
     );
   }
+  if (activeView === 'scheduled') {
+    return <ScheduledView />;
+  }
   if (activeView === 'memory') {
     return (
       <MemoryView
@@ -6156,6 +6164,158 @@ function CodeWorkspaceView({
         </div>
       </div>
 
+    </section>
+  );
+}
+
+function ScheduledView() {
+  const [status, setStatus] = useState<ScheduledTasksStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [kind, setKind] = useState<'daily' | 'interval'>('daily');
+  const [timeOfDay, setTimeOfDay] = useState('08:00');
+  const [intervalMinutes, setIntervalMinutes] = useState(60);
+  const [includeBriefing, setIncludeBriefing] = useState(false);
+  const [runningId, setRunningId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setStatus(await edisonApi.listScheduledTasks());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load scheduled tasks.');
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function create() {
+    if (!title.trim() || !prompt.trim()) return;
+    setBusy(true);
+    try {
+      await edisonApi.createScheduledTask({
+        title: title.trim(),
+        prompt: prompt.trim(),
+        schedule_kind: kind,
+        time_of_day: timeOfDay,
+        interval_minutes: intervalMinutes,
+        include_briefing: includeBriefing,
+      });
+      setTitle('');
+      setPrompt('');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create task.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function runNow(id: string) {
+    setRunningId(id);
+    try {
+      await edisonApi.runScheduledTask(id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Run failed.');
+    } finally {
+      setRunningId(null);
+    }
+  }
+  async function toggle(task: ScheduledTaskRecord) {
+    await edisonApi.updateScheduledTask(task.id, { enabled: !task.enabled }).catch(() => undefined);
+    await load();
+  }
+  async function remove(id: string) {
+    await edisonApi.deleteScheduledTask(id).catch(() => undefined);
+    await load();
+  }
+
+  const tasks = status?.tasks ?? [];
+  const serverTime = status?.server_time ? new Date(status.server_time).toLocaleString() : '—';
+
+  return (
+    <section className="workbench-view scheduled-view" aria-label="Scheduled agents">
+      <div className="view-heading">
+        <CalendarDays size={26} />
+        <h3>Scheduled Agents</h3>
+        <button className="secondary-button icon-text-button" onClick={() => void load()} type="button">
+          <RefreshCw size={16} /> Refresh
+        </button>
+      </div>
+      <p className="assistant-intro">
+        Edison runs these prompts automatically on a schedule (server time: {serverTime}). Enable “include live context”
+        for briefings to inject the current time + weather.
+      </p>
+      {error && <div className="memory-inline-result error">{error}</div>}
+
+      <section className="scheduled-create">
+        <div className="section-heading"><CalendarDays size={18} /><h3>New scheduled task</h3></div>
+        <input onChange={(event) => setTitle(event.target.value)} placeholder="Title — e.g. Morning briefing" value={title} />
+        <textarea
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder="What should Edison do? e.g. Give me a short morning briefing with the weather and three priorities for today."
+          rows={3}
+          value={prompt}
+        />
+        <div className="scheduled-create-row">
+          <label>
+            Schedule
+            <select onChange={(event) => setKind(event.target.value as 'daily' | 'interval')} value={kind}>
+              <option value="daily">Daily at</option>
+              <option value="interval">Every</option>
+            </select>
+          </label>
+          {kind === 'daily' ? (
+            <input onChange={(event) => setTimeOfDay(event.target.value)} type="time" value={timeOfDay} />
+          ) : (
+            <label className="scheduled-interval">
+              <input min={5} max={10080} onChange={(event) => setIntervalMinutes(Number(event.target.value) || 60)} type="number" value={intervalMinutes} /> min
+            </label>
+          )}
+          <label className="inline-toggle">
+            <input checked={includeBriefing} onChange={(event) => setIncludeBriefing(event.target.checked)} type="checkbox" /> include live context
+          </label>
+          <button className="apply-button icon-text-button" disabled={busy || !title.trim() || !prompt.trim()} onClick={() => void create()} type="button">
+            <Send size={15} /> Schedule
+          </button>
+        </div>
+      </section>
+
+      <div className="scheduled-list">
+        {tasks.map((task) => (
+          <article className={task.enabled ? 'scheduled-card' : 'scheduled-card off'} key={task.id}>
+            <div className="scheduled-card-head">
+              <strong>{task.title}</strong>
+              <span className="scheduled-when">
+                {task.schedule_kind === 'daily' ? `daily ${task.time_of_day}` : `every ${task.interval_minutes}m`}
+                {task.include_briefing ? ' · live' : ''}
+              </span>
+              <div className="scheduled-actions">
+                <button className="secondary-button" disabled={runningId === task.id} onClick={() => void runNow(task.id)} type="button">
+                  {runningId === task.id ? 'Running…' : 'Run now'}
+                </button>
+                <button className="secondary-button" onClick={() => void toggle(task)} type="button">{task.enabled ? 'Pause' : 'Enable'}</button>
+                <button className="icon-button" onClick={() => void remove(task.id)} title="Delete" type="button"><Trash2 size={14} /></button>
+              </div>
+            </div>
+            <p className="scheduled-prompt">{task.prompt}</p>
+            <div className="scheduled-meta">
+              <span>next: {task.next_run_at ? new Date(task.next_run_at).toLocaleString() : '—'}</span>
+              {task.last_run_at && <span>last: {new Date(task.last_run_at).toLocaleString()} · {task.last_status}</span>}
+            </div>
+            {task.last_result && (
+              <details className="scheduled-result">
+                <summary>Last result</summary>
+                <MessageContent content={task.last_result} metadata={{}} />
+              </details>
+            )}
+          </article>
+        ))}
+        {tasks.length === 0 && <div className="empty-line">No scheduled tasks yet — create one above.</div>}
+      </div>
     </section>
   );
 }
