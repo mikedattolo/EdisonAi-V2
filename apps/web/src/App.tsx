@@ -41,6 +41,7 @@ import { CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useS
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
+import Editor from '@monaco-editor/react';
 import './creator-lab.css';
 import './code-space.css';
 import { edisonApi } from './api';
@@ -5432,6 +5433,24 @@ function AgentEntryView({
   return <div className="agent-line status">{entry.text}</div>;
 }
 
+function monacoLanguage(language: string | null | undefined, path: string): string {
+  const byLang: Record<string, string> = {
+    typescript: 'typescript', javascript: 'javascript', python: 'python', json: 'json',
+    markdown: 'markdown', html: 'html', css: 'css', rust: 'rust', go: 'go', java: 'java',
+    yaml: 'yaml', toml: 'ini', shell: 'shell', bash: 'shell', sql: 'sql', c: 'cpp', cpp: 'cpp',
+  };
+  if (language && byLang[language.toLowerCase()]) {
+    return byLang[language.toLowerCase()];
+  }
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  const byExt: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', py: 'python',
+    json: 'json', md: 'markdown', html: 'html', css: 'css', rs: 'rust', go: 'go', java: 'java',
+    yml: 'yaml', yaml: 'yaml', toml: 'ini', sh: 'shell', sql: 'sql', c: 'cpp', h: 'cpp', cpp: 'cpp',
+  };
+  return byExt[ext] ?? 'plaintext';
+}
+
 function CodeWorkspaceView({
   activeRootId,
   commandResult,
@@ -5495,6 +5514,9 @@ function CodeWorkspaceView({
   const [copilotRunCommands, setCopilotRunCommands] = useState(false);
   const [customCommand, setCustomCommand] = useState('');
   const [openTabs, setOpenTabs] = useState<WorkspaceEntry[]>([]);
+  const [sidebarView, setSidebarView] = useState<'explorer' | 'search' | 'scm'>('explorer');
+  const [bottomTab, setBottomTab] = useState<'terminal' | 'problems' | 'output'>('terminal');
+  const [bottomOpen, setBottomOpen] = useState(true);
   const topLanguages = Object.entries(summary?.languages ?? {}).slice(0, 3);
   const commandPreview = scan?.commands.slice(0, 6) ?? [];
   const entrypointPreview = scan?.entrypoints.slice(0, 5) ?? [];
@@ -5545,406 +5567,232 @@ function CodeWorkspaceView({
 
   return (
     <section className="workbench-view code-view" aria-label="Code Space">
-      <div className="view-heading">
-        <Code2 size={26} />
-        <h3>Code Space</h3>
-        <button className="secondary-button icon-text-button" disabled={isBusy} onClick={() => void onRefresh()} type="button">
-          <RefreshCw size={16} />
-          Refresh
-        </button>
-      </div>
-
-      <section className="workspace-root-panel" aria-label="Code Space projects">
-        <div className="workspace-root-controls">
-          <label htmlFor="workspace-root">Code Space</label>
-          <select
-            disabled={isBusy}
-            id="workspace-root"
-            onChange={(event) => void onSelectRoot(event.target.value)}
-            value={activeRootId}
-          >
-            {(roots.length ? roots : [{ id: 'app', name: 'Edison App', path: summary?.root_path ?? '', kind: 'app' as const }]).map((root) => (
-              <option key={root.id} value={root.id}>
-                {root.name} ({root.kind})
-              </option>
-            ))}
-          </select>
-          <span>{activeRoot?.path ?? summary?.root_path ?? 'Workspace root'}</span>
-          <a
-            className="secondary-button icon-text-button"
-            href={edisonApi.downloadWorkspaceUrl(activeRootId)}
-            title="Download this Code Space as a .zip"
-          >
-            <Download size={15} /> Download .zip
-          </a>
-        </div>
-        <form className="workspace-project-form" onSubmit={(event) => void handleCreateProject(event)}>
-          <input
-            aria-label="New project name"
-            onChange={(event) => setProjectName(event.target.value)}
-            placeholder="New repo name"
-            value={projectName}
-          />
-          <input
-            aria-label="New project brief"
-            onChange={(event) => setProjectPrompt(event.target.value)}
-            placeholder="What should Edison build here?"
-            value={projectPrompt}
-          />
-          <button className="secondary-button icon-text-button" disabled={isBusy || !projectName.trim() || !projectPrompt.trim()} type="submit">
-            <Folder size={16} />
-            Create
-          </button>
-        </form>
-      </section>
-
-      <CodeAgentPanel rootId={activeRootId} onAfterRun={onRefresh} />
-
-      <section className="workspace-copilot-panel" aria-label="Code Space quick task">
-        <div className="section-heading">
-          <Sparkles size={18} />
-          <h3>Quick Task (single pass)</h3>
-        </div>
-        <form className="workspace-copilot-form" onSubmit={(event) => void handleCopilotTask(event)}>
-          <textarea
-            aria-label="Code Space Copilot instruction"
-            onChange={(event) => setCopilotInstruction(event.target.value)}
-            placeholder="Ask Edison to edit this repo, create files, fix a bug, add a feature, or explain what to change."
-            value={copilotInstruction}
-          />
-          <div className="workspace-copilot-actions">
-            <label className="inline-toggle">
-              <input
-                checked={copilotRunCommands}
-                onChange={(event) => setCopilotRunCommands(event.target.checked)}
-                type="checkbox"
-              />
-              Run safe validation commands
-            </label>
-            <button className="apply-button icon-text-button" disabled={isBusy || !copilotInstruction.trim()} type="submit">
-              <Send size={16} />
-              Apply Task
-            </button>
+      <div className="vsc-ide">
+        <div className="vsc-topbar">
+          <div className="vsc-topbar-left">
+            <Code2 size={15} />
+            <span className="vsc-breadcrumb">{activeRoot?.name ?? 'Edison App'}{path ? ` › ${path}` : ''}</span>
           </div>
-        </form>
-        {copilotResult && (
-          <div className="workspace-copilot-result">
-            <div>
-              <span className="section-label">Latest Result</span>
-              <strong>{copilotResult.summary}</strong>
-              <span>{copilotResult.model_id ?? 'local coding model'} / {copilotResult.status.replace('_', ' ')}</span>
-            </div>
-            <div className="copilot-change-list">
-              {copilotResult.changes.map((change) => (
-                <button
-                  className="copilot-change-row"
-                  key={`${change.path}-${change.applied ? 'applied' : 'preview'}`}
-                  onClick={() => void onOpenEntry({ path: change.path, name: change.path.split('/').pop() ?? change.path, kind: 'file' })}
-                  type="button"
-                >
-                  <FileCode2 size={16} />
-                  <div>
-                    <strong>{change.path}</strong>
-                    <span>{(change.error ?? change.summary) || (change.applied ? 'Applied' : 'Previewed')}</span>
-                  </div>
-                  <small className={`job-status ${change.error ? 'error' : change.applied ? 'complete' : 'queued'}`}>
-                    {change.error ? 'error' : change.applied ? 'applied' : 'preview'}
-                  </small>
-                </button>
+          <div className="vsc-topbar-center">
+            <select
+              aria-label="Code Space"
+              className="vsc-root-select"
+              disabled={isBusy}
+              onChange={(event) => void onSelectRoot(event.target.value)}
+              value={activeRootId}
+            >
+              {(roots.length ? roots : [{ id: 'app', name: 'Edison App', path: summary?.root_path ?? '', kind: 'app' as const }]).map((root) => (
+                <option key={root.id} value={root.id}>{root.name}</option>
               ))}
-              {copilotResult.changes.length === 0 && <div className="empty-line">No file changes returned</div>}
-            </div>
-            {copilotResult.followups.length > 0 && (
-              <div className="copilot-followups">
-                {copilotResult.followups.map((followup) => <span key={followup}>{followup}</span>)}
+            </select>
+          </div>
+          <div className="vsc-topbar-right">
+            <a className="vsc-icon-btn" href={edisonApi.downloadWorkspaceUrl(activeRootId)} title="Download this Code Space as a .zip"><Download size={15} /></a>
+            <button className="vsc-icon-btn" disabled={isBusy} onClick={() => void onRefresh()} title="Refresh" type="button"><RefreshCw size={15} /></button>
+          </div>
+        </div>
+
+        <div className="vsc-body">
+          <nav className="vsc-activity" aria-label="Activity bar">
+            <button className={sidebarView === 'explorer' ? 'vsc-act active' : 'vsc-act'} onClick={() => setSidebarView('explorer')} title="Explorer" type="button"><Folder size={22} /></button>
+            <button className={sidebarView === 'search' ? 'vsc-act active' : 'vsc-act'} onClick={() => setSidebarView('search')} title="Search" type="button"><Search size={22} /></button>
+            <button className={sidebarView === 'scm' ? 'vsc-act active' : 'vsc-act'} onClick={() => setSidebarView('scm')} title="Source Control" type="button"><Network size={22} /></button>
+            <div className="vsc-act-spacer" />
+            <span className="vsc-act" title="Edison"><Bot size={22} /></span>
+          </nav>
+
+          <aside className="vsc-sidebar" aria-label="Sidebar">
+            {sidebarView === 'explorer' && (
+              <div className="vsc-pane">
+                <div className="vsc-pane-head">
+                  <span>{(activeRoot?.name ?? summary?.root_name ?? 'workspace').toUpperCase()}</span>
+                  <div className="vsc-pane-actions">
+                    <button className="vsc-icon-btn" disabled={!path || isBusy} onClick={() => void onParent()} title="Up one folder" type="button"><ChevronUp size={15} /></button>
+                    <button className="vsc-icon-btn" disabled={isBusy} onClick={() => void onRefresh()} title="Refresh" type="button"><RefreshCw size={13} /></button>
+                  </div>
+                </div>
+                <div className="vsc-file-tree">
+                  {entries.map((entry) => {
+                    const Icon = entry.kind === 'directory' ? Folder : FileCode2;
+                    return (
+                      <button className={file?.path === entry.path ? 'vsc-file active' : 'vsc-file'} key={entry.path} onClick={() => void onOpenEntry(entry)} title={entry.path} type="button">
+                        <Icon size={15} />
+                        <span>{entry.name}</span>
+                      </button>
+                    );
+                  })}
+                  {entries.length === 0 && <div className="empty-line">No files</div>}
+                </div>
+                <details className="vsc-newproj">
+                  <summary>+ New repo</summary>
+                  <form onSubmit={(event) => void handleCreateProject(event)}>
+                    <input onChange={(event) => setProjectName(event.target.value)} placeholder="repo name" value={projectName} />
+                    <input onChange={(event) => setProjectPrompt(event.target.value)} placeholder="what should Edison build?" value={projectPrompt} />
+                    <button className="secondary-button" disabled={isBusy || !projectName.trim() || !projectPrompt.trim()} type="submit">Create</button>
+                  </form>
+                </details>
               </div>
             )}
-          </div>
-        )}
-      </section>
-
-      <div className="code-overview-row">
-        <article className="workspace-metric-card">
-          <strong>{summary?.file_count ?? 0}</strong>
-          <span>Files</span>
-        </article>
-        <article className="workspace-metric-card">
-          <strong>{summary?.directory_count ?? 0}</strong>
-          <span>Folders</span>
-        </article>
-        <article className="workspace-metric-card wide">
-          <strong>{scan?.stacks.join(' / ') || summary?.package_managers.join(' / ') || 'No package marker'}</strong>
-          <span>Stack</span>
-        </article>
-        <article className="workspace-metric-card wide">
-          <strong>{topLanguages.map(([name]) => name).join(' / ') || 'No language scan'}</strong>
-          <span>Languages</span>
-        </article>
-      </div>
-
-      <div className="repo-intelligence-grid">
-        <article className="intelligence-card">
-          <div className="section-heading">
-            <FileCode2 size={18} />
-            <h3>Entry Points</h3>
-          </div>
-          <div className="intelligence-list">
-            {entrypointPreview.map((entrypoint) => (
-              <div className="intelligence-row" key={entrypoint.path}>
-                <strong>{entrypoint.kind}</strong>
-                <span>{entrypoint.path}</span>
-              </div>
-            ))}
-            {entrypointPreview.length === 0 && <div className="empty-line">No entrypoints</div>}
-          </div>
-        </article>
-        <article className="intelligence-card">
-          <div className="section-heading">
-            <Activity size={18} />
-            <h3>Commands</h3>
-          </div>
-          <div className="intelligence-list">
-            {commandPreview.map((command) => (
-              <div className="command-row" key={`${command.cwd}-${command.command}`}>
-                <div>
-                  <strong>{command.name}</strong>
-                  <span>{command.cwd}</span>
-                  <code>{command.command}</code>
+            {sidebarView === 'search' && (
+              <div className="vsc-pane">
+                <div className="vsc-pane-head"><span>SEARCH</span></div>
+                <form className="vsc-search-form" onSubmit={(event) => void onSearch(event)}>
+                  <input onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search files and code" value={searchQuery} />
+                </form>
+                <div className="vsc-search-results">
+                  {searchResults.slice(0, 40).map((result) => (
+                    <button
+                      className="vsc-search-row"
+                      key={`${result.path}-${result.line_number ?? 'file'}`}
+                      onClick={() => { onAddChatContextPath(result.path); void onOpenEntry({ path: result.path, name: result.name, kind: 'file', language: result.language }); }}
+                      type="button"
+                    >
+                      <strong>{result.name}{result.line_number ? `:${result.line_number}` : ''}</strong>
+                      <span>{result.line_text ?? result.path}</span>
+                    </button>
+                  ))}
+                  {searchQuery && searchResults.length === 0 && <div className="empty-line">No matches</div>}
                 </div>
-                <button className="secondary-button" disabled={isBusy} onClick={() => void onRunCommand(command)} type="button">
-                  Run approved
-                </button>
               </div>
-            ))}
-            {commandPreview.length === 0 && <div className="empty-line">No commands</div>}
-          </div>
-          <form className="workspace-command-form" onSubmit={(event) => void handleCustomCommand(event)}>
-            <input
-              aria-label="Run a safe workspace command"
-              onChange={(event) => setCustomCommand(event.target.value)}
-              placeholder="git status, python -m pytest, npm run build"
-              value={customCommand}
-            />
-            <button className="secondary-button" disabled={isBusy || !customCommand.trim()} type="submit">
-              Run
-            </button>
-          </form>
-        </article>
-        <article className="intelligence-card">
-          <div className="section-heading">
-            <Settings size={18} />
-            <h3>Config</h3>
-          </div>
-          <div className="chip-list">
-            {configPreview.map((configPath) => <span key={configPath}>{configPath}</span>)}
-            {configPreview.length === 0 && <div className="empty-line">No config files</div>}
-          </div>
-        </article>
-        <article className="intelligence-card">
-          <div className="section-heading">
-            <Waypoints size={18} />
-            <h3>Agent Queue</h3>
-          </div>
-          <div className="intelligence-list">
-            {(scan?.next_steps ?? []).slice(0, 4).map((step) => (
-              <div className="intelligence-row" key={step}>
-                <strong>{step}</strong>
-              </div>
-            ))}
-            {!scan?.next_steps.length && <div className="empty-line">No queued capabilities</div>}
-          </div>
-        </article>
-      </div>
-
-      {commandResult && (
-        <section className="command-output-panel" aria-label="Command result">
-          <div className="command-output-header">
-            <div>
-              <span className="section-label">Command Result</span>
-              <strong>{commandResult.command}</strong>
-              <span>{commandResult.cwd} / {commandResult.duration_ms} ms / exit {commandResult.exit_code ?? 'timeout'}</span>
-            </div>
-            <small className={`job-status ${commandResult.job.status}`}>{commandResult.job.status.replace('_', ' ')}</small>
-          </div>
-          <div className="command-output-grid">
-            <div>
-              <span className="section-label">stdout</span>
-              <pre><code>{commandResult.stdout || 'No output'}</code></pre>
-            </div>
-            <div>
-              <span className="section-label">stderr</span>
-              <pre><code>{commandResult.stderr || 'No errors'}</code></pre>
-            </div>
-          </div>
-        </section>
-      )}
-
-      <div className="code-workspace-grid">
-        <aside className="code-browser-panel" aria-label="Workspace files">
-          <div className="code-browser-header">
-            <div>
-              <span className="section-label">Folder</span>
-              <strong>{path || summary?.root_name || 'workspace'}</strong>
-            </div>
-            <button className="icon-button" disabled={!path || isBusy} onClick={() => void onParent()} title="Up one folder" type="button">
-              <ChevronUp size={18} />
-            </button>
-          </div>
-          <div className="file-list">
-            {entries.map((entry) => {
-              const Icon = entry.kind === 'directory' ? Folder : FileCode2;
-              return (
-                <button className="file-entry" key={entry.path} onClick={() => void onOpenEntry(entry)} type="button">
-                  <Icon size={17} />
-                  <div>
-                    <strong>{entry.name}</strong>
-                    <span>{entry.kind === 'directory' ? 'Folder' : entry.language ?? formatBytes(entry.size_bytes)}</span>
+            )}
+            {sidebarView === 'scm' && (
+              <div className="vsc-pane">
+                <div className="vsc-pane-head"><span>SOURCE CONTROL</span></div>
+                {patchPreview ? (
+                  <div className="vsc-scm">
+                    <div className="vsc-scm-file">
+                      <strong>{patchPreview.path}</strong>
+                      <span className="diff-stats"><span>+{patchPreview.additions}</span><span>-{patchPreview.deletions}</span></span>
+                    </div>
+                    {patchPreview.risk_flags.length > 0 && (
+                      <div className="risk-list">{patchPreview.risk_flags.map((flag) => <span key={flag}>{flag.replace(/_/g, ' ')}</span>)}</div>
+                    )}
+                    <pre className="diff-preview">
+                      {(patchPreview.diff || 'No changes').split('\n').map((line, index) => (
+                        <div className={line.startsWith('+') && !line.startsWith('+++') ? 'diff-add' : line.startsWith('-') && !line.startsWith('---') ? 'diff-del' : line.startsWith('@@') ? 'diff-hunk' : undefined} key={index}>{line || ' '}</div>
+                      ))}
+                    </pre>
                   </div>
-                </button>
-              );
-            })}
-            {entries.length === 0 && <div className="empty-line">No files</div>}
-          </div>
-        </aside>
-
-        <article className="code-preview-panel" aria-label="File preview">
-          {openTabs.length > 0 && (
-            <div className="editor-tab-bar" role="tablist">
-              {openTabs.map((tab) => (
-                <div className={file?.path === tab.path ? 'editor-tab active' : 'editor-tab'} key={tab.path}>
-                  <button className="editor-tab-label" onClick={() => void onOpenEntry(tab)} title={tab.path} type="button">
-                    <FileCode2 size={13} />
-                    {tab.name}
-                  </button>
-                  <button aria-label={`Close ${tab.name}`} className="editor-tab-close" onClick={() => closeTab(tab.path)} type="button">
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {file ? (
-            <>
-              <div className="code-preview-header">
-                <div>
-                  <strong>{file.path}</strong>
-                  <span>{file.language ?? 'Text'} / {formatBytes(file.size_bytes)}{file.truncated ? ' / truncated' : ''}</span>
-                </div>
-                <div className="patch-action-row">
-                  <button
-                    className="secondary-button"
-                    onClick={() => onAddChatContextPath(file.path)}
-                    type="button"
-                  >
-                    Add To Chat Focus
-                  </button>
-                  <button
-                    className="secondary-button"
-                    disabled={!draftChanged || isBusy}
-                    onClick={() => void onPreviewPatch()}
-                    type="button"
-                  >
-                    Preview diff
-                  </button>
-                  <button
-                    className="apply-button"
-                    disabled={!patchPreview || !draftChanged || isBusy}
-                    onClick={() => void onApplyPatch()}
-                    type="button"
-                  >
-                    Apply reviewed patch
-                  </button>
-                </div>
+                ) : (
+                  <div className="empty-line">Open a file, edit it, then click “Preview diff” to see changes here.</div>
+                )}
               </div>
-              <textarea
-                aria-label={`Edit ${file.path}`}
-                className="code-editor"
-                onChange={(event) => setDraftContent(event.target.value)}
-                spellCheck={false}
-                value={draftContent}
-              />
-            </>
-          ) : (
-            <div className="empty-preview">
-              <FileCode2 size={30} />
-              <strong>{summary?.root_path ?? 'Workspace not loaded'}</strong>
+            )}
+          </aside>
+
+          <div className="vsc-center">
+            <div className="vsc-editor-area">
+              <div className="editor-tab-bar" role="tablist">
+                {openTabs.map((tab) => (
+                  <div className={file?.path === tab.path ? 'editor-tab active' : 'editor-tab'} key={tab.path}>
+                    <button className="editor-tab-label" onClick={() => void onOpenEntry(tab)} title={tab.path} type="button"><FileCode2 size={13} />{tab.name}</button>
+                    <button aria-label={`Close ${tab.name}`} className="editor-tab-close" onClick={() => closeTab(tab.path)} type="button"><X size={12} /></button>
+                  </div>
+                ))}
+                {openTabs.length === 0 && <div className="editor-tab placeholder">Welcome</div>}
+              </div>
+              {file ? (
+                <div className="vsc-editor-wrap">
+                  <div className="vsc-editor-actions">
+                    <span className="vsc-editor-path">{file.path}{draftChanged ? ' ●' : ''} · {file.language ?? 'text'}{file.truncated ? ' · truncated' : ''}</span>
+                    <div className="patch-action-row">
+                      <button className="secondary-button" onClick={() => onAddChatContextPath(file.path)} type="button">Add to chat</button>
+                      <button className="secondary-button" disabled={!draftChanged || isBusy} onClick={() => void onPreviewPatch()} type="button">Preview diff</button>
+                      <button className="apply-button" disabled={!patchPreview || !draftChanged || isBusy} onClick={() => void onApplyPatch()} type="button">Apply patch</button>
+                    </div>
+                  </div>
+                  <div className="vsc-monaco">
+                    <Editor
+                      height="100%"
+                      language={monacoLanguage(file.language, file.path)}
+                      onChange={(value) => setDraftContent(value ?? '')}
+                      options={{ minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2, wordWrap: 'on', smoothScrolling: true }}
+                      theme="vs-dark"
+                      value={draftContent}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="vsc-welcome">
+                  <Code2 size={42} />
+                  <strong>Edison Code Space</strong>
+                  <span>Open a file from the Explorer, or describe a task to the agent on the right.</span>
+                  <div className="vsc-welcome-stats">
+                    <span>{summary?.file_count ?? 0} files</span>
+                    <span>{scan?.stacks.join(' / ') || summary?.package_managers.join(' / ') || 'no stack marker'}</span>
+                    <span>{topLanguages.map(([name]) => name).join(' / ') || 'no language scan'}</span>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </article>
+
+            <div className={bottomOpen ? 'vsc-panel open' : 'vsc-panel'}>
+              <div className="vsc-panel-tabs">
+                <button className={bottomTab === 'problems' ? 'active' : ''} onClick={() => { setBottomTab('problems'); setBottomOpen(true); }} type="button">PROBLEMS</button>
+                <button className={bottomTab === 'output' ? 'active' : ''} onClick={() => { setBottomTab('output'); setBottomOpen(true); }} type="button">OUTPUT</button>
+                <button className={bottomTab === 'terminal' ? 'active' : ''} onClick={() => { setBottomTab('terminal'); setBottomOpen(true); }} type="button">TERMINAL</button>
+                <div className="vsc-panel-spacer" />
+                <button className="vsc-icon-btn" onClick={() => setBottomOpen((open) => !open)} title={bottomOpen ? 'Collapse panel' : 'Expand panel'} type="button"><ChevronUp size={14} style={{ transform: bottomOpen ? 'none' : 'rotate(180deg)' }} /></button>
+              </div>
+              {bottomOpen && (
+                <div className="vsc-panel-body">
+                  {bottomTab === 'terminal' && (
+                    <div className="vsc-terminal">
+                      {commandResult && (
+                        <div className="vsc-term-block">
+                          <div className="vsc-term-cmd">$ {commandResult.command} <span className="vsc-term-meta">({commandResult.duration_ms}ms · exit {commandResult.exit_code ?? 'timeout'})</span></div>
+                          {commandResult.stdout && <pre>{commandResult.stdout}</pre>}
+                          {commandResult.stderr && <pre className="err">{commandResult.stderr}</pre>}
+                        </div>
+                      )}
+                      <form className="vsc-term-input" onSubmit={(event) => void handleCustomCommand(event)}>
+                        <span className="vsc-term-ps">{summary?.root_name ?? 'edison'}&nbsp;$</span>
+                        <input aria-label="Run command" disabled={isBusy} onChange={(event) => setCustomCommand(event.target.value)} placeholder="git status · npm run build · python -m pytest" value={customCommand} />
+                      </form>
+                      {commandPreview.length > 0 && (
+                        <div className="vsc-term-suggest">
+                          {commandPreview.map((command) => (
+                            <button disabled={isBusy} key={`${command.cwd}-${command.command}`} onClick={() => void onRunCommand(command)} type="button">{command.command}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {bottomTab === 'problems' && (
+                    <div className="vsc-problems">
+                      {(patchPreview?.risk_flags.length ?? 0) > 0
+                        ? patchPreview!.risk_flags.map((flag) => <div className="vsc-problem" key={flag}>⚠ {flag.replace(/_/g, ' ')} — {patchPreview!.path}</div>)
+                        : <div className="empty-line">No problems detected.</div>}
+                    </div>
+                  )}
+                  {bottomTab === 'output' && (
+                    <div className="vsc-output">
+                      <pre>{commandResult ? (`${commandResult.stdout}\n${commandResult.stderr}`.trim() || 'No output.') : 'No output yet — run a command in the terminal.'}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <aside className="vsc-chat" aria-label="Chat">
+            <div className="vsc-chat-head"><MessageSquare size={14} /> CHAT <span className="vsc-chat-sub">Agent · {activeRoot?.name ?? 'app'}</span></div>
+            <div className="vsc-chat-body">
+              <CodeAgentPanel rootId={activeRootId} onAfterRun={onRefresh} />
+            </div>
+          </aside>
+        </div>
+
+        <div className="vsc-statusbar">
+          <span className="vsc-status-item"><Network size={12} /> {summary?.root_name ?? 'main'}</span>
+          <span className="vsc-status-item">{summary?.file_count ?? 0} files</span>
+          <span className="vsc-status-item">{scan?.stacks.join(', ') || 'no stack'}</span>
+          <div className="vsc-status-spacer" />
+          <span className="vsc-status-item">⚠ {patchPreview?.risk_flags.length ?? 0}</span>
+          <span className="vsc-status-item">Edison</span>
+        </div>
       </div>
 
-      {patchPreview && (
-        <section className="diff-review-panel" aria-label="Patch review">
-          <div className="diff-review-header">
-            <div>
-              <span className="section-label">Patch Review</span>
-              <strong>{patchPreview.path}</strong>
-            </div>
-            <div className="diff-stats">
-              <span>+{patchPreview.additions}</span>
-              <span>-{patchPreview.deletions}</span>
-            </div>
-          </div>
-          {patchPreview.risk_flags.length > 0 && (
-            <div className="risk-list">
-              {patchPreview.risk_flags.map((flag) => <span key={flag}>{flag.replace(/_/g, ' ')}</span>)}
-            </div>
-          )}
-          <pre className="diff-preview">
-            {(patchPreview.diff || 'No changes').split('\n').map((line, index) => (
-              <div
-                className={
-                  line.startsWith('+') && !line.startsWith('+++')
-                    ? 'diff-add'
-                    : line.startsWith('-') && !line.startsWith('---')
-                      ? 'diff-del'
-                      : line.startsWith('@@')
-                        ? 'diff-hunk'
-                        : undefined
-                }
-                key={index}
-              >
-                {line || ' '}
-              </div>
-            ))}
-          </pre>
-        </section>
-      )}
-
-      <section className="workspace-search-panel" aria-label="Workspace search">
-        <form className="workspace-search-form" onSubmit={(event) => void onSearch(event)}>
-          <input
-            aria-label="Search workspace"
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search files and code"
-            value={searchQuery}
-          />
-          <button className="secondary-button icon-text-button" disabled={!searchQuery.trim() || isBusy} type="submit">
-            <Search size={16} />
-            Search
-          </button>
-        </form>
-        <div className="search-results">
-          {searchResults.slice(0, 12).map((result) => (
-            <button
-              className="search-result-row"
-              key={`${result.path}-${result.line_number ?? 'file'}`}
-              onClick={() => {
-                onAddChatContextPath(result.path);
-                void onOpenEntry({ path: result.path, name: result.name, kind: 'file', language: result.language });
-              }}
-              type="button"
-            >
-              <FileCode2 size={16} />
-              <div>
-                <strong>{result.path}{result.line_number ? `:${result.line_number}` : ''}</strong>
-                <span>{result.line_text ?? result.language ?? 'File match'}</span>
-              </div>
-            </button>
-          ))}
-          {searchQuery && searchResults.length === 0 && <div className="empty-line">No matches</div>}
-        </div>
-      </section>
     </section>
   );
 }
