@@ -21,6 +21,7 @@ import {
   Image,
   Link2,
   MessageSquare,
+  Mic,
   Network,
   RefreshCw,
   Search,
@@ -44,6 +45,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import Editor from '@monaco-editor/react';
 import './creator-lab.css';
 import './code-space.css';
+import './voice.css';
 import { edisonApi } from './api';
 import type {
   AgentChangedFile,
@@ -1844,6 +1846,87 @@ export default function App() {
   );
 }
 
+function stripForSpeech(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '. (code block omitted). ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[#*_>~|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 700);
+}
+
+function useVoice(onTranscript: (text: string) => void) {
+  const [enabled, setEnabled] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const recRef = useRef<any>(null);
+  const SR = typeof window !== 'undefined' ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) : null;
+  const sttSupported = Boolean(SR);
+  const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+  const startListening = useCallback(() => {
+    if (!SR || recRef.current) return;
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.continuous = false;
+    rec.onstart = () => setListening(true);
+    rec.onend = () => { setListening(false); recRef.current = null; };
+    rec.onerror = () => { setListening(false); recRef.current = null; };
+    rec.onresult = (event: any) => {
+      const text = Array.from(event.results).map((r: any) => r[0]?.transcript ?? '').join(' ').trim();
+      if (text) onTranscript(text);
+    };
+    recRef.current = rec;
+    try { rec.start(); } catch { recRef.current = null; }
+  }, [SR, onTranscript]);
+
+  const stopListening = useCallback(() => {
+    try { recRef.current?.stop(); } catch { /* noop */ }
+    recRef.current = null;
+    setListening(false);
+  }, []);
+
+  const speak = useCallback((text: string) => {
+    if (!ttsSupported) return;
+    const clean = stripForSpeech(text);
+    if (!clean) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utterance.rate = 1.03;
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  }, [ttsSupported]);
+
+  const cancelSpeak = useCallback(() => {
+    if (ttsSupported) window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, [ttsSupported]);
+
+  return { enabled, setEnabled, listening, speaking, startListening, stopListening, speak, cancelSpeak, sttSupported, ttsSupported };
+}
+
+function VoiceAvatar({ listening, speaking }: { listening: boolean; speaking: boolean }) {
+  const status = speaking ? 'Speaking…' : listening ? 'Listening…' : 'Voice ready';
+  return (
+    <div className="voice-avatar" aria-hidden="true">
+      <div className={`voice-orb ${speaking ? 'speaking' : ''} ${listening && !speaking ? 'listening' : ''}`}>
+        <div className="voice-orb-ring" />
+        <div className="voice-face">
+          <div className="voice-eyes"><span /><span /></div>
+          <div className="voice-mouth" />
+        </div>
+      </div>
+      <div className="voice-status">{status}</div>
+    </div>
+  );
+}
+
 function ChatView({
   activeConversation,
   activeAgentRun,
@@ -1952,6 +2035,68 @@ function ChatView({
     : 'Intent auto';
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const lastMessage = activeConversation?.messages[activeConversation.messages.length - 1];
+  const composerFormRef = useRef<HTMLFormElement | null>(null);
+  const lastSpokenRef = useRef<string | null>(null);
+  const [voiceSubmit, setVoiceSubmit] = useState(false);
+  const voice = useVoice((text) => {
+    setComposer(text);
+    setVoiceSubmit(true);
+  });
+  const {
+    enabled: voiceEnabled,
+    listening: voiceListening,
+    speaking: voiceSpeaking,
+    startListening: voiceStart,
+    stopListening: voiceStop,
+    speak: voiceSpeak,
+    cancelSpeak: voiceCancel,
+    setEnabled: setVoiceEnabled,
+    sttSupported,
+  } = voice;
+
+  function toggleVoice() {
+    if (voiceEnabled) {
+      setVoiceEnabled(false);
+      voiceStop();
+      voiceCancel();
+    } else {
+      setVoiceEnabled(true);
+      voiceStart();
+    }
+  }
+
+  // Auto-send once dictation produces a final transcript.
+  useEffect(() => {
+    if (voiceSubmit && composer.trim()) {
+      composerFormRef.current?.requestSubmit();
+      setVoiceSubmit(false);
+    }
+  }, [voiceSubmit, composer]);
+
+  // Speak new assistant replies aloud while voice mode is on.
+  useEffect(() => {
+    if (!voiceEnabled || isSending || !lastMessage || lastMessage.role !== 'assistant') {
+      return;
+    }
+    if (lastSpokenRef.current === lastMessage.id) {
+      return;
+    }
+    lastSpokenRef.current = lastMessage.id;
+    voiceSpeak(lastMessage.content);
+  }, [voiceEnabled, isSending, lastMessage?.id, lastMessage?.role, lastMessage?.content, voiceSpeak]);
+
+  // Keep the mic listening between turns (hands-free loop).
+  useEffect(() => {
+    if (voiceEnabled && !isSending && !voiceSpeaking && !voiceListening) {
+      const timer = window.setTimeout(() => voiceStart(), 500);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [voiceEnabled, isSending, voiceSpeaking, voiceListening, voiceStart]);
+
+  // Stop microphone + speech when leaving chat.
+  useEffect(() => () => { voiceStop(); voiceCancel(); }, [voiceStop, voiceCancel]);
+
   const contextSummary = chatContextPaths.length > 0
     ? `${chatContextPaths.length} focus file${chatContextPaths.length === 1 ? '' : 's'}`
     : chatWorkspacePath.trim()
@@ -2316,8 +2461,19 @@ function ChatView({
             <Waypoints size={14} />
             <span>Agent</span>
           </button>
+          {sttSupported && (
+            <button
+              className={`composer-toggle voice-toggle ${voiceEnabled ? 'active' : ''} ${voiceListening ? 'listening' : ''}`}
+              onClick={toggleVoice}
+              title="Voice mode — talk to Edison and hear replies"
+              type="button"
+            >
+              <Mic size={14} />
+              <span>{voiceEnabled ? (voiceListening ? 'Listening' : voiceSpeaking ? 'Speaking' : 'Voice On') : 'Voice'}</span>
+            </button>
+          )}
         </div>
-        <form className="composer" onSubmit={(event) => void handleSend(event)}>
+        <form className="composer" ref={composerFormRef} onSubmit={(event) => void handleSend(event)}>
           <textarea
             aria-label="Message Edison"
             onChange={(event) => setComposer(event.target.value)}
@@ -2336,6 +2492,7 @@ function ChatView({
             <span>{isSending ? 'Thinking' : 'Send'}</span>
           </button>
         </form>
+        {voiceEnabled && <VoiceAvatar listening={voiceListening} speaking={voiceSpeaking} />}
       </section>
     </>
   );
