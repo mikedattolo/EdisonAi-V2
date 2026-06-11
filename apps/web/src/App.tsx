@@ -255,6 +255,9 @@ const promptSuggestions: Array<{ title: string; subtitle: string; prompt: string
 
 export default function App() {
   const [activeView, setActiveView] = useState<ViewId>('chat');
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [autoStartVoice, setAutoStartVoice] = useState(false);
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus | null>(null);
   const [models, setModels] = useState<ModelProfile[]>([]);
@@ -547,6 +550,19 @@ export default function App() {
     setActiveMode('auto');
     setActiveView('chat');
   }
+
+  // "Hey Edison" wake word: opens a fresh chat in voice mode. Runs only while
+  // voice mode is off, so it never competes with the in-chat dictation mic.
+  useWakeWord(
+    wakeWordEnabled && !voiceActive,
+    () => {
+      startNewConversation();
+      setAutoStartVoice(true);
+    },
+    () => {
+      setAutoStartVoice(false);
+    },
+  );
 
   async function deleteConversation(conversation: ConversationRecord) {
     if (!window.confirm(`Delete chat "${conversation.title}"?`)) {
@@ -1600,6 +1616,18 @@ export default function App() {
           <MessageSquare size={17} />
           <span>New chat</span>
         </button>
+        {SPEECH_SUPPORTED && (
+          <button
+            className={wakeWordEnabled ? 'wake-word-button active' : 'wake-word-button'}
+            onClick={() => setWakeWordEnabled((value) => !value)}
+            title={wakeWordEnabled ? 'Listening for "Hey Edison" — click to disable' : 'Enable the "Hey Edison" wake word'}
+            type="button"
+          >
+            <Mic size={15} />
+            <span>{wakeWordEnabled ? 'Hey Edison: On' : 'Hey Edison'}</span>
+            {wakeWordEnabled && <span className="wake-word-dot" />}
+          </button>
+        )}
 
         <nav className="nav-stack">
           {navigation.map((item) => {
@@ -1685,6 +1713,9 @@ export default function App() {
 
         {activeView === 'chat' ? (
           <ChatView
+            autoStartVoice={autoStartVoice}
+            onAutoVoiceConsumed={() => setAutoStartVoice(false)}
+            onVoiceActiveChange={setVoiceActive}
             activeConversation={activeConversation}
             activeAgentRun={activeAgentRun}
             agentRuns={agentRuns}
@@ -1911,6 +1942,51 @@ function useVoice(onTranscript: (text: string) => void) {
   return { enabled, setEnabled, listening, speaking, startListening, stopListening, speak, cancelSpeak, sttSupported, ttsSupported };
 }
 
+const SPEECH_SUPPORTED =
+  typeof window !== 'undefined' && (('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window));
+
+function useWakeWord(active: boolean, onWake: () => void, onStop: () => void) {
+  const onWakeRef = useRef(onWake);
+  const onStopRef = useRef(onStop);
+  useEffect(() => {
+    onWakeRef.current = onWake;
+    onStopRef.current = onStop;
+  });
+  useEffect(() => {
+    const SR = typeof window !== 'undefined' ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) : null;
+    if (!active || !SR) {
+      return undefined;
+    }
+    let stopped = false;
+    let firedAt = 0;
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (event: any) => {
+      const text = Array.from(event.results).map((r: any) => r[0]?.transcript ?? '').join(' ').toLowerCase();
+      const now = typeof performance !== 'undefined' ? performance.now() : 0;
+      if (/\bedison stop\b|\bstop edison\b/.test(text)) {
+        onStopRef.current();
+      } else if ((text.includes('hey edison') || text.includes('hey, edison') || text.includes('hey addison') || text.includes('a edison')) && now - firedAt > 3500) {
+        firedAt = now;
+        onWakeRef.current();
+      }
+    };
+    rec.onend = () => {
+      if (!stopped) {
+        try { rec.start(); } catch { /* noop */ }
+      }
+    };
+    rec.onerror = () => { /* onend handler restarts */ };
+    try { rec.start(); } catch { /* noop */ }
+    return () => {
+      stopped = true;
+      try { rec.stop(); } catch { /* noop */ }
+    };
+  }, [active]);
+}
+
 function VoiceAvatar({ listening, speaking }: { listening: boolean; speaking: boolean }) {
   const status = speaking ? 'Speaking…' : listening ? 'Listening…' : 'Voice ready';
   return (
@@ -1928,6 +2004,9 @@ function VoiceAvatar({ listening, speaking }: { listening: boolean; speaking: bo
 }
 
 function ChatView({
+  autoStartVoice,
+  onAutoVoiceConsumed,
+  onVoiceActiveChange,
   activeConversation,
   activeAgentRun,
   agentModeEnabled,
@@ -1974,6 +2053,9 @@ function ChatView({
   onUseArtifactInChat,
   onSelectAgentRun,
 }: {
+  autoStartVoice: boolean;
+  onAutoVoiceConsumed: () => void;
+  onVoiceActiveChange: (active: boolean) => void;
   activeConversation: ConversationWithMessages | null;
   activeAgentRun: AgentRunWithEvents | null;
   agentModeEnabled: boolean;
@@ -2065,13 +2147,39 @@ function ChatView({
     }
   }
 
-  // Auto-send once dictation produces a final transcript.
+  // Auto-send a finished dictation, or turn voice off on a stop-word.
   useEffect(() => {
-    if (voiceSubmit && composer.trim()) {
+    if (!voiceSubmit) {
+      return;
+    }
+    const lowered = composer.trim().toLowerCase();
+    if (lowered === 'stop' || lowered === 'edison stop' || lowered === 'stop edison' || lowered === 'edison, stop') {
+      setVoiceEnabled(false);
+      voiceStop();
+      voiceCancel();
+      setComposer('');
+      setVoiceSubmit(false);
+      return;
+    }
+    if (composer.trim()) {
       composerFormRef.current?.requestSubmit();
       setVoiceSubmit(false);
     }
   }, [voiceSubmit, composer]);
+
+  // Enter voice mode automatically when launched by the "Hey Edison" wake word.
+  useEffect(() => {
+    if (autoStartVoice && !voiceEnabled) {
+      setVoiceEnabled(true);
+      voiceStart();
+      onAutoVoiceConsumed();
+    }
+  }, [autoStartVoice, voiceEnabled, voiceStart, onAutoVoiceConsumed]);
+
+  // Report voice-active state up so the wake-word listener pauses while voice is on.
+  useEffect(() => {
+    onVoiceActiveChange(voiceEnabled);
+  }, [voiceEnabled, onVoiceActiveChange]);
 
   // Speak new assistant replies aloud while voice mode is on.
   useEffect(() => {

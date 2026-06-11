@@ -1,5 +1,37 @@
 /* Voice mode — mic toggle, talking avatar, wake-word indicator. */
 
+.wake-word-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+}
+.wake-word-button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.wake-word-button.active {
+  border-color: #4f8cff;
+  background: rgba(79, 140, 255, 0.16);
+  color: #cfe0ff;
+}
+.wake-word-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff6b6b;
+  margin-left: auto;
+  animation: voice-pulse 1.1s ease-in-out infinite;
+}
+
 .voice-toggle.active {
   background: rgba(79, 140, 255, 0.18) !important;
   border-color: #4f8cff !important;
