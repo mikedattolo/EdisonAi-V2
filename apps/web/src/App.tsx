@@ -5322,7 +5322,46 @@ function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: (
   const runIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const [restored, setRestored] = useState(false);
   const selfEdit = rootId === 'app';
+  const storageKey = `edison.codeagent.${rootId}`;
+
+  // Restore the last session for this Code Space so returning isn't a blank page.
+  useEffect(() => {
+    setRestored(false);
+    try {
+      const raw = window.localStorage.getItem(`edison.codeagent.${rootId}`);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        setEntries(Array.isArray(saved.entries) ? saved.entries : []);
+        setChangedFiles(Array.isArray(saved.changedFiles) ? saved.changedFiles : []);
+        setDoneInfo(saved.doneInfo ?? null);
+        if (typeof saved.task === 'string') setTask(saved.task);
+        runIdRef.current = saved.runId ?? null;
+        if ((saved.entries?.length ?? 0) > 0 && !saved.doneInfo) {
+          setRestored(true);
+        }
+      } else {
+        setEntries([]);
+        setChangedFiles([]);
+        setDoneInfo(null);
+      }
+    } catch {
+      /* ignore corrupt cache */
+    }
+  }, [rootId]);
+
+  // Persist the running transcript so it can be picked up after navigating away.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({ task, entries: entries.slice(-250), changedFiles, doneInfo, runId: runIdRef.current }),
+      );
+    } catch {
+      /* storage full or unavailable */
+    }
+  }, [storageKey, task, entries, changedFiles, doneInfo]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' });
@@ -5426,6 +5465,7 @@ function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: (
       return;
     }
     setRunning(true);
+    setRestored(false);
     setEntries([]);
     setChangedFiles([]);
     setDoneInfo(null);
@@ -5529,6 +5569,9 @@ function CodeAgentPanel({ rootId, onAfterRun }: { rootId: string; onAfterRun?: (
       </p>
 
       <div className="code-agent-transcript" ref={transcriptRef}>
+        {restored && (
+          <div className="agent-restored-banner">↩ Restored your last session for this Code Space — start a new task to continue.</div>
+        )}
         {entries.length === 0 && !running && (
           <div className="empty-line">
             {selfEdit
