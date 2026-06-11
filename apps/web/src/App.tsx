@@ -2125,6 +2125,7 @@ function ChatView({
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const lastSpokenRef = useRef<string | null>(null);
   const [voiceSubmit, setVoiceSubmit] = useState(false);
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
   const voice = useVoice((text) => {
     setComposer(text);
     setVoiceSubmit(true);
@@ -2146,10 +2147,17 @@ function ChatView({
       setVoiceEnabled(false);
       voiceStop();
       voiceCancel();
-    } else {
-      setVoiceEnabled(true);
-      voiceStart();
+      return;
     }
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      setVoiceNote('Voice needs a secure connection. Open Edison at https://… (not http://) and accept the certificate, then click Voice again.');
+      return;
+    }
+    setVoiceNote(null);
+    // Don't read the previous reply aloud — only speak replies that arrive after this point.
+    lastSpokenRef.current = lastMessage?.id ?? null;
+    setVoiceEnabled(true);
+    voiceStart();
   }
 
   // Auto-send a finished dictation, or turn voice off on a stop-word.
@@ -2175,6 +2183,7 @@ function ChatView({
   // Enter voice mode automatically when launched by the "Hey Edison" wake word.
   useEffect(() => {
     if (autoStartVoice && !voiceEnabled) {
+      lastSpokenRef.current = lastMessage?.id ?? null;
       setVoiceEnabled(true);
       voiceStart();
       onAutoVoiceConsumed();
@@ -2586,6 +2595,7 @@ function ChatView({
             </button>
           )}
         </div>
+        {voiceNote && <div className="voice-note">{voiceNote}</div>}
         <form className="composer" ref={composerFormRef} onSubmit={(event) => void handleSend(event)}>
           <textarea
             aria-label="Message Edison"
