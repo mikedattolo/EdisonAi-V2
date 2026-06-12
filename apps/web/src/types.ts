@@ -599,6 +599,21 @@ export interface ToyBoxRouteResult {
   candidates: ToyBoxRouteCandidate[];
 }
 
+export interface ToyBoxQueueItemRecord {
+  id: string;
+  order_id?: string | null;
+  mapping_id?: string | null;
+  printer_id?: string | null;
+  title: string;
+  status: 'queued' | 'slicing' | 'ready_to_print' | 'printing' | 'paused' | 'blocked' | 'done' | 'cancelled';
+  model_path: string;
+  gcode_path: string;
+  label_path: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RuntimeSettingsRecord {
   service: string;
   updated_at: string;

@@ -41,6 +41,10 @@ import {
 import { CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 import Editor from '@monaco-editor/react';
 import './creator-lab.css';
@@ -104,6 +108,7 @@ import type {
   ToyBoxDiscoveredPrinter,
   ToyBoxPrinterLiveStatus,
   ToyBoxRouteResult,
+  ToyBoxQueueItemRecord,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -6314,6 +6319,151 @@ const TOYBOX_COLOR_HEX: Record<string, string> = {
   gray: '#828282', brown: '#785028',
 };
 
+function ModelViewer({ onColorChosen }: { onColorChosen?: (hex: string) => void }) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const ctxRef = useRef<any>(null);
+  const meshRef = useRef<any>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [color, setColor] = useState('#3a7bd5');
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return undefined;
+    const height = 320;
+    const width = mount.clientWidth || 480;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x14171f);
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 8000);
+    camera.position.set(120, 110, 160);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    mount.appendChild(renderer.domElement);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x303040, 1.1));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(1, 1.4, 1);
+    scene.add(dir);
+    scene.add(new THREE.GridHelper(240, 24, 0x2a2f3a, 0x20242c));
+    let raf = 0;
+    const animate = () => {
+      controls.update();
+      renderer.render(scene, camera);
+      raf = requestAnimationFrame(animate);
+    };
+    animate();
+    ctxRef.current = { scene, camera, renderer, controls };
+    const onResize = () => {
+      const nextWidth = mount.clientWidth || 480;
+      camera.aspect = nextWidth / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(nextWidth, height);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onResize);
+      controls.dispose();
+      renderer.dispose();
+      if (renderer.domElement.parentNode) {
+        renderer.domElement.parentNode.removeChild(renderer.domElement);
+      }
+    };
+  }, []);
+
+  function applyColor(root: any, hex: string) {
+    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(hex), metalness: 0.05, roughness: 0.65 });
+    if (root.isMesh) root.material = material;
+    root.traverse?.((child: any) => {
+      if (child.isMesh) child.material = material;
+    });
+  }
+
+  function fitCamera(object: any) {
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+    const box = new THREE.Box3().setFromObject(object);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    object.position.sub(center);
+    const maxDim = Math.max(size.x, size.y, size.z) || 60;
+    ctx.camera.position.set(maxDim * 1.3, maxDim * 1.1, maxDim * 1.7);
+    ctx.camera.near = Math.max(0.1, maxDim / 200);
+    ctx.camera.far = maxDim * 200;
+    ctx.camera.updateProjectionMatrix();
+    ctx.controls.target.set(0, 0, 0);
+    ctx.controls.update();
+  }
+
+  async function loadFile(file: File) {
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+    setViewerError(null);
+    setFileName(file.name);
+    if (meshRef.current) {
+      ctx.scene.remove(meshRef.current);
+      meshRef.current = null;
+    }
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    try {
+      const buffer = await file.arrayBuffer();
+      let object: any = null;
+      if (ext === 'stl') {
+        const geometry = new STLLoader().parse(buffer);
+        geometry.computeVertexNormals();
+        object = new THREE.Mesh(geometry);
+      } else if (ext === '3mf') {
+        object = new ThreeMFLoader().parse(buffer);
+      } else if (ext === 'obj') {
+        object = new OBJLoader().parse(new TextDecoder().decode(buffer));
+      } else {
+        setViewerError('Use an STL, 3MF, or OBJ file.');
+        return;
+      }
+      applyColor(object, color);
+      ctx.scene.add(object);
+      meshRef.current = object;
+      fitCamera(object);
+    } catch {
+      setViewerError('Could not load that model file.');
+    }
+  }
+
+  function chooseColor(hex: string) {
+    setColor(hex);
+    if (meshRef.current) applyColor(meshRef.current, hex);
+    onColorChosen?.(hex);
+  }
+
+  const palette = ['#d41e1e', '#e67814', '#ebd728', '#28aa46', '#285ac8', '#28bec8', '#823cb4', '#eb6eb4', '#ededed', '#222222', '#828282', '#785028'];
+
+  return (
+    <div className="toybox-viewer">
+      <div className="toybox-viewer-head">
+        <span><Box size={15} /> 3D model · color assignment</span>
+        <button className="secondary-button icon-text-button" onClick={() => fileRef.current?.click()} type="button">
+          <Upload size={14} /> Load model
+        </button>
+        <input accept=".stl,.3mf,.obj" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFile(file); }} ref={fileRef} type="file" />
+      </div>
+      <div className="toybox-canvas" ref={mountRef}>
+        {!fileName && <div className="toybox-canvas-empty">Load an STL / 3MF / OBJ to preview and assign its color</div>}
+      </div>
+      <div className="toybox-palette">
+        {palette.map((swatch) => (
+          <button className={color === swatch ? 'toybox-pal active' : 'toybox-pal'} key={swatch} onClick={() => chooseColor(swatch)} style={{ background: swatch }} title={swatch} type="button" />
+        ))}
+        <input aria-label="Custom color" onChange={(event) => chooseColor(event.target.value)} type="color" value={color} />
+        {fileName && <span className="toybox-viewer-file">{fileName}</span>}
+      </div>
+      {viewerError && <div className="memory-inline-result error">{viewerError}</div>}
+    </div>
+  );
+}
+
 function ToyBoxView() {
   const [printers, setPrinters] = useState<ToyBoxPrinterProfileRecord[]>([]);
   const [discovered, setDiscovered] = useState<ToyBoxDiscoveredPrinter[]>([]);
@@ -6321,6 +6471,8 @@ function ToyBoxView() {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [queue, setQueue] = useState<ToyBoxQueueItemRecord[]>([]);
   const [form, setForm] = useState({ name: '', connection: 'bambu', ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
   const [routeProduct, setRouteProduct] = useState('');
   const [routeColor, setRouteColor] = useState('');
@@ -6350,6 +6502,15 @@ function ToyBoxView() {
   useEffect(() => {
     void loadPrinters();
   }, [loadPrinters]);
+
+  const loadQueue = useCallback(async () => {
+    setQueue(await edisonApi.listToyBoxQueue().catch(() => []));
+  }, []);
+  useEffect(() => {
+    void loadQueue();
+    const timer = window.setInterval(() => void loadQueue(), 8000);
+    return () => window.clearInterval(timer);
+  }, [loadQueue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6420,122 +6581,38 @@ function ToyBoxView() {
 
   const bambuPrinters = printers.filter((printer) => ['bambu', 'moonraker', 'octoprint'].includes(printer.kind));
 
+  const reverseColorName = (hex: string) =>
+    Object.entries(TOYBOX_COLOR_HEX).find(([, value]) => value.toLowerCase() === hex.toLowerCase())?.[0];
+
   return (
     <section className="workbench-view toybox-view" aria-label="Toy Box management">
-      <div className="view-heading">
-        <Box size={26} />
-        <h3>Toy Box Management</h3>
-        <button className="secondary-button icon-text-button" disabled={scanning} onClick={() => void scan()} type="button">
-          <Search size={16} /> {scanning ? 'Scanning…' : 'Scan network'}
-        </button>
-      </div>
-      <p className="assistant-intro">Discover and control your 3D printers, track the loaded filament color per machine, and route print orders to the right one.</p>
-      {error && <div className="memory-inline-result error">{error}</div>}
-
-      <section className="toybox-route">
-        <div className="section-heading"><Waypoints size={18} /><h3>Route a print order</h3></div>
-        <p className="assistant-intro">Type an order (e.g. “blue keychain”) and Edison picks the printer that has that color loaded.</p>
-        <div className="toybox-route-row">
-          <input
-            onChange={(event) => setRouteProduct(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                void routeOrder();
-              }
-            }}
-            placeholder="Order / product (e.g. blue keychain)"
-            value={routeProduct}
-          />
-          <input className="toybox-route-color" onChange={(event) => setRouteColor(event.target.value)} placeholder="color (optional)" value={routeColor} />
-          <button className="apply-button icon-text-button" disabled={routing || !routeProduct.trim()} onClick={() => void routeOrder()} type="button">
-            <Waypoints size={15} /> Route
+      <div className="toybox-toolbar">
+        <div className="toybox-toolbar-title">
+          <Box size={20} />
+          <span>Toy Box Management</span>
+          <small>{bambuPrinters.length} printer{bambuPrinters.length === 1 ? '' : 's'} · {queue.length} queued</small>
+        </div>
+        <div className="toybox-toolbar-actions">
+          <button className="secondary-button icon-text-button" disabled={scanning} onClick={() => void scan()} type="button">
+            <Search size={15} /> {scanning ? 'Scanning…' : 'Scan'}
+          </button>
+          <button className={showAdd ? 'apply-button icon-text-button toybox-addbtn active' : 'apply-button icon-text-button toybox-addbtn'} onClick={() => setShowAdd((value) => !value)} type="button">
+            <Box size={15} /> {showAdd ? 'Close' : 'Add printer'}
           </button>
         </div>
-        {routeResult && (
-          <div className={routeResult.matched_printer_id ? 'toybox-route-result ok' : 'toybox-route-result warn'}>
-            <strong>{routeResult.reason}</strong>
-            <div className="toybox-route-cands">
-              {routeResult.candidates.map((candidate) => (
-                <span className={candidate.printer_id === routeResult.matched_printer_id ? 'toybox-cand matched' : 'toybox-cand'} key={candidate.printer_id}>
-                  {candidate.loaded_color && <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[candidate.loaded_color] ?? candidate.loaded_color }} />}
-                  {candidate.printer_name}: {candidate.note}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </section>
-
-      {discovered.length > 0 && (
-        <section className="toybox-discovered">
-          <div className="section-heading"><Search size={18} /><h3>Found on your network</h3></div>
-          <div className="toybox-found-grid">
-            {discovered.map((item) => (
-              <article className="toybox-found-card" key={item.ip}>
-                <strong>{item.label}</strong>
-                <span>{item.ip}</span>
-                <span className="toybox-kind">{item.kind}</span>
-                {item.already_added ? (
-                  <span className="toybox-added">added</span>
-                ) : (
-                  <button
-                    className="secondary-button"
-                    onClick={() => setForm((current) => ({ ...current, ip: item.ip, name: current.name || `${item.kind} ${item.ip.split('.').pop()}` }))}
-                    type="button"
-                  >
-                    Use ↓
-                  </button>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <div className="toybox-printer-grid">
-        {bambuPrinters.map((printer) => {
-          const status = live[printer.id];
-          const meta = printer.metadata as Record<string, unknown>;
-          const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
-          const address = String(meta?.ip ?? meta?.host ?? '');
-          const label = printer.kind === 'bambu' ? String(meta?.model ?? 'bambu').toUpperCase() : printer.kind.toUpperCase();
-          return (
-            <article className={status?.online ? 'toybox-printer online' : 'toybox-printer'} key={printer.id}>
-              <div className="toybox-printer-head">
-                <strong>{printer.name}</strong>
-                <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
-              </div>
-              <div className="toybox-printer-meta">{label} · {address}</div>
-              {color && (
-                <div className="toybox-filament">
-                  <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
-                  {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')}
-                </div>
-              )}
-              {status?.online ? (
-                <>
-                  <div className="toybox-state">{status.state ?? 'idle'}{status.job_name ? ` · ${status.job_name}` : ''}</div>
-                  {typeof status.progress === 'number' && status.progress > 0 && (
-                    <div className="toybox-progress"><span style={{ width: `${status.progress}%` }} /><em>{status.progress}%</em></div>
-                  )}
-                  <div className="toybox-temps">nozzle {Math.round(status.nozzle_temp ?? 0)}° · bed {Math.round(status.bed_temp ?? 0)}°{status.remaining_min ? ` · ${status.remaining_min}m left` : ''}</div>
-                </>
-              ) : (
-                <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
-              )}
-            </article>
-          );
-        })}
-        {bambuPrinters.length === 0 && <div className="empty-line">No printers added yet — scan the network and add one below.</div>}
       </div>
+      {error && <div className="memory-inline-result error">{error}</div>}
 
-      <section className="toybox-add">
-        <div className="section-heading"><Box size={18} /><h3>Add a Bambu printer</h3></div>
-        <p className="assistant-intro">
-          On the printer screen: <strong>Settings → Network → LAN Only Mode</strong> shows the <strong>Access Code</strong>; the <strong>Serial</strong> is under Device info.
-        </p>
-        <div className="toybox-add-grid">
+      {showAdd && (
+        <section className="toybox-add toybox-add-panel">
+          <div className="section-heading">
+            <Box size={18} /><h3>Add a printer</h3>
+          </div>
+          <p className="assistant-intro">
+            <strong>Bambu</strong>: Settings → Network → LAN Only Mode shows the Access Code; Serial is under Device info.
+            <strong> K1 SE</strong>: its IP (Moonraker). <strong>CR10S</strong>: an OctoPrint host + API key.
+          </p>
+          <div className="toybox-add-grid">
           <select onChange={(event) => setForm({ ...form, connection: event.target.value })} value={form.connection}>
             <option value="bambu">Bambu (LAN / MQTT)</option>
             <option value="moonraker">Klipper / K1 SE (Moonraker)</option>
@@ -6576,8 +6653,130 @@ function ToyBoxView() {
           >
             <Box size={15} /> Add printer
           </button>
+          </div>
+        </section>
+      )}
+
+      {discovered.length > 0 && (
+        <section className="toybox-discovered">
+          <div className="section-heading"><Search size={18} /><h3>Found on your network</h3></div>
+          <div className="toybox-found-grid">
+            {discovered.map((item) => (
+              <article className="toybox-found-card" key={item.ip}>
+                <strong>{item.label}</strong>
+                <span>{item.ip}</span>
+                <span className="toybox-kind">{item.kind}</span>
+                {item.already_added ? (
+                  <span className="toybox-added">added</span>
+                ) : (
+                  <button
+                    className="secondary-button"
+                    onClick={() => { setShowAdd(true); setForm((current) => ({ ...current, ip: item.ip, name: current.name || `${item.kind} ${item.ip.split('.').pop()}` })); }}
+                    type="button"
+                  >
+                    Use ↑
+                  </button>
+                )}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="toybox-dashboard">
+        <div className="toybox-dash-main">
+          <div className="toybox-printer-grid">
+            {bambuPrinters.map((printer) => {
+              const status = live[printer.id];
+              const meta = printer.metadata as Record<string, unknown>;
+              const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
+              const address = String(meta?.ip ?? meta?.host ?? '');
+              const label = printer.kind === 'bambu' ? String(meta?.model ?? 'bambu').toUpperCase() : printer.kind.toUpperCase();
+              return (
+                <article className={status?.online ? 'toybox-printer online' : 'toybox-printer'} key={printer.id}>
+                  <div className="toybox-printer-head">
+                    <strong>{printer.name}</strong>
+                    <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
+                  </div>
+                  <div className="toybox-printer-meta">{label} · {address}</div>
+                  {color && (
+                    <div className="toybox-filament">
+                      <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
+                      {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')}
+                    </div>
+                  )}
+                  {status?.online ? (
+                    <>
+                      <div className="toybox-state">{status.state ?? 'idle'}{status.job_name ? ` · ${status.job_name}` : ''}</div>
+                      {typeof status.progress === 'number' && status.progress > 0 && (
+                        <div className="toybox-progress"><span style={{ width: `${status.progress}%` }} /><em>{status.progress}%</em></div>
+                      )}
+                      <div className="toybox-temps">nozzle {Math.round(status.nozzle_temp ?? 0)}° · bed {Math.round(status.bed_temp ?? 0)}°{status.remaining_min ? ` · ${status.remaining_min}m left` : ''}</div>
+                    </>
+                  ) : (
+                    <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
+                  )}
+                </article>
+              );
+            })}
+            {bambuPrinters.length === 0 && <div className="empty-line">No printers yet — click “Add printer” above, or Scan to find them.</div>}
+          </div>
+          <ModelViewer onColorChosen={(hex) => { const name = reverseColorName(hex); if (name) setRouteColor(name); }} />
         </div>
-      </section>
+
+        <div className="toybox-dash-side">
+          <section className="toybox-route">
+            <div className="section-heading"><Waypoints size={18} /><h3>Route a print order</h3></div>
+            <p className="assistant-intro">Type an order (e.g. “blue keychain”) and Edison picks the printer with that color loaded.</p>
+            <div className="toybox-route-row">
+              <input
+                onChange={(event) => setRouteProduct(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void routeOrder();
+                  }
+                }}
+                placeholder="Order (e.g. blue keychain)"
+                value={routeProduct}
+              />
+              <input className="toybox-route-color" onChange={(event) => setRouteColor(event.target.value)} placeholder="color" value={routeColor} />
+              <button className="apply-button icon-text-button" disabled={routing || !routeProduct.trim()} onClick={() => void routeOrder()} type="button">
+                <Waypoints size={15} /> Route
+              </button>
+            </div>
+            {routeResult && (
+              <div className={routeResult.matched_printer_id ? 'toybox-route-result ok' : 'toybox-route-result warn'}>
+                <strong>{routeResult.reason}</strong>
+                <div className="toybox-route-cands">
+                  {routeResult.candidates.map((candidate) => (
+                    <span className={candidate.printer_id === routeResult.matched_printer_id ? 'toybox-cand matched' : 'toybox-cand'} key={candidate.printer_id}>
+                      {candidate.loaded_color && <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[candidate.loaded_color] ?? candidate.loaded_color }} />}
+                      {candidate.printer_name}: {candidate.note}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="toybox-queue">
+            <div className="section-heading"><Activity size={18} /><h3>Order queue</h3></div>
+            <div className="toybox-queue-list">
+              {queue.map((item) => (
+                <article className="toybox-queue-item" key={item.id}>
+                  <span className={`toybox-q-status ${item.status}`}>{item.status.replace(/_/g, ' ')}</span>
+                  <div className="toybox-q-body">
+                    <strong>{item.title}</strong>
+                    {item.printer_id && <span>→ {printers.find((entry) => entry.id === item.printer_id)?.name ?? item.printer_id}</span>}
+                  </div>
+                </article>
+              ))}
+              {queue.length === 0 && <div className="empty-line">Queue is empty. Routed orders will appear here.</div>}
+            </div>
+          </section>
+        </div>
+      </div>
     </section>
   );
 }
