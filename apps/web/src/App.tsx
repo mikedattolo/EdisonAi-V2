@@ -6579,6 +6579,29 @@ function ToyBoxView() {
     }
   }
 
+  function editPrinter(printer: ToyBoxPrinterProfileRecord) {
+    const meta = (printer.metadata ?? {}) as Record<string, unknown>;
+    const connection = ['bambu', 'moonraker', 'octoprint'].includes(printer.kind) ? printer.kind : 'bambu';
+    setForm({
+      name: printer.name,
+      connection,
+      ip: String(meta.ip ?? ''),
+      serial: String(meta.serial ?? ''),
+      access_code: String(meta.access_code ?? ''),
+      host: String(meta.host ?? ''),
+      api_key: String(meta.api_key ?? ''),
+      model: String(meta.model ?? 'x1c'),
+      loaded_color: String(meta.loaded_color ?? ''),
+      loaded_material: String(meta.loaded_material ?? 'PLA'),
+    });
+    setShowAdd(true);
+  }
+
+  async function deletePrinter(printerId: string) {
+    await edisonApi.deleteToyBoxPrinter(printerId).catch(() => undefined);
+    await loadPrinters();
+  }
+
   const bambuPrinters = printers.filter((printer) => ['bambu', 'moonraker', 'octoprint'].includes(printer.kind));
 
   const reverseColorName = (hex: string) =>
@@ -6696,7 +6719,11 @@ function ToyBoxView() {
                 <article className={status?.online ? 'toybox-printer online' : 'toybox-printer'} key={printer.id}>
                   <div className="toybox-printer-head">
                     <strong>{printer.name}</strong>
-                    <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
+                    <div className="toybox-printer-head-right">
+                      <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
+                      <button className="toybox-iconbtn" onClick={() => editPrinter(printer)} title="Edit settings" type="button"><Settings size={13} /></button>
+                      <button className="toybox-iconbtn" onClick={() => void deletePrinter(printer.id)} title="Remove printer" type="button"><Trash2 size={13} /></button>
+                    </div>
                   </div>
                   <div className="toybox-printer-meta">{label} · {address}</div>
                   {color && (

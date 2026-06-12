@@ -384,6 +384,13 @@ export const edisonApi = {
     metadata?: Record<string, unknown>;
   }) => request<ToyBoxPrinterProfileRecord>('/api/v1/toybox/printers', { method: 'POST', body: JSON.stringify(payload) }),
   discoverToyBoxPrinters: () => request<ToyBoxDiscoveredPrinter[]>('/api/v1/toybox/discover'),
+  deleteToyBoxPrinter: async (printerId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/toybox/printers/${printerId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+    return response.json();
+  },
   getToyBoxPrinterLive: (printerId: string) =>
     request<ToyBoxPrinterLiveStatus>(`/api/v1/toybox/printers/${printerId}/live`),
   routeToyBoxOrder: (payload: { product: string; color?: string | null; quantity?: number }) =>

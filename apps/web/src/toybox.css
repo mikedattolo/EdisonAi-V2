@@ -352,3 +352,27 @@
 }
 .toybox-q-body strong { font-size: 13px; }
 .toybox-q-body span { font-size: 11px; opacity: 0.55; }
+
+.toybox-printer-head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.toybox-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.toybox-iconbtn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}

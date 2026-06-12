@@ -133,6 +133,10 @@ class ToyBoxStore:
             rows = connection.execute("SELECT * FROM toybox_printers ORDER BY role, name").fetchall()
         return [self._printer_from_row(row) for row in rows]
 
+    def delete_printer(self, printer_id: str) -> None:
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM toybox_printers WHERE id = ?", (printer_id,))
+
     def upsert_printer(self, payload: ToyBoxPrinterProfileCreate) -> ToyBoxPrinterProfileRecord:
         now = utc_now()
         with self.database.connect() as connection:

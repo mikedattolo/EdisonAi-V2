@@ -221,6 +221,12 @@ def upsert_printer_profile(
     return store.upsert_printer(payload)
 
 
+@router.delete("/printers/{printer_id}")
+def delete_printer_profile(printer_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> dict:
+    store.delete_printer(printer_id)
+    return {"status": "deleted", "id": printer_id}
+
+
 @router.get("/mappings", response_model=list[ToyBoxProductMappingRecord])
 def list_product_mappings(
     store: ToyBoxStore = Depends(get_toybox_store),
