@@ -6320,7 +6320,7 @@ function ToyBoxView() {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: '', ip: '', serial: '', access_code: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+  const [form, setForm] = useState({ name: '', connection: 'bambu', ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
 
   const loadPrinters = useCallback(async () => {
     try {
@@ -6337,7 +6337,11 @@ function ToyBoxView() {
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
-    const bambu = printers.filter((printer) => printer.kind === 'bambu' && (printer.metadata as Record<string, unknown>)?.ip);
+    const bambu = printers.filter(
+      (printer) =>
+        ['bambu', 'moonraker', 'octoprint'].includes(printer.kind) &&
+        ((printer.metadata as Record<string, unknown>)?.ip || (printer.metadata as Record<string, unknown>)?.host),
+    );
     async function poll() {
       const updates: Record<string, ToyBoxPrinterLiveStatus> = {};
       await Promise.all(
@@ -6370,24 +6374,25 @@ function ToyBoxView() {
   }
 
   async function addPrinter() {
-    if (!form.name.trim() || !form.ip.trim()) return;
+    const host = (form.connection === 'bambu' ? form.ip : form.host || form.ip).trim();
+    if (!form.name.trim() || !host) return;
     setBusy(true);
     try {
-      await edisonApi.upsertToyBoxPrinter({
-        name: form.name.trim(),
-        kind: 'bambu',
-        role: 'printer',
-        status: 'ready',
-        metadata: {
-          ip: form.ip.trim(),
-          serial: form.serial.trim(),
-          access_code: form.access_code.trim(),
-          model: form.model,
-          loaded_color: form.loaded_color.trim().toLowerCase(),
-          loaded_material: form.loaded_material.trim(),
-        },
-      });
-      setForm({ name: '', ip: '', serial: '', access_code: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+      const metadata: Record<string, unknown> = {
+        loaded_color: form.loaded_color.trim().toLowerCase(),
+        loaded_material: form.loaded_material.trim(),
+      };
+      if (form.connection === 'bambu') {
+        metadata.ip = form.ip.trim();
+        metadata.serial = form.serial.trim();
+        metadata.access_code = form.access_code.trim();
+        metadata.model = form.model;
+      } else {
+        metadata.host = host;
+        if (form.connection === 'octoprint') metadata.api_key = form.api_key.trim();
+      }
+      await edisonApi.upsertToyBoxPrinter({ name: form.name.trim(), kind: form.connection, role: 'printer', status: 'ready', metadata });
+      setForm({ name: '', connection: form.connection, ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
       await loadPrinters();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not add printer.');
@@ -6396,7 +6401,7 @@ function ToyBoxView() {
     }
   }
 
-  const bambuPrinters = printers.filter((printer) => printer.kind === 'bambu');
+  const bambuPrinters = printers.filter((printer) => ['bambu', 'moonraker', 'octoprint'].includes(printer.kind));
 
   return (
     <section className="workbench-view toybox-view" aria-label="Toy Box management">
@@ -6441,14 +6446,15 @@ function ToyBoxView() {
           const status = live[printer.id];
           const meta = printer.metadata as Record<string, unknown>;
           const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
-          const model = String(meta?.model ?? 'bambu').toUpperCase();
+          const address = String(meta?.ip ?? meta?.host ?? '');
+          const label = printer.kind === 'bambu' ? String(meta?.model ?? 'bambu').toUpperCase() : printer.kind.toUpperCase();
           return (
             <article className={status?.online ? 'toybox-printer online' : 'toybox-printer'} key={printer.id}>
               <div className="toybox-printer-head">
                 <strong>{printer.name}</strong>
                 <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
               </div>
-              <div className="toybox-printer-meta">{model} · {String(meta?.ip ?? '')}</div>
+              <div className="toybox-printer-meta">{label} · {address}</div>
               {color && (
                 <div className="toybox-filament">
                   <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
@@ -6478,19 +6484,44 @@ function ToyBoxView() {
           On the printer screen: <strong>Settings → Network → LAN Only Mode</strong> shows the <strong>Access Code</strong>; the <strong>Serial</strong> is under Device info.
         </p>
         <div className="toybox-add-grid">
-          <input onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Name (e.g. X1C)" value={form.name} />
-          <input onChange={(event) => setForm({ ...form, ip: event.target.value })} placeholder="IP (e.g. 192.168.1.8)" value={form.ip} />
-          <input onChange={(event) => setForm({ ...form, serial: event.target.value })} placeholder="Serial number" value={form.serial} />
-          <input onChange={(event) => setForm({ ...form, access_code: event.target.value })} placeholder="Access code" value={form.access_code} />
-          <select onChange={(event) => setForm({ ...form, model: event.target.value })} value={form.model}>
-            <option value="x1c">X1C</option>
-            <option value="a1mini">A1 mini</option>
-            <option value="a1">A1</option>
-            <option value="p1s">P1S</option>
+          <select onChange={(event) => setForm({ ...form, connection: event.target.value })} value={form.connection}>
+            <option value="bambu">Bambu (LAN / MQTT)</option>
+            <option value="moonraker">Klipper / K1 SE (Moonraker)</option>
+            <option value="octoprint">OctoPrint (CR10S)</option>
           </select>
+          <input onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Name (e.g. X1C)" value={form.name} />
+          {form.connection === 'bambu' ? (
+            <>
+              <input onChange={(event) => setForm({ ...form, ip: event.target.value })} placeholder="IP (e.g. 192.168.1.8)" value={form.ip} />
+              <input onChange={(event) => setForm({ ...form, serial: event.target.value })} placeholder="Serial number" value={form.serial} />
+              <input onChange={(event) => setForm({ ...form, access_code: event.target.value })} placeholder="Access code" value={form.access_code} />
+              <select onChange={(event) => setForm({ ...form, model: event.target.value })} value={form.model}>
+                <option value="x1c">X1C</option>
+                <option value="a1mini">A1 mini</option>
+                <option value="a1">A1</option>
+                <option value="p1s">P1S</option>
+              </select>
+            </>
+          ) : (
+            <>
+              <input
+                onChange={(event) => setForm({ ...form, host: event.target.value })}
+                placeholder={form.connection === 'octoprint' ? 'OctoPrint host (IP or URL)' : 'Printer IP / host'}
+                value={form.host}
+              />
+              {form.connection === 'octoprint' && (
+                <input onChange={(event) => setForm({ ...form, api_key: event.target.value })} placeholder="OctoPrint API key" value={form.api_key} />
+              )}
+            </>
+          )}
           <input onChange={(event) => setForm({ ...form, loaded_color: event.target.value })} placeholder="Loaded color (e.g. blue)" value={form.loaded_color} />
           <input onChange={(event) => setForm({ ...form, loaded_material: event.target.value })} placeholder="Material (PLA)" value={form.loaded_material} />
-          <button className="apply-button icon-text-button" disabled={busy || !form.name.trim() || !form.ip.trim()} onClick={() => void addPrinter()} type="button">
+          <button
+            className="apply-button icon-text-button"
+            disabled={busy || !form.name.trim() || !(form.connection === 'bambu' ? form.ip.trim() : form.host.trim() || form.ip.trim())}
+            onClick={() => void addPrinter()}
+            type="button"
+          >
             <Box size={15} /> Add printer
           </button>
         </div>

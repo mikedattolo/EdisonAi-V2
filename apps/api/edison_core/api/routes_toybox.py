@@ -43,6 +43,8 @@ from edison_core.schemas import (
 )
 from edison_core.services import printer_discovery
 from edison_core.services.bambu_printer import BambuPrinter
+from edison_core.services.moonraker_printer import MoonrakerPrinter
+from edison_core.services.octoprint_printer import OctoPrintPrinter
 from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.integration_discovery import IntegrationDiscoveryService
 from edison_core.services.runtime_settings import RuntimeSettingsStore
@@ -374,27 +376,37 @@ def printer_live_status(
     ip = str(meta.get("ip") or "").strip()
     serial = str(meta.get("serial") or "").strip()
     access = str(meta.get("access_code") or "").strip()
+    host = str(meta.get("host") or meta.get("ip") or "").strip()
+    api_key = str(meta.get("api_key") or "").strip()
+
+    status: dict | None = None
     if printer.kind == "bambu" and ip and serial and access:
         status = BambuPrinter(ip, serial, access).get_status()
+    elif printer.kind == "moonraker" and host:
+        status = MoonrakerPrinter(host).get_status()
+    elif printer.kind == "octoprint" and host:
+        status = OctoPrintPrinter(host, api_key).get_status()
+
+    if status is None:
         return ToyBoxPrinterLiveStatus(
             printer_id=printer_id,
-            online=bool(status.get("online")),
-            state=status.get("state"),
-            progress=status.get("progress"),
-            nozzle_temp=status.get("nozzle_temp"),
-            bed_temp=status.get("bed_temp"),
-            remaining_min=status.get("remaining_min"),
-            job_name=status.get("job_name"),
-            loaded_color=status.get("loaded_color") or meta.get("loaded_color"),
-            loaded_material=status.get("loaded_material") or meta.get("loaded_material"),
-            detail=status.get("detail"),
+            online=False,
+            loaded_color=meta.get("loaded_color"),
+            loaded_material=meta.get("loaded_material"),
+            detail="Live control isn't configured for this printer yet (add its connection details).",
         )
     return ToyBoxPrinterLiveStatus(
         printer_id=printer_id,
-        online=False,
-        loaded_color=meta.get("loaded_color"),
-        loaded_material=meta.get("loaded_material"),
-        detail="Live control needs a Bambu IP, serial, and access code on this printer.",
+        online=bool(status.get("online")),
+        state=status.get("state"),
+        progress=status.get("progress"),
+        nozzle_temp=status.get("nozzle_temp"),
+        bed_temp=status.get("bed_temp"),
+        remaining_min=status.get("remaining_min"),
+        job_name=status.get("job_name"),
+        loaded_color=status.get("loaded_color") or meta.get("loaded_color"),
+        loaded_material=status.get("loaded_material") or meta.get("loaded_material"),
+        detail=status.get("detail"),
     )
 
 
