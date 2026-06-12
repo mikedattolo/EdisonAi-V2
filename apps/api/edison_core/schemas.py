@@ -1150,6 +1150,28 @@ class ToyBoxPrinterProfileRecord(ToyBoxPrinterProfileCreate):
     updated_at: datetime
 
 
+class ToyBoxDiscoveredPrinter(BaseModel):
+    ip: str
+    kind: str = "unknown"  # bambu / moonraker / octoprint / unknown
+    label: str = ""
+    ports: list[int] = Field(default_factory=list)
+    already_added: bool = False
+
+
+class ToyBoxPrinterLiveStatus(BaseModel):
+    printer_id: str
+    online: bool = False
+    state: str | None = None
+    progress: int | None = None
+    nozzle_temp: float | None = None
+    bed_temp: float | None = None
+    remaining_min: int | None = None
+    job_name: str | None = None
+    loaded_color: str | None = None
+    loaded_material: str | None = None
+    detail: str | None = None
+
+
 class ToyBoxProductMappingCreate(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 

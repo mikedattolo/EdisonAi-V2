@@ -50,6 +50,9 @@ import type {
   SystemStatus,
   RuntimeSettingsRecord,
   ToyBoxManagerStatus,
+  ToyBoxPrinterProfileRecord,
+  ToyBoxDiscoveredPrinter,
+  ToyBoxPrinterLiveStatus,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
   ScheduledTaskRecord,
@@ -369,6 +372,18 @@ export const edisonApi = {
     request<CreatorTrainingJob>(`/api/v1/creator-lab/training/jobs/${jobId}/cancel`, { method: 'POST' }),
   listMediaModes: () => request<MediaGenerationModeRecord[]>('/api/v1/media/modes'),
   getToyBoxStatus: () => request<ToyBoxManagerStatus>('/api/v1/toybox/status'),
+  listToyBoxPrinters: () => request<ToyBoxPrinterProfileRecord[]>('/api/v1/toybox/printers'),
+  upsertToyBoxPrinter: (payload: {
+    name: string;
+    kind?: string;
+    role?: string;
+    camera_url?: string | null;
+    status?: string;
+    metadata?: Record<string, unknown>;
+  }) => request<ToyBoxPrinterProfileRecord>('/api/v1/toybox/printers', { method: 'POST', body: JSON.stringify(payload) }),
+  discoverToyBoxPrinters: () => request<ToyBoxDiscoveredPrinter[]>('/api/v1/toybox/discover'),
+  getToyBoxPrinterLive: (printerId: string) =>
+    request<ToyBoxPrinterLiveStatus>(`/api/v1/toybox/printers/${printerId}/live`),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
   updateRuntimeSettings: (payload: Partial<Pick<RuntimeSettingsRecord, 'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'>>) =>
     request<RuntimeSettingsRecord>('/api/v1/settings/runtime', {

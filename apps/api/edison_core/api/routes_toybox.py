@@ -38,7 +38,11 @@ from edison_core.schemas import (
     ToyBoxSetupRequest,
     ToyBoxSetupResult,
     ToyBoxShopifyWebhookResult,
+    ToyBoxDiscoveredPrinter,
+    ToyBoxPrinterLiveStatus,
 )
+from edison_core.services import printer_discovery
+from edison_core.services.bambu_printer import BambuPrinter
 from edison_core.services.desktop_bridge import DesktopBridgeClient
 from edison_core.services.integration_discovery import IntegrationDiscoveryService
 from edison_core.services.runtime_settings import RuntimeSettingsStore
@@ -341,6 +345,57 @@ def toybox_printer_status(
     bridge: DesktopBridgeClient = Depends(get_desktop_bridge_client),
 ) -> list[ToyBoxPrinterRecord]:
     return _printer_records(discovery.snapshot(), bridge.status(), store.list_printers())
+
+
+@router.get("/discover", response_model=list[ToyBoxDiscoveredPrinter])
+def discover_printers(store: ToyBoxStore = Depends(get_toybox_store)) -> list[ToyBoxDiscoveredPrinter]:
+    known_ips = {str(p.metadata.get("ip") or "").strip() for p in store.list_printers() if p.metadata.get("ip")}
+    return [
+        ToyBoxDiscoveredPrinter(
+            ip=item["ip"],
+            kind=item["kind"],
+            label=item["label"],
+            ports=item["ports"],
+            already_added=item["ip"] in known_ips,
+        )
+        for item in printer_discovery.discover()
+    ]
+
+
+@router.get("/printers/{printer_id}/live", response_model=ToyBoxPrinterLiveStatus)
+def printer_live_status(
+    printer_id: str,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxPrinterLiveStatus:
+    printer = next((item for item in store.list_printers() if item.id == printer_id), None)
+    if printer is None:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    meta = printer.metadata or {}
+    ip = str(meta.get("ip") or "").strip()
+    serial = str(meta.get("serial") or "").strip()
+    access = str(meta.get("access_code") or "").strip()
+    if printer.kind == "bambu" and ip and serial and access:
+        status = BambuPrinter(ip, serial, access).get_status()
+        return ToyBoxPrinterLiveStatus(
+            printer_id=printer_id,
+            online=bool(status.get("online")),
+            state=status.get("state"),
+            progress=status.get("progress"),
+            nozzle_temp=status.get("nozzle_temp"),
+            bed_temp=status.get("bed_temp"),
+            remaining_min=status.get("remaining_min"),
+            job_name=status.get("job_name"),
+            loaded_color=status.get("loaded_color") or meta.get("loaded_color"),
+            loaded_material=status.get("loaded_material") or meta.get("loaded_material"),
+            detail=status.get("detail"),
+        )
+    return ToyBoxPrinterLiveStatus(
+        printer_id=printer_id,
+        online=False,
+        loaded_color=meta.get("loaded_color"),
+        loaded_material=meta.get("loaded_material"),
+        detail="Live control needs a Bambu IP, serial, and access code on this printer.",
+    )
 
 
 @router.post("/notifications/test", response_model=ToyBoxNotificationResult)

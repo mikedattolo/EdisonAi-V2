@@ -47,6 +47,7 @@ import './creator-lab.css';
 import './code-space.css';
 import './voice.css';
 import './scheduled.css';
+import './toybox.css';
 import { edisonApi } from './api';
 import type {
   AgentChangedFile,
@@ -99,6 +100,9 @@ import type {
   WorkspaceInstallResult,
   ScheduledTaskRecord,
   ScheduledTasksStatus,
+  ToyBoxPrinterProfileRecord,
+  ToyBoxDiscoveredPrinter,
+  ToyBoxPrinterLiveStatus,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -126,6 +130,7 @@ type ViewId =
   | 'media'
   | 'creator'
   | 'gallery'
+  | 'toybox'
   | 'memory'
   | 'scheduled'
   | 'system'
@@ -169,6 +174,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconType }> = [
   { id: 'media', label: 'Media', icon: GalleryHorizontalEnd },
   { id: 'creator', label: 'Creator', icon: Sparkles },
   { id: 'gallery', label: 'Gallery', icon: Image },
+  { id: 'toybox', label: 'Toy Box', icon: Box },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'scheduled', label: 'Scheduled', icon: CalendarDays },
   { id: 'system', label: 'System', icon: Server },
@@ -3420,6 +3426,9 @@ function WorkbenchView({
   if (activeView === 'scheduled') {
     return <ScheduledView />;
   }
+  if (activeView === 'toybox') {
+    return <ToyBoxView />;
+  }
   if (activeView === 'memory') {
     return (
       <MemoryView
@@ -6294,6 +6303,198 @@ function CodeWorkspaceView({
         </div>
       </div>
 
+    </section>
+  );
+}
+
+const TOYBOX_COLOR_HEX: Record<string, string> = {
+  red: '#d41e1e', orange: '#e67814', yellow: '#ebd728', green: '#28aa46', blue: '#285ac8',
+  cyan: '#28bec8', purple: '#823cb4', pink: '#eb6eb4', white: '#ededed', black: '#222222',
+  gray: '#828282', brown: '#785028',
+};
+
+function ToyBoxView() {
+  const [printers, setPrinters] = useState<ToyBoxPrinterProfileRecord[]>([]);
+  const [discovered, setDiscovered] = useState<ToyBoxDiscoveredPrinter[]>([]);
+  const [live, setLive] = useState<Record<string, ToyBoxPrinterLiveStatus>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ name: '', ip: '', serial: '', access_code: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+
+  const loadPrinters = useCallback(async () => {
+    try {
+      setPrinters(await edisonApi.listToyBoxPrinters());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load printers.');
+    }
+  }, []);
+  useEffect(() => {
+    void loadPrinters();
+  }, [loadPrinters]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const bambu = printers.filter((printer) => printer.kind === 'bambu' && (printer.metadata as Record<string, unknown>)?.ip);
+    async function poll() {
+      const updates: Record<string, ToyBoxPrinterLiveStatus> = {};
+      await Promise.all(
+        bambu.map(async (printer) => {
+          const status = await edisonApi.getToyBoxPrinterLive(printer.id).catch(() => null);
+          if (status) updates[printer.id] = status;
+        }),
+      );
+      if (!cancelled) {
+        setLive((current) => ({ ...current, ...updates }));
+        timer = window.setTimeout(() => void poll(), 6000);
+      }
+    }
+    if (bambu.length) void poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [printers]);
+
+  async function scan() {
+    setScanning(true);
+    try {
+      setDiscovered(await edisonApi.discoverToyBoxPrinters());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network scan failed.');
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function addPrinter() {
+    if (!form.name.trim() || !form.ip.trim()) return;
+    setBusy(true);
+    try {
+      await edisonApi.upsertToyBoxPrinter({
+        name: form.name.trim(),
+        kind: 'bambu',
+        role: 'printer',
+        status: 'ready',
+        metadata: {
+          ip: form.ip.trim(),
+          serial: form.serial.trim(),
+          access_code: form.access_code.trim(),
+          model: form.model,
+          loaded_color: form.loaded_color.trim().toLowerCase(),
+          loaded_material: form.loaded_material.trim(),
+        },
+      });
+      setForm({ name: '', ip: '', serial: '', access_code: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+      await loadPrinters();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not add printer.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const bambuPrinters = printers.filter((printer) => printer.kind === 'bambu');
+
+  return (
+    <section className="workbench-view toybox-view" aria-label="Toy Box management">
+      <div className="view-heading">
+        <Box size={26} />
+        <h3>Toy Box Management</h3>
+        <button className="secondary-button icon-text-button" disabled={scanning} onClick={() => void scan()} type="button">
+          <Search size={16} /> {scanning ? 'Scanning…' : 'Scan network'}
+        </button>
+      </div>
+      <p className="assistant-intro">Discover and control your 3D printers, track the loaded filament color per machine, and route print orders to the right one.</p>
+      {error && <div className="memory-inline-result error">{error}</div>}
+
+      {discovered.length > 0 && (
+        <section className="toybox-discovered">
+          <div className="section-heading"><Search size={18} /><h3>Found on your network</h3></div>
+          <div className="toybox-found-grid">
+            {discovered.map((item) => (
+              <article className="toybox-found-card" key={item.ip}>
+                <strong>{item.label}</strong>
+                <span>{item.ip}</span>
+                <span className="toybox-kind">{item.kind}</span>
+                {item.already_added ? (
+                  <span className="toybox-added">added</span>
+                ) : (
+                  <button
+                    className="secondary-button"
+                    onClick={() => setForm((current) => ({ ...current, ip: item.ip, name: current.name || `${item.kind} ${item.ip.split('.').pop()}` }))}
+                    type="button"
+                  >
+                    Use ↓
+                  </button>
+                )}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="toybox-printer-grid">
+        {bambuPrinters.map((printer) => {
+          const status = live[printer.id];
+          const meta = printer.metadata as Record<string, unknown>;
+          const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
+          const model = String(meta?.model ?? 'bambu').toUpperCase();
+          return (
+            <article className={status?.online ? 'toybox-printer online' : 'toybox-printer'} key={printer.id}>
+              <div className="toybox-printer-head">
+                <strong>{printer.name}</strong>
+                <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
+              </div>
+              <div className="toybox-printer-meta">{model} · {String(meta?.ip ?? '')}</div>
+              {color && (
+                <div className="toybox-filament">
+                  <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
+                  {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')}
+                </div>
+              )}
+              {status?.online ? (
+                <>
+                  <div className="toybox-state">{status.state ?? 'idle'}{status.job_name ? ` · ${status.job_name}` : ''}</div>
+                  {typeof status.progress === 'number' && status.progress > 0 && (
+                    <div className="toybox-progress"><span style={{ width: `${status.progress}%` }} /><em>{status.progress}%</em></div>
+                  )}
+                  <div className="toybox-temps">nozzle {Math.round(status.nozzle_temp ?? 0)}° · bed {Math.round(status.bed_temp ?? 0)}°{status.remaining_min ? ` · ${status.remaining_min}m left` : ''}</div>
+                </>
+              ) : (
+                <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
+              )}
+            </article>
+          );
+        })}
+        {bambuPrinters.length === 0 && <div className="empty-line">No printers added yet — scan the network and add one below.</div>}
+      </div>
+
+      <section className="toybox-add">
+        <div className="section-heading"><Box size={18} /><h3>Add a Bambu printer</h3></div>
+        <p className="assistant-intro">
+          On the printer screen: <strong>Settings → Network → LAN Only Mode</strong> shows the <strong>Access Code</strong>; the <strong>Serial</strong> is under Device info.
+        </p>
+        <div className="toybox-add-grid">
+          <input onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Name (e.g. X1C)" value={form.name} />
+          <input onChange={(event) => setForm({ ...form, ip: event.target.value })} placeholder="IP (e.g. 192.168.1.8)" value={form.ip} />
+          <input onChange={(event) => setForm({ ...form, serial: event.target.value })} placeholder="Serial number" value={form.serial} />
+          <input onChange={(event) => setForm({ ...form, access_code: event.target.value })} placeholder="Access code" value={form.access_code} />
+          <select onChange={(event) => setForm({ ...form, model: event.target.value })} value={form.model}>
+            <option value="x1c">X1C</option>
+            <option value="a1mini">A1 mini</option>
+            <option value="a1">A1</option>
+            <option value="p1s">P1S</option>
+          </select>
+          <input onChange={(event) => setForm({ ...form, loaded_color: event.target.value })} placeholder="Loaded color (e.g. blue)" value={form.loaded_color} />
+          <input onChange={(event) => setForm({ ...form, loaded_material: event.target.value })} placeholder="Material (PLA)" value={form.loaded_material} />
+          <button className="apply-button icon-text-button" disabled={busy || !form.name.trim() || !form.ip.trim()} onClick={() => void addPrinter()} type="button">
+            <Box size={15} /> Add printer
+          </button>
+        </div>
+      </section>
     </section>
   );
 }

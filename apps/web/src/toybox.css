@@ -1,0 +1,136 @@
+/* Toy Box — 3D printer farm management. */
+
+.toybox-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.toybox-view .assistant-intro {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.toybox-found-grid,
+.toybox-printer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.toybox-found-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.toybox-found-card strong { font-size: 13px; }
+.toybox-found-card span { font-size: 11px; opacity: 0.6; }
+.toybox-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8ab4f8 !important;
+  opacity: 1 !important;
+}
+.toybox-found-card button { margin-top: 8px; align-self: flex-start; }
+.toybox-added {
+  margin-top: 8px;
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: rgba(52, 199, 129, 0.16);
+  color: #79e2a0 !important;
+}
+
+.toybox-printer {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.toybox-printer.online {
+  border-color: rgba(52, 199, 129, 0.4);
+}
+.toybox-printer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.toybox-printer-head strong { font-size: 15px; }
+.toybox-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.toybox-dot.on { background: #34c781; box-shadow: 0 0 8px #34c781; }
+.toybox-dot.off { background: #6b6b6b; }
+.toybox-printer-meta { font-size: 11px; opacity: 0.55; font-family: ui-monospace, monospace; }
+.toybox-filament {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+.toybox-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+.toybox-state { font-size: 12.5px; }
+.toybox-progress {
+  position: relative;
+  height: 16px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.toybox-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #34c781, #4f8cff);
+}
+.toybox-progress em {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-style: normal;
+  color: #fff;
+}
+.toybox-temps { font-size: 11px; opacity: 0.65; }
+.toybox-offline { font-size: 12px; opacity: 0.5; }
+
+.toybox-add,
+.toybox-discovered {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.toybox-add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.toybox-add-grid input,
+.toybox-add-grid select {
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  color: inherit;
+  padding: 8px 10px;
+  font: inherit;
+}
+.toybox-add-grid button { grid-column: 1 / -1; justify-self: start; }

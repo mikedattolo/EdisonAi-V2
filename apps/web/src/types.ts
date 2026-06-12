@@ -543,6 +543,42 @@ export interface ToyBoxManagerStatus {
   detail: string;
 }
 
+export interface ToyBoxPrinterProfileRecord {
+  id: string;
+  name: string;
+  kind: 'bambu' | 'orca' | 'cura' | 'dymo' | 'generic';
+  role: 'printer' | 'slicer' | 'label_printer' | 'camera' | 'desktop_bridge';
+  bridge_tool_id?: string | null;
+  slicer_profile?: string | null;
+  camera_url?: string | null;
+  status: 'ready' | 'staged' | 'missing' | 'disabled';
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ToyBoxDiscoveredPrinter {
+  ip: string;
+  kind: string;
+  label: string;
+  ports: number[];
+  already_added: boolean;
+}
+
+export interface ToyBoxPrinterLiveStatus {
+  printer_id: string;
+  online: boolean;
+  state?: string | null;
+  progress?: number | null;
+  nozzle_temp?: number | null;
+  bed_temp?: number | null;
+  remaining_min?: number | null;
+  job_name?: string | null;
+  loaded_color?: string | null;
+  loaded_material?: string | null;
+  detail?: string | null;
+}
+
 export interface RuntimeSettingsRecord {
   service: string;
   updated_at: string;
