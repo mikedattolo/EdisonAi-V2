@@ -40,6 +40,9 @@ from edison_core.schemas import (
     ToyBoxShopifyWebhookResult,
     ToyBoxDiscoveredPrinter,
     ToyBoxPrinterLiveStatus,
+    ToyBoxRouteRequest,
+    ToyBoxRouteResult,
+    ToyBoxRouteCandidate,
 )
 from edison_core.services import printer_discovery
 from edison_core.services.bambu_printer import BambuPrinter
@@ -408,6 +411,88 @@ def printer_live_status(
         loaded_material=status.get("loaded_material") or meta.get("loaded_material"),
         detail=status.get("detail"),
     )
+
+
+_COLOR_WORDS = {
+    "red": "red", "orange": "orange", "yellow": "yellow", "gold": "yellow", "green": "green",
+    "lime": "green", "blue": "blue", "navy": "blue", "cyan": "cyan", "teal": "cyan", "aqua": "cyan",
+    "purple": "purple", "violet": "purple", "magenta": "pink", "pink": "pink", "white": "white",
+    "black": "black", "gray": "gray", "grey": "gray", "silver": "gray", "brown": "brown",
+}
+
+
+def _parse_color(text: str) -> str | None:
+    tokens = set("".join(ch if ch.isalnum() else " " for ch in text.lower()).split())
+    for word, canon in _COLOR_WORDS.items():
+        if word in tokens:
+            return canon
+    return None
+
+
+@router.post("/route", response_model=ToyBoxRouteResult)
+def route_order(payload: ToyBoxRouteRequest, store: ToyBoxStore = Depends(get_toybox_store)) -> ToyBoxRouteResult:
+    product = payload.product.strip()
+    color = (payload.color or "").strip().lower() or _parse_color(product)
+    product_low = product.lower()
+    printers = [item for item in store.list_printers() if item.kind in {"bambu", "moonraker", "octoprint"}]
+
+    candidates: list[ToyBoxRouteCandidate] = []
+    matched = None
+    matched_file = None
+    for printer in printers:
+        meta = printer.metadata or {}
+        loaded = str(meta.get("loaded_color") or "").strip().lower()
+        assigned = meta.get("assigned_files") if isinstance(meta.get("assigned_files"), dict) else {}
+        file_match = None
+        for key, path in (assigned or {}).items():
+            keyword = str(key).strip().lower()
+            if keyword and keyword in product_low and path:
+                file_match = str(path)
+                break
+        color_ok = (not color) or (loaded == color)
+        if color and loaded != color:
+            note = f"has {loaded or 'no'} filament, needs {color}"
+        elif color:
+            note = f"{loaded} loaded — match"
+        else:
+            note = f"{loaded or 'unknown'} loaded"
+        candidates.append(
+            ToyBoxRouteCandidate(
+                printer_id=printer.id,
+                printer_name=printer.name,
+                loaded_color=loaded or None,
+                loaded_material=meta.get("loaded_material"),
+                has_file=bool(file_match),
+                eligible=color_ok,
+                note=note,
+            )
+        )
+        if color_ok and matched is None:
+            matched = printer
+            matched_file = file_match
+
+    if matched is not None:
+        reason = f"Print on {matched.name}"
+        if color:
+            reason += f" — it has {color} loaded"
+        if matched_file:
+            reason += f", file {matched_file}"
+        return ToyBoxRouteResult(
+            product=product,
+            color=color,
+            matched_printer_id=matched.id,
+            matched_printer_name=matched.name,
+            assigned_file=matched_file,
+            reason=reason,
+            candidates=candidates,
+        )
+    if not printers:
+        reason = "No printers added yet."
+    elif color:
+        reason = f"No printer currently has {color} loaded. Load {color} on one, or change the order color."
+    else:
+        reason = "Couldn't detect a color in the product name — include a color (e.g. 'blue keychain') or set one."
+    return ToyBoxRouteResult(product=product, color=color, reason=reason, candidates=candidates)
 
 
 @router.post("/notifications/test", response_model=ToyBoxNotificationResult)

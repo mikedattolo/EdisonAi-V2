@@ -53,6 +53,7 @@ import type {
   ToyBoxPrinterProfileRecord,
   ToyBoxDiscoveredPrinter,
   ToyBoxPrinterLiveStatus,
+  ToyBoxRouteResult,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
   ScheduledTaskRecord,
@@ -384,6 +385,8 @@ export const edisonApi = {
   discoverToyBoxPrinters: () => request<ToyBoxDiscoveredPrinter[]>('/api/v1/toybox/discover'),
   getToyBoxPrinterLive: (printerId: string) =>
     request<ToyBoxPrinterLiveStatus>(`/api/v1/toybox/printers/${printerId}/live`),
+  routeToyBoxOrder: (payload: { product: string; color?: string | null; quantity?: number }) =>
+    request<ToyBoxRouteResult>('/api/v1/toybox/route', { method: 'POST', body: JSON.stringify(payload) }),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
   updateRuntimeSettings: (payload: Partial<Pick<RuntimeSettingsRecord, 'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'>>) =>
     request<RuntimeSettingsRecord>('/api/v1/settings/runtime', {

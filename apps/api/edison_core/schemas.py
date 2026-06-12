@@ -1172,6 +1172,32 @@ class ToyBoxPrinterLiveStatus(BaseModel):
     detail: str | None = None
 
 
+class ToyBoxRouteRequest(BaseModel):
+    product: str = Field(min_length=1, max_length=240)
+    color: str | None = None
+    quantity: int = Field(default=1, ge=1, le=999)
+
+
+class ToyBoxRouteCandidate(BaseModel):
+    printer_id: str
+    printer_name: str
+    loaded_color: str | None = None
+    loaded_material: str | None = None
+    has_file: bool = False
+    eligible: bool = False
+    note: str = ""
+
+
+class ToyBoxRouteResult(BaseModel):
+    product: str
+    color: str | None = None
+    matched_printer_id: str | None = None
+    matched_printer_name: str | None = None
+    assigned_file: str | None = None
+    reason: str
+    candidates: list[ToyBoxRouteCandidate] = Field(default_factory=list)
+
+
 class ToyBoxProductMappingCreate(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 

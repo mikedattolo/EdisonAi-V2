@@ -103,6 +103,7 @@ import type {
   ToyBoxPrinterProfileRecord,
   ToyBoxDiscoveredPrinter,
   ToyBoxPrinterLiveStatus,
+  ToyBoxRouteResult,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -6321,6 +6322,22 @@ function ToyBoxView() {
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: '', connection: 'bambu', ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+  const [routeProduct, setRouteProduct] = useState('');
+  const [routeColor, setRouteColor] = useState('');
+  const [routeResult, setRouteResult] = useState<ToyBoxRouteResult | null>(null);
+  const [routing, setRouting] = useState(false);
+
+  async function routeOrder() {
+    if (!routeProduct.trim()) return;
+    setRouting(true);
+    try {
+      setRouteResult(await edisonApi.routeToyBoxOrder({ product: routeProduct.trim(), color: routeColor.trim() || null }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Routing failed.');
+    } finally {
+      setRouting(false);
+    }
+  }
 
   const loadPrinters = useCallback(async () => {
     try {
@@ -6414,6 +6431,41 @@ function ToyBoxView() {
       </div>
       <p className="assistant-intro">Discover and control your 3D printers, track the loaded filament color per machine, and route print orders to the right one.</p>
       {error && <div className="memory-inline-result error">{error}</div>}
+
+      <section className="toybox-route">
+        <div className="section-heading"><Waypoints size={18} /><h3>Route a print order</h3></div>
+        <p className="assistant-intro">Type an order (e.g. “blue keychain”) and Edison picks the printer that has that color loaded.</p>
+        <div className="toybox-route-row">
+          <input
+            onChange={(event) => setRouteProduct(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void routeOrder();
+              }
+            }}
+            placeholder="Order / product (e.g. blue keychain)"
+            value={routeProduct}
+          />
+          <input className="toybox-route-color" onChange={(event) => setRouteColor(event.target.value)} placeholder="color (optional)" value={routeColor} />
+          <button className="apply-button icon-text-button" disabled={routing || !routeProduct.trim()} onClick={() => void routeOrder()} type="button">
+            <Waypoints size={15} /> Route
+          </button>
+        </div>
+        {routeResult && (
+          <div className={routeResult.matched_printer_id ? 'toybox-route-result ok' : 'toybox-route-result warn'}>
+            <strong>{routeResult.reason}</strong>
+            <div className="toybox-route-cands">
+              {routeResult.candidates.map((candidate) => (
+                <span className={candidate.printer_id === routeResult.matched_printer_id ? 'toybox-cand matched' : 'toybox-cand'} key={candidate.printer_id}>
+                  {candidate.loaded_color && <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[candidate.loaded_color] ?? candidate.loaded_color }} />}
+                  {candidate.printer_name}: {candidate.note}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
 
       {discovered.length > 0 && (
         <section className="toybox-discovered">

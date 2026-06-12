@@ -579,6 +579,26 @@ export interface ToyBoxPrinterLiveStatus {
   detail?: string | null;
 }
 
+export interface ToyBoxRouteCandidate {
+  printer_id: string;
+  printer_name: string;
+  loaded_color?: string | null;
+  loaded_material?: string | null;
+  has_file: boolean;
+  eligible: boolean;
+  note: string;
+}
+
+export interface ToyBoxRouteResult {
+  product: string;
+  color?: string | null;
+  matched_printer_id?: string | null;
+  matched_printer_name?: string | null;
+  assigned_file?: string | null;
+  reason: string;
+  candidates: ToyBoxRouteCandidate[];
+}
+
 export interface RuntimeSettingsRecord {
   service: string;
   updated_at: string;
