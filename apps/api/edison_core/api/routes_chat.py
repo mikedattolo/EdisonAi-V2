@@ -80,7 +80,8 @@ def create_chat_turn(
         workspace_messages, workspace_metadata = _build_workspace_context(resolved_payload, workspace)
         knowledge_messages, knowledge_metadata = _build_knowledge_context(resolved_payload, knowledge)
         personal_messages, personal_metadata = _build_personal_context(resolved_payload, personal)
-        context_messages = workspace_messages + knowledge_messages + personal_messages
+        profile_messages, _profile_metadata = _build_profile_context(resolved_payload, knowledge)
+        context_messages = profile_messages + workspace_messages + knowledge_messages + personal_messages
         agent_run = _create_agent_run_if_needed(
             resolved_payload,
             payload,
@@ -286,7 +287,8 @@ def stream_chat_turn(
         workspace_messages, workspace_metadata = _build_workspace_context(resolved_payload, workspace)
         knowledge_messages, knowledge_metadata = _build_knowledge_context(resolved_payload, knowledge)
         personal_messages, personal_metadata = _build_personal_context(resolved_payload, personal)
-        context_messages = workspace_messages + knowledge_messages + personal_messages
+        profile_messages, _profile_metadata = _build_profile_context(resolved_payload, knowledge)
+        context_messages = profile_messages + workspace_messages + knowledge_messages + personal_messages
         agent_run = _create_agent_run_if_needed(
             resolved_payload,
             payload,
@@ -1629,6 +1631,31 @@ def _build_workspace_context(payload: ChatRequest, workspace: WorkspaceTools) ->
     return messages, metadata
 
 
+def _build_profile_context(payload: ChatRequest, knowledge: KnowledgeStore) -> tuple[list[dict[str, str]], dict]:
+    """Always inject Edison's saved profile of the user so it knows who it's talking to."""
+    metadata = {"enabled": payload.include_knowledge_context, "present": False}
+    if not payload.include_knowledge_context:
+        return [], metadata
+    try:
+        text = knowledge.profile_context_text()
+    except Exception:
+        return [], metadata
+    if not text:
+        return [], metadata
+    metadata["present"] = True
+    return [
+        {
+            "role": "system",
+            "content": (
+                "This is your saved memory profile of the user you are talking to. Treat it as known, "
+                "true background about them and use it to personalize answers. When the user asks what "
+                "you know or remember about them, answer from this profile (and any knowledge-base "
+                "excerpts), never claim you have no memory:\n\n" + text
+            ),
+        }
+    ], metadata
+
+
 def _build_knowledge_context(payload: ChatRequest, knowledge: KnowledgeStore) -> tuple[list[dict[str, str]], dict]:
     query = (payload.knowledge_query or payload.message or "").strip()
     metadata = {
@@ -1644,7 +1671,7 @@ def _build_knowledge_context(payload: ChatRequest, knowledge: KnowledgeStore) ->
         return [], metadata
 
     try:
-        matches = knowledge.search(query, max_results=payload.max_knowledge_context_matches)
+        matches = knowledge.hybrid_search(query, max_results=payload.max_knowledge_context_matches)
     except Exception:
         metadata["warnings"].append("Knowledge lookup failed.")
         return [], metadata

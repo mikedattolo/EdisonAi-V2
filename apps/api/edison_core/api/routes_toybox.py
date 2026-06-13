@@ -6,11 +6,13 @@ import hmac
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
 from edison_core.config import load_settings
 from edison_core.api.dependencies import (
@@ -574,6 +576,93 @@ def control_printer(
         action=payload.action,
         detail=result.get("detail") or ("Done." if result.get("ok") else "Control command failed."),
     )
+
+
+def _camera_source(printer: ToyBoxPrinterProfileRecord) -> tuple[list[str], str] | None:
+    """Return (ffmpeg_input_opts, url) for a printer's camera, or None if it has none.
+
+    Bambu X1-class printers expose an encrypted RTSP liveview (enable LAN Mode
+    Liveview on the printer). Any other printer can set a camera_url (an MJPEG/RTSP
+    stream, or a /dev/video* device for the on-box Brio)."""
+    meta = printer.metadata or {}
+    ip = str(meta.get("ip") or "").strip()
+    access = str(meta.get("access_code") or "").strip()
+    camera_url = str(meta.get("camera_url") or "").strip()
+    model = str(meta.get("model") or "").lower()
+    if printer.kind == "bambu" and ip and access and ("x1" in model or "p1s" in model):
+        return ["-rtsp_transport", "tcp"], f"rtsps://bblp:{access}@{ip}:322/streaming/live/1"
+    if camera_url:
+        if camera_url.startswith("/dev/"):
+            return ["-f", "v4l2"], camera_url
+        if camera_url.startswith(("rtsp://", "rtsps://")):
+            return ["-rtsp_transport", "tcp"], camera_url
+        return [], camera_url
+    return None
+
+
+def printer_has_camera(printer: ToyBoxPrinterProfileRecord) -> bool:
+    return _camera_source(printer) is not None
+
+
+@router.get("/printers/{printer_id}/camera")
+def printer_camera_stream(printer_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> StreamingResponse:
+    try:
+        printer = store.get_printer(printer_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Printer not found") from error
+    source = _camera_source(printer)
+    if source is None:
+        raise HTTPException(status_code=404, detail="No camera configured for this printer.")
+    input_opts, url = source
+    args = [
+        "ffmpeg", "-nostdin", "-loglevel", "error", "-fflags", "nobuffer",
+        *input_opts, "-i", url,
+        "-f", "mpjpeg", "-q:v", "6", "-r", "10", "-an", "-",
+    ]
+    try:
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=503, detail="ffmpeg is not installed on the server.") from error
+
+    def frames():
+        try:
+            while True:
+                chunk = process.stdout.read(16384)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                process.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    return StreamingResponse(
+        frames(),
+        media_type="multipart/x-mixed-replace;boundary=ffmpeg",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/printers/{printer_id}/camera/snapshot")
+def printer_camera_snapshot(printer_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> Response:
+    try:
+        printer = store.get_printer(printer_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Printer not found") from error
+    source = _camera_source(printer)
+    if source is None:
+        raise HTTPException(status_code=404, detail="No camera configured for this printer.")
+    input_opts, url = source
+    args = ["ffmpeg", "-nostdin", "-loglevel", "error", *input_opts, "-i", url,
+            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "-"]
+    try:
+        result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=503, detail="Could not capture a camera frame.") from error
+    if not result.stdout:
+        raise HTTPException(status_code=503, detail="Camera returned no image (is the liveview enabled?).")
+    return Response(content=result.stdout, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
 def _printer_conn(printer: ToyBoxPrinterProfileRecord) -> dict:

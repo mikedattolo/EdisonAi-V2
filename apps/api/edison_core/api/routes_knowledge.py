@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from edison_core.api.dependencies import get_conversation_store, get_knowledge_store
 from edison_core.schemas import (
@@ -42,7 +42,59 @@ def knowledge_search(
     payload: KnowledgeSearchRequest,
     store: KnowledgeStore = Depends(get_knowledge_store),
 ) -> list[KnowledgeSearchMatch]:
-    return store.search(payload.query, max_results=payload.max_results)
+    return store.hybrid_search(payload.query, max_results=payload.max_results)
+
+
+@router.get("/embeddings")
+def knowledge_embedding_status(store: KnowledgeStore = Depends(get_knowledge_store)) -> dict:
+    return store.embedding_status()
+
+
+@router.post("/embeddings/run")
+def knowledge_embedding_run(
+    background: BackgroundTasks,
+    max_chunks: int = Query(2000, ge=1, le=200000),
+    store: KnowledgeStore = Depends(get_knowledge_store),
+) -> dict:
+    """Embed a batch of not-yet-embedded chunks in the background (resumable)."""
+    background.add_task(store.embed_pending, 64, max_chunks)
+    status_now = store.embedding_status()
+    return {"started": True, "scheduled_max": max_chunks, **status_now}
+
+
+@router.get("/profile")
+def get_user_profile(store: KnowledgeStore = Depends(get_knowledge_store)) -> dict:
+    return store.get_user_profile()
+
+
+@router.put("/profile")
+def set_user_profile(
+    text: str = Body("", embed=True),
+    store: KnowledgeStore = Depends(get_knowledge_store),
+) -> dict:
+    return store.set_user_profile_summary(text)
+
+
+@router.post("/profile/facts")
+def add_user_fact(
+    text: str = Body(..., embed=True),
+    store: KnowledgeStore = Depends(get_knowledge_store),
+) -> dict:
+    return store.add_user_fact(text)
+
+
+@router.delete("/profile/facts/{fact_id}")
+def delete_user_fact(fact_id: str, store: KnowledgeStore = Depends(get_knowledge_store)) -> dict:
+    return store.delete_user_fact(fact_id)
+
+
+@router.post("/profile/rebuild")
+def rebuild_user_profile(store: KnowledgeStore = Depends(get_knowledge_store)) -> dict:
+    """Extract a fresh profile of the user from imported conversation memory."""
+    try:
+        return store.build_user_profile()
+    except KnowledgeIngestError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/ingest/text", response_model=KnowledgeSourceRecord, status_code=status.HTTP_201_CREATED)

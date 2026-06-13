@@ -43,6 +43,7 @@ import type {
   KnowledgeSearchMatch,
   KnowledgeSourceRecord,
   KnowledgeStatus,
+  UserProfile,
   RealtimeContext,
   SessionStateRecord,
   SearchCompareResponse,
@@ -550,6 +551,17 @@ export const edisonApi = {
       body: JSON.stringify(payload),
     }),
   getKnowledgeStatus: () => request<KnowledgeStatus>('/api/v1/knowledge/status'),
+  getEmbeddingStatus: () => request<{ total_chunks: number; embedded_chunks: number; pending: number; model: string; ready: boolean }>('/api/v1/knowledge/embeddings'),
+  runEmbedding: (maxChunks = 4000) =>
+    request<Record<string, unknown>>(withQuery('/api/v1/knowledge/embeddings/run', { max_chunks: maxChunks }), { method: 'POST' }),
+  getUserProfile: () => request<UserProfile>('/api/v1/knowledge/profile'),
+  setUserProfile: (text: string) =>
+    request<UserProfile>('/api/v1/knowledge/profile', { method: 'PUT', body: JSON.stringify({ text }) }),
+  addUserFact: (text: string) =>
+    request<UserProfile>('/api/v1/knowledge/profile/facts', { method: 'POST', body: JSON.stringify({ text }) }),
+  deleteUserFact: (factId: string) =>
+    request<UserProfile>(`/api/v1/knowledge/profile/facts/${factId}`, { method: 'DELETE' }),
+  rebuildUserProfile: () => request<UserProfile>('/api/v1/knowledge/profile/rebuild', { method: 'POST' }),
   listKnowledgeSources: (limit = 100) =>
     request<KnowledgeSourceRecord[]>(withQuery('/api/v1/knowledge/sources', { limit })),
   searchKnowledge: (payload: { query: string; max_results?: number }) =>

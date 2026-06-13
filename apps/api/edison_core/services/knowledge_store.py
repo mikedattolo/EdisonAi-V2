@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import sqlite3
+import threading
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +14,19 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from uuid import uuid4
 
 import httpx
+
+try:
+    import numpy as np
+
+    HAVE_NUMPY = True
+except ImportError:  # pragma: no cover
+    HAVE_NUMPY = False
+
+# Semantic search over the knowledge base uses a local embedding model served by
+# Ollama (bge-m3, 1024-dim). Vectors are cached in-process for fast cosine search.
+EMBED_MODEL = os.getenv("EDISON_EMBED_MODEL", "bge-m3")
+EMBED_OLLAMA_URL = os.getenv("EDISON_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+EMBED_DIM = int(os.getenv("EDISON_EMBED_DIM", "1024"))
 
 from edison_core.database import SQLiteDatabase
 from edison_core.schemas import (
@@ -29,6 +44,27 @@ class KnowledgeIngestError(ValueError):
     pass
 
 
+# Phrases that mark an assistant brush-off ("I can't access that"). Matches in a
+# stored chunk get penalized in search so a prior unhelpful answer doesn't rank
+# as the best memory for the same question.
+_DISCLAIMER_MARKERS = (
+    "i don't have access",
+    "i do not have access",
+    "i don't have personal information",
+    "i don't have any personal information",
+    "i don't have access to past conversations",
+    "i can't access",
+    "i cannot access",
+    "i'm not able to access",
+    "i am not able to access",
+    "i have no memory of",
+    "i don't retain",
+    "i don't have memory",
+    "as an ai language model",
+)
+_DISCLAIMER_PENALTY = 4.0
+
+
 class KnowledgeStore:
     def __init__(
         self,
@@ -39,6 +75,9 @@ class KnowledgeStore:
         self.database = database
         self.workspace_root = workspace_root.resolve()
         self.http_timeout_seconds = http_timeout_seconds
+        self._vectors = None  # numpy (N, EMBED_DIM), L2-normalized
+        self._vector_ids: list[str] = []
+        self._cache_lock = threading.Lock()
 
     def initialize(self) -> None:
         with self.database.connect() as connection:
@@ -72,6 +111,22 @@ class KnowledgeStore:
                     ON knowledge_chunks(source_id, chunk_index);
                 CREATE INDEX IF NOT EXISTS idx_knowledge_sources_updated
                     ON knowledge_sources(updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS knowledge_vectors (
+                    chunk_id TEXT PRIMARY KEY REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+                    source_id TEXT NOT NULL,
+                    vec BLOB NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_vectors_source
+                    ON knowledge_vectors(source_id);
+
+                CREATE TABLE IF NOT EXISTS user_profile (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -342,6 +397,12 @@ class KnowledgeStore:
                 + title_hits * 0.35
                 + phrase_bonus
             )
+            # Down-rank Edison's own "I can't access that" disclaimers so a past
+            # unhelpful answer doesn't resurface as the top memory for the same
+            # question (a self-reinforcing loop).
+            score -= _DISCLAIMER_PENALTY * sum(1 for marker in _DISCLAIMER_MARKERS if marker in text_lower)
+            if score <= 0:
+                continue
             scored.append(
                 KnowledgeSearchMatch(
                     source_id=row["source_id"],
@@ -356,6 +417,309 @@ class KnowledgeStore:
 
         scored.sort(key=lambda item: (-item.score, item.source_title))
         return scored[:max_results]
+
+    # --- semantic search (bge-m3 embeddings + cosine) ---
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        response = httpx.post(
+            f"{EMBED_OLLAMA_URL}/api/embed",
+            json={"model": EMBED_MODEL, "input": texts},
+            timeout=180.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        embeddings = data.get("embeddings")
+        if not embeddings:
+            raise KnowledgeIngestError("Embedding service returned no vectors")
+        return embeddings
+
+    def embedding_status(self) -> dict:
+        with self.database.connect() as connection:
+            total = int(connection.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0])
+            embedded = int(connection.execute("SELECT COUNT(*) FROM knowledge_vectors").fetchone()[0])
+        return {
+            "total_chunks": total,
+            "embedded_chunks": embedded,
+            "pending": max(total - embedded, 0),
+            "model": EMBED_MODEL,
+            "ready": HAVE_NUMPY and embedded > 0,
+        }
+
+    def embed_pending(self, batch_size: int = 64, max_chunks: int | None = None) -> dict:
+        """Embed chunks that don't have a vector yet. Resumable; safe to re-run."""
+        if not HAVE_NUMPY:
+            return {"embedded": 0, "error": "numpy is not installed on the server"}
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT c.id AS id, c.source_id AS source_id, c.text AS text
+                FROM knowledge_chunks AS c
+                LEFT JOIN knowledge_vectors AS v ON v.chunk_id = c.id
+                WHERE v.chunk_id IS NULL
+                LIMIT ?
+                """,
+                (max_chunks if max_chunks is not None else 10_000_000,),
+            ).fetchall()
+        total = len(rows)
+        done = 0
+        for start in range(0, total, batch_size):
+            batch = rows[start : start + batch_size]
+            texts = [(row["text"] or "")[:2000] for row in batch]
+            try:
+                vectors = self._embed_batch(texts)
+            except (httpx.HTTPError, ValueError, KnowledgeIngestError):
+                break
+            with self.database.connect() as connection:
+                for row, vector in zip(batch, vectors):
+                    blob = np.asarray(vector, dtype=np.float32).tobytes()
+                    connection.execute(
+                        "INSERT OR REPLACE INTO knowledge_vectors (chunk_id, source_id, vec) VALUES (?, ?, ?)",
+                        (row["id"], row["source_id"], blob),
+                    )
+            done += len(batch)
+        if done:
+            self._invalidate_vector_cache()
+        return {"embedded": done, "remaining": max(total - done, 0)}
+
+    def _invalidate_vector_cache(self) -> None:
+        with self._cache_lock:
+            self._vectors = None
+            self._vector_ids = []
+
+    def _ensure_vector_cache(self) -> None:
+        if self._vectors is not None:
+            return
+        with self._cache_lock:
+            if self._vectors is not None:
+                return
+            with self.database.connect() as connection:
+                rows = connection.execute("SELECT chunk_id, vec FROM knowledge_vectors").fetchall()
+            if not rows:
+                self._vector_ids = []
+                self._vectors = np.zeros((0, EMBED_DIM), dtype=np.float32)
+                return
+            matrix = np.empty((len(rows), EMBED_DIM), dtype=np.float32)
+            ids: list[str] = []
+            valid = 0
+            for row in rows:
+                vector = np.frombuffer(row["vec"], dtype=np.float32)
+                if vector.shape[0] != EMBED_DIM:
+                    continue
+                matrix[valid] = vector
+                ids.append(row["chunk_id"])
+                valid += 1
+            matrix = matrix[:valid]
+            norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            self._vectors = matrix / norms
+            self._vector_ids = ids
+
+    def semantic_search(self, query: str, max_results: int = 10) -> list[KnowledgeSearchMatch]:
+        if not HAVE_NUMPY or not query.strip():
+            return []
+        try:
+            self._ensure_vector_cache()
+        except sqlite3.Error:
+            return []
+        if self._vectors is None or len(self._vector_ids) == 0:
+            return []
+        try:
+            query_vector = np.asarray(self._embed_batch([query])[0], dtype=np.float32)
+        except (httpx.HTTPError, ValueError, KnowledgeIngestError):
+            return []
+        norm = float(np.linalg.norm(query_vector)) or 1.0
+        query_vector = query_vector / norm
+        sims = self._vectors @ query_vector
+        k = min(max_results, len(self._vector_ids))
+        if k <= 0:
+            return []
+        top = np.argpartition(-sims, k - 1)[:k]
+        top = top[np.argsort(-sims[top])]
+        ordered_ids = [self._vector_ids[int(i)] for i in top]
+        scores = {self._vector_ids[int(i)]: float(sims[int(i)]) for i in top}
+
+        placeholders = ",".join("?" for _ in ordered_ids)
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT chunks.id, chunks.source_id, chunks.path, chunks.text,
+                       sources.title, sources.kind, sources.uri
+                FROM knowledge_chunks AS chunks
+                JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
+                WHERE chunks.id IN ({placeholders})
+                """,
+                ordered_ids,
+            ).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        terms = [term for term in re.split(r"\W+", query.lower()) if len(term) > 1]
+        matches: list[KnowledgeSearchMatch] = []
+        for chunk_id in ordered_ids:
+            row = by_id.get(chunk_id)
+            if row is None:
+                continue
+            similarity = scores.get(chunk_id, 0.0)
+            text_lower = (row["text"] or "").lower()
+            if any(marker in text_lower for marker in _DISCLAIMER_MARKERS):
+                similarity -= 0.25
+            matches.append(
+                KnowledgeSearchMatch(
+                    source_id=row["source_id"],
+                    source_title=row["title"],
+                    source_kind=row["kind"],
+                    uri=row["uri"],
+                    path=row["path"],
+                    score=round(similarity * 10.0, 4),
+                    snippet=_best_snippet(row["text"], terms) if terms else (row["text"] or "")[:280],
+                )
+            )
+        matches.sort(key=lambda item: -item.score)
+        return matches[:max_results]
+
+    def hybrid_search(self, query: str, max_results: int = 10) -> list[KnowledgeSearchMatch]:
+        """Blend semantic recall (meaning) with keyword hits (exact terms)."""
+        semantic = self.semantic_search(query, max_results=max_results)
+        keyword = self.search(query, max_results=max_results)
+        if not semantic:
+            return keyword
+        merged: dict[str, KnowledgeSearchMatch] = {}
+        for match in semantic:
+            merged[match.source_id + "|" + (match.snippet[:40])] = match
+        for match in keyword:
+            key = match.source_id + "|" + (match.snippet[:40])
+            if key not in merged:
+                merged[key] = match
+        ranked = sorted(merged.values(), key=lambda item: -item.score)
+        return ranked[:max_results]
+
+    # --- user profile ("what Edison knows about you", always injected in chat) ---
+
+    def get_user_profile(self) -> dict:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, kind, content, updated_at FROM user_profile ORDER BY kind, updated_at"
+            ).fetchall()
+        summary = ""
+        summary_updated = None
+        facts: list[dict] = []
+        for row in rows:
+            if row["kind"] == "summary":
+                summary = row["content"]
+                summary_updated = row["updated_at"]
+            elif row["kind"] == "fact":
+                facts.append({"id": row["id"], "content": row["content"], "updated_at": row["updated_at"]})
+        return {"summary": summary, "summary_updated_at": summary_updated, "facts": facts}
+
+    def set_user_profile_summary(self, text: str) -> dict:
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM user_profile WHERE kind = 'summary' LIMIT 1"
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE user_profile SET content = ?, updated_at = ? WHERE id = ?",
+                    (text.strip(), now, existing["id"]),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO user_profile (id, kind, content, created_at, updated_at) VALUES (?, 'summary', ?, ?, ?)",
+                    (f"prof_{uuid4().hex}", text.strip(), now, now),
+                )
+        return self.get_user_profile()
+
+    def add_user_fact(self, text: str) -> dict:
+        text = text.strip()
+        if not text:
+            return self.get_user_profile()
+        now = utc_now().isoformat()
+        with self.database.connect() as connection:
+            connection.execute(
+                "INSERT INTO user_profile (id, kind, content, created_at, updated_at) VALUES (?, 'fact', ?, ?, ?)",
+                (f"prof_{uuid4().hex}", text, now, now),
+            )
+        return self.get_user_profile()
+
+    def delete_user_fact(self, fact_id: str) -> dict:
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM user_profile WHERE id = ? AND kind = 'fact'", (fact_id,))
+        return self.get_user_profile()
+
+    def profile_context_text(self) -> str:
+        """Compact profile string injected into every chat turn (empty if unset)."""
+        profile = self.get_user_profile()
+        parts: list[str] = []
+        if profile["summary"]:
+            parts.append(profile["summary"].strip())
+        if profile["facts"]:
+            parts.append("\n".join(f"- {fact['content']}" for fact in profile["facts"][:40]))
+        return "\n".join(parts).strip()
+
+    def build_user_profile(self, max_chunks: int = 140, model: str | None = None) -> dict:
+        """Extract a durable profile of the user from imported conversations via the local LLM."""
+        model = model or os.getenv("EDISON_PROFILE_MODEL", "local-general-chat")
+        with self.database.connect() as connection:
+            # Sample one early chunk from many different conversations so the
+            # profile reflects the user broadly, not just recent dev chats.
+            rows = connection.execute(
+                """
+                SELECT text FROM (
+                    SELECT chunks.text AS text, chunks.source_id AS source_id,
+                           ROW_NUMBER() OVER (PARTITION BY chunks.source_id ORDER BY chunks.chunk_index) AS rn
+                    FROM knowledge_chunks AS chunks
+                    JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
+                    WHERE sources.kind = 'conversation'
+                )
+                WHERE rn <= 2
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (max_chunks,),
+            ).fetchall()
+        if not rows:
+            # Fall back to any conversation chunks if the windowed query found none.
+            with self.database.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT chunks.text AS text
+                    FROM knowledge_chunks AS chunks
+                    JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
+                    WHERE sources.kind = 'conversation'
+                    ORDER BY sources.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (max_chunks,),
+                ).fetchall()
+        if not rows:
+            raise KnowledgeIngestError("No conversation memory to build a profile from yet.")
+        corpus = "\n\n".join((row["text"] or "")[:1200] for row in rows)[:60000]
+        system = (
+            "You build a concise, durable profile of a specific USER from excerpts of their past "
+            "chat conversations. Extract only stable, useful facts about the human user (not the "
+            "assistant): their name, location, work/role, ongoing projects, hardware/tools they own, "
+            "skills, and clear preferences or goals. Ignore one-off questions and ephemeral details. "
+            "Write 4-12 short bullet points. If something is uncertain, omit it. No preamble."
+        )
+        try:
+            response = httpx.post(
+                f"{EMBED_OLLAMA_URL}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": f"Conversation excerpts:\n\n{corpus}\n\nUser profile:"},
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0.2},
+                },
+                timeout=180.0,
+            )
+            response.raise_for_status()
+            content = response.json().get("message", {}).get("content", "").strip()
+        except (httpx.HTTPError, ValueError) as error:
+            raise KnowledgeIngestError(f"Profile extraction failed: {error.__class__.__name__}") from error
+        if not content:
+            raise KnowledgeIngestError("The model returned an empty profile.")
+        return self.set_user_profile_summary(content)
 
     def ingest_preset(self, preset: str) -> list[KnowledgeSourceRecord]:
         records: list[KnowledgeSourceRecord] = []

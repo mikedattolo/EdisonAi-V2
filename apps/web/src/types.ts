@@ -882,6 +882,18 @@ export interface KnowledgeStatus {
   latest_ingest_at?: string | null;
 }
 
+export interface UserProfileFact {
+  id: string;
+  content: string;
+  updated_at: string;
+}
+
+export interface UserProfile {
+  summary: string;
+  summary_updated_at?: string | null;
+  facts: UserProfileFact[];
+}
+
 export interface RealtimeContext {
   location: {
     city?: string | null;

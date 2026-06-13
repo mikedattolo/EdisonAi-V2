@@ -114,6 +114,7 @@ import type {
   ToyBoxRouteResult,
   ToyBoxQueueItemRecord,
   ToyBoxFileRecord,
+  UserProfile,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -1884,6 +1885,7 @@ export default function App() {
         ) : (
           <WorkbenchView
             activeView={activeView}
+            onExitToChat={() => setActiveView('chat')}
             groupedModels={groupedModels}
             fanControls={fanControls}
             hardwareControlCenter={hardwareControlCenter}
@@ -2415,6 +2417,7 @@ function ChatView({
           </section>
         </div>
       </details>
+      <MemoryProfileDrawer />
       <details className="context-drawer">
         <summary>
           <span><Folder size={16} /> Repo context</span>
@@ -3227,6 +3230,7 @@ function WorkbenchView({
   onRunWorkspaceCopilotTask,
   onRunWorkspaceCommand,
   onAddChatContextPath,
+  onExitToChat,
   onRefreshMedia,
   onRefreshSystem,
   onUpdateFanControl,
@@ -3302,6 +3306,7 @@ function WorkbenchView({
   onRunWorkspaceCopilotTask: (instruction: string, runCommands: boolean) => Promise<void>;
   onRunWorkspaceCommand: (command: WorkspaceCommand | string) => Promise<void>;
   onAddChatContextPath: (path: string) => void;
+  onExitToChat: () => void;
   onRefreshMedia: () => Promise<void>;
   onRefreshSystem: () => Promise<void>;
   onUpdateFanControl: (gpuIndex: number, mode: GPUFanMode, manualSpeed: number) => Promise<void>;
@@ -3491,6 +3496,7 @@ function WorkbenchView({
       status={status}
       toyBoxStatus={toyBoxStatus}
       onSave={onSaveRuntimeSettings}
+      onClose={onExitToChat}
       workspaceRoots={workspaceRoots}
     />
   );
@@ -6469,6 +6475,114 @@ function ModelViewer({ onColorChosen }: { onColorChosen?: (hex: string) => void 
   );
 }
 
+function MemoryProfileDrawer() {
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [embed, setEmbed] = useState<{ embedded_chunks: number; total_chunks: number; pending: number } | null>(null);
+  const [draft, setDraft] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [newFact, setNewFact] = useState('');
+
+  const load = useCallback(async () => {
+    const [profileResult, embedResult] = await Promise.all([
+      edisonApi.getUserProfile().catch(() => null),
+      edisonApi.getEmbeddingStatus().catch(() => null),
+    ]);
+    if (profileResult) {
+      setProfile(profileResult);
+      setDraft(profileResult.summary);
+    }
+    if (embedResult) setEmbed(embedResult);
+  }, []);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 20000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  async function rebuild() {
+    setBusy(true);
+    try {
+      const updated = await edisonApi.rebuildUserProfile();
+      setProfile(updated);
+      setDraft(updated.summary);
+    } catch {
+      /* surfaced as empty */
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      const updated = await edisonApi.setUserProfile(draft);
+      setProfile(updated);
+      setEditing(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function addFact() {
+    if (!newFact.trim()) return;
+    const updated = await edisonApi.addUserFact(newFact.trim());
+    setProfile(updated);
+    setNewFact('');
+  }
+
+  const pct = embed && embed.total_chunks ? Math.round((embed.embedded_chunks / embed.total_chunks) * 100) : 0;
+
+  return (
+    <details className="context-drawer rag-drawer">
+      <summary>
+        <span><Brain size={16} /> What Edison knows about you</span>
+        <small>{profile?.facts?.length ? `${profile.facts.length} notes` : 'memory profile'}</small>
+      </summary>
+      <div className="context-drawer-content rag-drawer-content memory-profile">
+        {embed && embed.pending > 0 && (
+          <div className="memory-embed-progress">Indexing memory for semantic recall… {pct}% ({embed.embedded_chunks.toLocaleString()}/{embed.total_chunks.toLocaleString()})</div>
+        )}
+        {!editing ? (
+          <div className="memory-profile-text">{profile?.summary?.trim() ? profile.summary : 'No profile yet — build one from your imported conversations.'}</div>
+        ) : (
+          <textarea className="memory-profile-edit" value={draft} onChange={(event) => setDraft(event.target.value)} rows={7} />
+        )}
+        <div className="memory-profile-actions">
+          {!editing ? (
+            <>
+              <button className="secondary-button" onClick={() => setEditing(true)} type="button">Edit</button>
+              <button className="secondary-button" disabled={busy} onClick={() => void rebuild()} type="button">{busy ? 'Building…' : 'Rebuild from memory'}</button>
+            </>
+          ) : (
+            <>
+              <button className="apply-button" disabled={busy} onClick={() => void save()} type="button">Save</button>
+              <button className="secondary-button" onClick={() => { setEditing(false); setDraft(profile?.summary ?? ''); }} type="button">Cancel</button>
+            </>
+          )}
+        </div>
+        {profile?.facts && profile.facts.length > 0 && (
+          <ul className="memory-profile-facts">
+            {profile.facts.map((fact) => (
+              <li key={fact.id}>
+                <span>{fact.content}</span>
+                <button className="toybox-iconbtn" onClick={() => void edisonApi.deleteUserFact(fact.id).then(setProfile).catch(() => undefined)} type="button"><Trash2 size={11} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="memory-fact-add">
+          <input
+            value={newFact}
+            onChange={(event) => setNewFact(event.target.value)}
+            placeholder="Add a fact (e.g. I run a 3D print shop)"
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void addFact(); } }}
+          />
+          <button className="secondary-button" onClick={() => void addFact()} type="button">Add</button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function ToyBoxPrinterCard({
   printer,
   status,
@@ -6488,14 +6602,17 @@ function ToyBoxPrinterCard({
   const [pending, setPending] = useState<File | null>(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [showCam, setShowCam] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const meta = (printer.metadata ?? {}) as Record<string, unknown>;
   const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
   const address = String(meta?.ip ?? meta?.host ?? '');
-  const label = printer.kind === 'bambu' ? String(meta?.model ?? 'bambu').toUpperCase() : printer.kind.toUpperCase();
+  const model = String(meta?.model ?? '');
+  const label = printer.kind === 'bambu' ? (model || 'bambu').toUpperCase() : printer.kind.toUpperCase();
   const online = Boolean(status?.online);
   const canPrint = ['bambu', 'moonraker', 'octoprint'].includes(printer.kind);
+  const hasCamera = (printer.kind === 'bambu' && /x1|p1s/i.test(model)) || Boolean(meta?.camera_url);
 
   const loadFiles = useCallback(async () => {
     setFiles(await edisonApi.listToyBoxFiles(printer.id).catch(() => []));
@@ -6585,6 +6702,24 @@ function ToyBoxPrinterCard({
         <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
       )}
 
+      {hasCamera && (
+        <>
+          <button className="toybox-files-toggle" onClick={() => setShowCam((value) => !value)} type="button">
+            <Camera size={13} /> {showCam ? 'Hide camera' : 'Live camera'}
+          </button>
+          {showCam && (
+            <div className="toybox-cam">
+              <img
+                className="toybox-cam-img"
+                src={`/api/v1/toybox/printers/${printer.id}/camera`}
+                alt={`${printer.name} camera`}
+                onError={() => setNote('Camera stream unavailable — for the X1C, enable Settings → General → LAN Mode Liveview on the printer.')}
+              />
+            </div>
+          )}
+        </>
+      )}
+
       {canPrint && (
         <button className="toybox-files-toggle" onClick={() => setShowFiles((value) => !value)} type="button">
           <FileText size={13} /> Files{files.length ? ` (${files.length})` : ''}
@@ -6636,7 +6771,7 @@ function ToyBoxView() {
   const [busy, setBusy] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [queue, setQueue] = useState<ToyBoxQueueItemRecord[]>([]);
-  const [form, setForm] = useState({ name: '', connection: 'bambu', ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+  const [form, setForm] = useState({ name: '', connection: 'bambu', ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', camera_url: '', loaded_color: '', loaded_material: 'PLA' });
   const [routeProduct, setRouteProduct] = useState('');
   const [routeColor, setRouteColor] = useState('');
   const [routeResult, setRouteResult] = useState<ToyBoxRouteResult | null>(null);
@@ -6732,8 +6867,9 @@ function ToyBoxView() {
         metadata.host = host;
         if (form.connection === 'octoprint') metadata.api_key = form.api_key.trim();
       }
+      if (form.camera_url.trim()) metadata.camera_url = form.camera_url.trim();
       await edisonApi.upsertToyBoxPrinter({ name: form.name.trim(), kind: form.connection, role: 'printer', status: 'ready', metadata });
-      setForm({ name: '', connection: form.connection, ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', loaded_color: '', loaded_material: 'PLA' });
+      setForm({ name: '', connection: form.connection, ip: '', serial: '', access_code: '', host: '', api_key: '', model: 'x1c', camera_url: '', loaded_color: '', loaded_material: 'PLA' });
       await loadPrinters();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not add printer.');
@@ -6754,6 +6890,7 @@ function ToyBoxView() {
       host: String(meta.host ?? ''),
       api_key: String(meta.api_key ?? ''),
       model: String(meta.model ?? 'x1c'),
+      camera_url: String(meta.camera_url ?? ''),
       loaded_color: String(meta.loaded_color ?? ''),
       loaded_material: String(meta.loaded_material ?? 'PLA'),
     });
@@ -6831,6 +6968,11 @@ function ToyBoxView() {
           )}
           <input onChange={(event) => setForm({ ...form, loaded_color: event.target.value })} placeholder="Loaded color (e.g. blue)" value={form.loaded_color} />
           <input onChange={(event) => setForm({ ...form, loaded_material: event.target.value })} placeholder="Material (PLA)" value={form.loaded_material} />
+          <input
+            onChange={(event) => setForm({ ...form, camera_url: event.target.value })}
+            placeholder={form.connection === 'bambu' ? 'Camera URL (optional — X1C auto)' : 'Camera URL (MJPEG/RTSP, optional)'}
+            value={form.camera_url}
+          />
           <button
             className="apply-button icon-text-button"
             disabled={busy || !form.name.trim() || !(form.connection === 'bambu' ? form.ip.trim() : form.host.trim() || form.ip.trim())}
@@ -8731,6 +8873,7 @@ function SettingsView({
   status,
   toyBoxStatus,
   onSave,
+  onClose,
   workspaceRoots,
 }: {
   fanControls: GPUFanControlSnapshot | null;
@@ -8741,6 +8884,7 @@ function SettingsView({
   status: SystemStatus | null;
   toyBoxStatus: ToyBoxManagerStatus | null;
   onSave: (payload: Parameters<typeof edisonApi.updateRuntimeSettings>[0]) => Promise<void>;
+  onClose: () => void;
   workspaceRoots: WorkspaceRootRecord[];
 }) {
   const [draft, setDraft] = useState<RuntimeSettingsRecord>(() => defaultRuntimeSettings());
@@ -8789,7 +8933,12 @@ function SettingsView({
       <div className="view-heading">
         <Settings size={26} />
         <h3>Settings</h3>
-        <button className="apply-button" form="runtime-settings-form" type="submit">Save Changes</button>
+        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          <button className="apply-button" form="runtime-settings-form" type="submit">Save Changes</button>
+          <button className="secondary-button icon-text-button" onClick={onClose} type="button">
+            <X size={15} /> Done
+          </button>
+        </div>
       </div>
       <form className="settings-stack settings-form" id="runtime-settings-form" onSubmit={(event) => void saveSettings(event)}>
         {saveMessage && <div className="settings-save-message">{saveMessage}</div>}

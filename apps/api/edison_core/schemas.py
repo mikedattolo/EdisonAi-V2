@@ -1104,7 +1104,7 @@ class ToyBoxProductionLane(BaseModel):
 class ToyBoxPrinterRecord(BaseModel):
     id: str
     name: str
-    kind: Literal["bambu", "orca", "cura", "dymo", "generic"]
+    kind: Literal["bambu", "moonraker", "octoprint", "orca", "cura", "dymo", "generic"]
     status: Literal["ready", "staged", "missing"]
     role: Literal["printer", "slicer", "label_printer", "camera", "desktop_bridge"]
     detail: str
