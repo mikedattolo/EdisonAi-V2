@@ -1632,9 +1632,13 @@ def _build_workspace_context(payload: ChatRequest, workspace: WorkspaceTools) ->
 
 
 def _build_profile_context(payload: ChatRequest, knowledge: KnowledgeStore) -> tuple[list[dict[str, str]], dict]:
-    """Always inject Edison's saved profile of the user so it knows who it's talking to."""
-    metadata = {"enabled": payload.include_knowledge_context, "present": False}
-    if not payload.include_knowledge_context:
+    """Always inject Edison's saved profile of the user so it knows who it's talking to.
+
+    Tied to the conversation's memory switch (not the knowledge-RAG toggle), so Edison knows
+    who you are even when source retrieval is turned off, on any model."""
+    memory_on = getattr(payload, "memory_enabled", True)
+    metadata = {"enabled": bool(memory_on), "present": False}
+    if not memory_on:
         return [], metadata
     try:
         text = knowledge.profile_context_text()

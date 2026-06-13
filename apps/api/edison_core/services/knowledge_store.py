@@ -654,50 +654,87 @@ class KnowledgeStore:
             parts.append("\n".join(f"- {fact['content']}" for fact in profile["facts"][:40]))
         return "\n".join(parts).strip()
 
-    def build_user_profile(self, max_chunks: int = 140, model: str | None = None) -> dict:
-        """Extract a durable profile of the user from imported conversations via the local LLM."""
-        model = model or os.getenv("EDISON_PROFILE_MODEL", "local-general-chat")
+    _PROFILE_PROBES = (
+        "my name is", "I am a", "I work as a", "my job is", "my profession is",
+        "I am a product designer", "I design products", "I live in", "I'm based in",
+        "my company", "my business", "I run a", "I'm building", "my goals are",
+        "my background is", "I studied", "my work experience", "my family",
+        "my hobbies", "about me", "who I am", "my day job", "I have a degree in",
+    )
+
+    def _retrieve_personal_chunks(self, max_total: int = 60, per_probe: int = 4) -> list[str]:
+        """Use semantic search to pull the chunks most likely to describe the user."""
+        if not HAVE_NUMPY:
+            return []
+        try:
+            self._ensure_vector_cache()
+        except sqlite3.Error:
+            return []
+        if self._vectors is None or len(self._vector_ids) == 0:
+            return []
+        picked: dict[str, float] = {}
+        for probe in self._PROFILE_PROBES:
+            try:
+                query_vector = np.asarray(self._embed_batch([probe])[0], dtype=np.float32)
+            except (httpx.HTTPError, ValueError, KnowledgeIngestError):
+                continue
+            norm = float(np.linalg.norm(query_vector)) or 1.0
+            sims = self._vectors @ (query_vector / norm)
+            k = min(per_probe, len(self._vector_ids))
+            top = np.argpartition(-sims, k - 1)[:k]
+            for index in top:
+                chunk_id = self._vector_ids[int(index)]
+                score = float(sims[int(index)])
+                if chunk_id not in picked or score > picked[chunk_id]:
+                    picked[chunk_id] = score
+        if not picked:
+            return []
+        top_ids = [cid for cid, _ in sorted(picked.items(), key=lambda kv: -kv[1])][:max_total]
+        placeholders = ",".join("?" for _ in top_ids)
         with self.database.connect() as connection:
-            # Sample one early chunk from many different conversations so the
-            # profile reflects the user broadly, not just recent dev chats.
             rows = connection.execute(
-                """
-                SELECT text FROM (
-                    SELECT chunks.text AS text, chunks.source_id AS source_id,
-                           ROW_NUMBER() OVER (PARTITION BY chunks.source_id ORDER BY chunks.chunk_index) AS rn
-                    FROM knowledge_chunks AS chunks
-                    JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
-                    WHERE sources.kind = 'conversation'
-                )
-                WHERE rn <= 2
-                ORDER BY RANDOM()
-                LIMIT ?
-                """,
-                (max_chunks,),
+                f"SELECT id, text FROM knowledge_chunks WHERE id IN ({placeholders})",
+                top_ids,
             ).fetchall()
-        if not rows:
-            # Fall back to any conversation chunks if the windowed query found none.
+        by_id = {row["id"]: row["text"] for row in rows}
+        return [by_id[cid] for cid in top_ids if by_id.get(cid)]
+
+    def build_user_profile(self, max_chunks: int = 60, model: str | None = None) -> dict:
+        """Extract a durable profile of the user from imported conversations via the local LLM.
+
+        Personal-fact chunks are retrieved semantically first (so the profile captures who the
+        user actually is), falling back to a broad random sample only if embeddings aren't ready."""
+        model = model or os.getenv("EDISON_PROFILE_MODEL", "local-general-chat")
+        texts = self._retrieve_personal_chunks(max_total=max_chunks)
+        if not texts:
             with self.database.connect() as connection:
                 rows = connection.execute(
                     """
-                    SELECT chunks.text AS text
-                    FROM knowledge_chunks AS chunks
-                    JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
-                    WHERE sources.kind = 'conversation'
-                    ORDER BY sources.updated_at DESC
+                    SELECT text FROM (
+                        SELECT chunks.text AS text, chunks.source_id AS source_id,
+                               ROW_NUMBER() OVER (PARTITION BY chunks.source_id ORDER BY chunks.chunk_index) AS rn
+                        FROM knowledge_chunks AS chunks
+                        JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
+                        WHERE sources.kind = 'conversation'
+                    )
+                    WHERE rn <= 2
+                    ORDER BY RANDOM()
                     LIMIT ?
                     """,
                     (max_chunks,),
                 ).fetchall()
-        if not rows:
+            texts = [(row["text"] or "") for row in rows]
+        if not texts:
             raise KnowledgeIngestError("No conversation memory to build a profile from yet.")
-        corpus = "\n\n".join((row["text"] or "")[:1200] for row in rows)[:60000]
+        corpus = "\n\n---\n\n".join((text or "")[:1500] for text in texts)[:90000]
         system = (
-            "You build a concise, durable profile of a specific USER from excerpts of their past "
-            "chat conversations. Extract only stable, useful facts about the human user (not the "
-            "assistant): their name, location, work/role, ongoing projects, hardware/tools they own, "
-            "skills, and clear preferences or goals. Ignore one-off questions and ephemeral details. "
-            "Write 4-12 short bullet points. If something is uncertain, omit it. No preamble."
+            "You are building a durable profile of the USER (the human) from excerpts of their own past "
+            "chat conversations. State concrete facts about them directly and confidently: full name, "
+            "where they live, their profession / role / employer, their side projects and businesses, the "
+            "tools and hardware they own, their skills, and clear goals or preferences. Write 6-15 short "
+            "bullet points grouped sensibly. Use only what the excerpts support and omit anything "
+            "uncertain. Do NOT mention 'system prompt', 'excerpts', 'conversations', or how you know "
+            "these things — just state the facts about the user."
         )
         try:
             response = httpx.post(
@@ -706,12 +743,12 @@ class KnowledgeStore:
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system},
-                        {"role": "user", "content": f"Conversation excerpts:\n\n{corpus}\n\nUser profile:"},
+                        {"role": "user", "content": f"Excerpts from the user's past chats:\n\n{corpus}\n\nProfile of the user:"},
                     ],
                     "stream": False,
                     "options": {"temperature": 0.2},
                 },
-                timeout=180.0,
+                timeout=240.0,
             )
             response.raise_for_status()
             content = response.json().get("message", {}).get("content", "").strip()
