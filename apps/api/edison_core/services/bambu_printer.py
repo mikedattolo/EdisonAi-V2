@@ -50,6 +50,16 @@ def hex_to_name(value: str | None) -> str | None:
     return best
 
 
+def _ftp_perm_detail(error: Exception) -> str:
+    detail = str(error)
+    if "553" in detail:
+        return (
+            "Printer refused to store the file (553). On X1 printers this means there's no microSD "
+            "card inserted (or it's full/locked) — insert a microSD card and try again."
+        )
+    return f"FTP rejected the upload: {detail}"
+
+
 def _safe_int(value) -> int | None:
     try:
         return int(value)
@@ -349,40 +359,80 @@ class BambuPrinter:
 
     # --- file upload (FTPS) + print control (MQTT) ---
 
-    def upload_file(self, local_path: str, remote_name: str | None = None, timeout: float = 60.0) -> dict:
-        """Upload a sliced .3mf / .gcode to the printer over implicit FTPS (port 990)."""
-        if not (self.ip and self.access_code):
-            return {"ok": False, "detail": "Missing IP or access code."}
-        if not os.path.exists(local_path):
-            return {"ok": False, "detail": "File not found on the server."}
-        remote_name = remote_name or os.path.basename(local_path)
+    def _ftp_connect(self, timeout: float) -> "_ImplicitFTPS":
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         ftp = _ImplicitFTPS(context=context)
         ftp.timeout = timeout
+        ftp.connect(host=self.ip, port=990, timeout=timeout)
+        ftp.login("bblp", self.access_code)
+        ftp.prot_p()
+        return ftp
+
+    def _remote_size(self, remote_name: str, timeout: float = 20.0) -> int | None:
         try:
-            ftp.connect(host=self.ip, port=990, timeout=timeout)
-            ftp.login("bblp", self.access_code)
-            ftp.prot_p()
-            with open(local_path, "rb") as handle:
-                ftp.storbinary(f"STOR {remote_name}", handle)
-        except (ftplib.error_perm,) as error:
-            detail = str(error)
-            if "553" in detail:
-                detail = (
-                    "Printer refused to store the file (553). On X1 printers this means there's no "
-                    "microSD card inserted (or it's full/locked) — insert a microSD card and try again."
-                )
-            return {"ok": False, "detail": detail}
-        except (ftplib.Error, ssl.SSLError, OSError, EOFError) as error:  # noqa: BLE001
-            return {"ok": False, "detail": f"FTP upload failed: {error.__class__.__name__}: {error}"}
+            ftp = self._ftp_connect(timeout)
+        except (ftplib.Error, ssl.SSLError, OSError, EOFError):
+            return None
+        try:
+            ftp.voidcmd("TYPE I")
+            return ftp.size(remote_name)
+        except (ftplib.Error, ssl.SSLError, OSError, EOFError):
+            return None
         finally:
             try:
                 ftp.quit()
             except Exception:  # noqa: BLE001
                 pass
-        return {"ok": True, "remote_name": remote_name}
+
+    def upload_file(self, local_path: str, remote_name: str | None = None, timeout: float = 90.0) -> dict:
+        """Upload a sliced .3mf / .gcode to the printer over implicit FTPS (port 990).
+
+        A1/P1 printers transfer the file but are slow to return the final 226 response, so
+        storbinary raises a timeout *after* the data is fully sent — we verify the landed
+        size rather than treat that as a failure."""
+        if not (self.ip and self.access_code):
+            return {"ok": False, "detail": "Missing IP or access code."}
+        if not os.path.exists(local_path):
+            return {"ok": False, "detail": "File not found on the server."}
+        remote_name = remote_name or os.path.basename(local_path)
+        local_size = os.path.getsize(local_path)
+        try:
+            ftp = self._ftp_connect(timeout)
+        except ftplib.error_perm as error:
+            return {"ok": False, "detail": _ftp_perm_detail(error)}
+        except (ftplib.Error, ssl.SSLError, OSError, EOFError) as error:  # noqa: BLE001
+            return {"ok": False, "detail": f"FTP connect failed: {error.__class__.__name__}"}
+
+        timed_out = False
+        try:
+            with open(local_path, "rb") as handle:
+                ftp.storbinary(f"STOR {remote_name}", handle)
+        except ftplib.error_perm as error:
+            self._quiet_quit(ftp)
+            return {"ok": False, "detail": _ftp_perm_detail(error)}
+        except (TimeoutError, ftplib.Error, ssl.SSLError, OSError, EOFError):
+            # A1/P1 transfer the file but are slow/odd on the final response — verify size below.
+            timed_out = True
+        self._quiet_quit(ftp)
+
+        if not timed_out:
+            return {"ok": True, "remote_name": remote_name}
+        landed = self._remote_size(remote_name)
+        if landed is not None and landed >= int(local_size * 0.99):
+            return {"ok": True, "remote_name": remote_name}
+        return {"ok": False, "detail": "Upload stalled before the file fully transferred — please try again."}
+
+    @staticmethod
+    def _quiet_quit(ftp) -> None:
+        try:
+            ftp.quit()
+        except Exception:  # noqa: BLE001
+            try:
+                ftp.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _publish(self, payload: dict, timeout: float = 8.0) -> dict:
         if not HAVE_MQTT:
