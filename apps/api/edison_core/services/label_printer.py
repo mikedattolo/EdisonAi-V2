@@ -1,15 +1,19 @@
-"""DYMO LabelWriter printing via CUPS (lp). The LabelWriter 5XL is added to CUPS as a
-queue (default name DYMO_5XL); labels are rendered to an image with Pillow and sent."""
+"""DYMO LabelWriter labels via the Windows print bridge.
+
+The LabelWriter 5XL (550-series) can't be driven from Linux (closed protocol), so Edison
+renders the label to an image and POSTs it to a small bridge running on the Windows PC,
+which forwards to DYMO Connect's local Web Service (the only thing that speaks the 5XL)."""
 
 from __future__ import annotations
 
+import base64
 import datetime
+import io
 import os
-import subprocess
-import tempfile
 
-DYMO_QUEUE = os.getenv("EDISON_DYMO_QUEUE", "DYMO_5XL")
-DYMO_MEDIA = os.getenv("EDISON_DYMO_MEDIA", "w296h452")  # 4x6 shipping label
+import httpx
+
+DYMO_BRIDGE = os.getenv("EDISON_DYMO_BRIDGE_URL", "http://192.168.1.31:8088")
 _FONTS = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -18,12 +22,15 @@ _FONTS = (
 
 def status() -> dict:
     try:
-        result = subprocess.run(["lpstat", "-p", DYMO_QUEUE], capture_output=True, text=True, timeout=8)
-        available = result.returncode == 0
-        detail = (result.stdout or result.stderr).strip()
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return {"queue": DYMO_QUEUE, "available": False, "detail": "CUPS (lpstat) is not available on the server."}
-    return {"queue": DYMO_QUEUE, "available": available, "detail": detail or ("idle" if available else "not found")}
+        response = httpx.get(f"{DYMO_BRIDGE}/status", timeout=8.0)
+        data = response.json()
+        return {"queue": "windows-bridge", "available": bool(data.get("available")), "detail": data.get("detail", "")}
+    except (httpx.HTTPError, ValueError):
+        return {
+            "queue": "windows-bridge",
+            "available": False,
+            "detail": f"Windows DYMO bridge not reachable at {DYMO_BRIDGE} (is the PC on + bridge running?).",
+        }
 
 
 def _font(size: int):
@@ -37,14 +44,10 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def print_label(title: str = "", lines: list[str] | None = None, copies: int = 1) -> dict:
-    lines = lines or []
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError:
-        return {"ok": False, "detail": "Pillow is not installed on the server."}
+def _render_png(title: str, lines: list[str]) -> bytes:
+    from PIL import Image, ImageDraw
 
-    width, height = 1200, 1800  # 4x6 inch at 300 DPI
+    width, height = 1200, 1800  # 4x6 inch @ 300 DPI
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     draw.rectangle([18, 18, width - 18, height - 18], outline="black", width=6)
@@ -57,28 +60,27 @@ def print_label(title: str = "", lines: list[str] | None = None, copies: int = 1
     for line in lines[:18]:
         draw.text((55, y), line, fill="black", font=_font(58))
         y += 84
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
-    handle = tempfile.NamedTemporaryFile(prefix="edison_label_", suffix=".png", delete=False)
-    path = handle.name
-    handle.close()
-    image.save(path)
+
+def print_label(title: str = "", lines: list[str] | None = None, copies: int = 1) -> dict:
+    lines = lines or []
     try:
-        result = subprocess.run(
-            ["lp", "-d", DYMO_QUEUE, "-n", str(max(1, int(copies))), "-o", f"media={DYMO_MEDIA}", "-o", "fit-to-page", path],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (FileNotFoundError, subprocess.SubprocessError) as error:
-        return {"ok": False, "detail": f"Could not run lp: {error.__class__.__name__}"}
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-    if result.returncode != 0:
-        return {"ok": False, "detail": (result.stderr or result.stdout).strip() or "lp returned an error."}
-    return {"ok": True, "detail": result.stdout.strip() or "Label sent to the DYMO."}
+        png = _render_png(title, lines)
+    except ImportError:
+        return {"ok": False, "detail": "Pillow is not installed on the server."}
+    payload = {"image_base64": base64.b64encode(png).decode(), "copies": max(1, int(copies))}
+    try:
+        response = httpx.post(f"{DYMO_BRIDGE}/print", json=payload, timeout=45.0)
+        data = response.json()
+        return {"ok": bool(data.get("ok")), "detail": data.get("detail", "")}
+    except (httpx.HTTPError, ValueError):
+        return {
+            "ok": False,
+            "detail": f"Couldn't reach the Windows DYMO bridge at {DYMO_BRIDGE} — make sure the PC is on and the bridge is running.",
+        }
 
 
 def print_test() -> dict:
