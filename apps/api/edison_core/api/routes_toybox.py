@@ -55,9 +55,11 @@ from edison_core.schemas import (
     ToyBoxPrintResult,
     ToyBoxControlRequest,
     ToyBoxControlResult,
+    ToyBoxLabelRequest,
 )
 from edison_core.services import printer_discovery
 from edison_core.services import bambu_printer as bambu_camera
+from edison_core.services import label_printer
 from edison_core.services.bambu_printer import BambuPrinter
 from edison_core.services.creality_printer import CrealityPrinter
 from edison_core.services.moonraker_printer import MoonrakerPrinter
@@ -406,7 +408,7 @@ def printer_live_status(
 
     status: dict | None = None
     if printer.kind == "bambu" and ip and serial and access:
-        status = BambuPrinter(ip, serial, access).get_status()
+        status = BambuPrinter(ip, serial, access).get_status(timeout=12)
     elif printer.kind == "creality" and host:
         status = CrealityPrinter(host).get_status()
     elif printer.kind == "moonraker" and host:
@@ -617,7 +619,7 @@ def control_printer(
         printer = store.get_printer(printer_id)
     except ToyBoxNotFoundError as error:
         raise HTTPException(status_code=404, detail="Printer not found") from error
-    result = _control_printer(printer, payload.action, payload.axis, payload.distance)
+    result = _control_printer(printer, payload.action, payload.axis, payload.distance, payload.percent)
     return ToyBoxControlResult(
         ok=bool(result.get("ok")),
         printer_id=printer_id,
@@ -760,6 +762,21 @@ def printer_camera_snapshot(printer_id: str, store: ToyBoxStore = Depends(get_to
     return Response(content=result.stdout, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
+@router.get("/dymo/status")
+def dymo_status() -> dict:
+    return label_printer.status()
+
+
+@router.post("/dymo/test")
+def dymo_test() -> dict:
+    return label_printer.print_test()
+
+
+@router.post("/dymo/print")
+def dymo_print(payload: ToyBoxLabelRequest) -> dict:
+    return label_printer.print_label(title=payload.title, lines=payload.lines, copies=payload.copies)
+
+
 def _printer_conn(printer: ToyBoxPrinterProfileRecord) -> dict:
     meta = printer.metadata or {}
     return {
@@ -786,7 +803,7 @@ def _send_to_printer(
             return {"ok": False, "detail": "Bambu needs IP, serial, and access code first."}
         bambu = BambuPrinter(conn["ip"], conn["serial"], conn["access"])
         model = str((printer.metadata or {}).get("model") or "").lower()
-        status = bambu.get_status(timeout=8)
+        status = bambu.get_status(timeout=12)
         # X1 stores sent files on the microSD card; warn early if it's missing.
         if "x1" in model and status.get("online") and status.get("sdcard") is False:
             return {"ok": False, "detail": "No microSD card detected in the X1 — insert one so it can store and print the file."}
@@ -816,13 +833,18 @@ def _send_to_printer(
             return {"ok": False, "detail": "OctoPrint host is required."}
         return OctoPrintPrinter(conn["host"], conn["api_key"]).upload_and_print(local_path, filename, start=True)
     if printer.kind == "creality":
-        return {
-            "ok": False,
-            "detail": (
-                "The K1 is connected for live status and control, but stock firmware doesn't expose a "
-                "file-upload API — send prints from Creality Print/Slicer for now, or enable Moonraker."
-            ),
-        }
+        if not conn["host"]:
+            return {"ok": False, "detail": "K1 host/IP is required."}
+        if kind != "gcode":
+            return {"ok": False, "detail": "The K1 prints .gcode — slice to gcode before sending."}
+        k1 = CrealityPrinter(conn["host"])
+        uploaded = k1.upload_file(local_path, filename)
+        if not uploaded.get("ok"):
+            return uploaded
+        started = k1.start_print(filename)
+        if not started.get("ok"):
+            return {"ok": False, "detail": f"Uploaded, but print start failed: {started.get('detail')}"}
+        return {"ok": True, "detail": f"Uploaded {filename} to the K1 and started the print."}
     return {"ok": False, "detail": f"Sending isn't supported for '{printer.kind}' printers."}
 
 
@@ -831,6 +853,7 @@ def _control_printer(
     action: str,
     axis: str | None = None,
     distance: float | None = None,
+    percent: int | None = None,
 ) -> dict:
     conn = _printer_conn(printer)
     if printer.kind == "bambu":
@@ -855,6 +878,10 @@ def _control_printer(
         if not axis or distance is None:
             return {"ok": False, "detail": "Jog needs an axis and distance."}
         return adapter.jog(axis, distance)
+    if action == "speed":
+        if percent is None:
+            return {"ok": False, "detail": "Speed needs a percent."}
+        return adapter.set_speed(percent)
     method = {
         "pause": adapter.pause,
         "resume": adapter.resume,

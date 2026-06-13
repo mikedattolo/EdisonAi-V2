@@ -6622,6 +6622,7 @@ function ToyBoxPrinterCard({
   const [lightOn, setLightOn] = useState(true);
   const [jogStep, setJogStep] = useState(10);
   const [showMove, setShowMove] = useState(false);
+  const [speed, setSpeed] = useState<number | null>(null);
   const [mapPanel, setMapPanel] = useState<{ file: ToyBoxFileRecord; filaments: ToyBoxFilament[]; mapping: number[] } | null>(null);
   const [showColor, setShowColor] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -6650,7 +6651,7 @@ function ToyBoxPrinterCard({
   const model = String(meta?.model ?? '');
   const label = printer.kind === 'bambu' ? (model || 'bambu').toUpperCase() : printer.kind.toUpperCase();
   const online = Boolean(status?.online);
-  const canPrint = ['bambu', 'moonraker', 'octoprint'].includes(printer.kind);
+  const canPrint = ['bambu', 'creality', 'moonraker', 'octoprint'].includes(printer.kind);
   const hasCamera = (printer.kind === 'bambu' && /x1|a1|p1s/i.test(model)) || Boolean(meta?.camera_url);
 
   const loadFiles = useCallback(async () => {
@@ -6728,8 +6729,8 @@ function ToyBoxPrinterCard({
   }
 
   async function control(
-    action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog',
-    extra?: { axis?: string; distance?: number },
+    action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog' | 'speed',
+    extra?: { axis?: string; distance?: number; percent?: number },
   ) {
     setNote(null);
     try {
@@ -6818,6 +6819,25 @@ function ToyBoxPrinterCard({
             <button className={lightOn ? 'toybox-ctrl on' : 'toybox-ctrl'} onClick={toggleLight} title="Toggle chamber light" type="button"><Lightbulb size={13} /> {lightOn ? 'Light off' : 'Light on'}</button>
             <button className="toybox-ctrl" onClick={() => void control('home')} title="Home all axes" type="button"><Home size={12} /> Home</button>
             <button className={showMove ? 'toybox-ctrl on' : 'toybox-ctrl'} onClick={() => setShowMove((value) => !value)} title="Jog controls" type="button"><Move size={12} /> Move</button>
+          </div>
+          <div className="toybox-speed">
+            <span className="toybox-speed-label"><Zap size={12} /> Speed</span>
+            {[
+              { pct: 50, label: 'Silent' },
+              { pct: 100, label: 'Standard' },
+              { pct: 125, label: 'Sport' },
+              { pct: 150, label: 'Ludicrous' },
+            ].map((option) => (
+              <button
+                key={option.pct}
+                className={speed === option.pct ? 'toybox-speed-btn active' : 'toybox-speed-btn'}
+                onClick={() => { setSpeed(option.pct); void control('speed', { percent: option.pct }); }}
+                title={`${option.label} — ${option.pct}%`}
+                type="button"
+              >
+                {option.label}<small>{option.pct}%</small>
+              </button>
+            ))}
           </div>
           {showMove && (
             <div className="toybox-jog">
@@ -6938,6 +6958,57 @@ function ToyBoxPrinterCard({
       )}
       {note && <div className="toybox-file-note">{note}</div>}
     </article>
+  );
+}
+
+function ToyBoxDymoPanel() {
+  const [status, setStatus] = useState<{ available: boolean; detail: string } | null>(null);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    edisonApi.getDymoStatus().then(setStatus).catch(() => setStatus({ available: false, detail: 'unavailable' }));
+  }, []);
+
+  async function run(action: () => Promise<{ ok: boolean; detail: string }>) {
+    setBusy(true);
+    setNote(null);
+    try {
+      const result = await action();
+      setNote(result.detail || (result.ok ? 'Sent to the DYMO.' : 'Failed.'));
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Label print failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="toybox-dymo">
+      <div className="section-heading"><Printer size={18} /><h3>DYMO Label Printer</h3></div>
+      <div className={status?.available ? 'toybox-dymo-status ok' : 'toybox-dymo-status'}>
+        <span className={status?.available ? 'toybox-dot on' : 'toybox-dot off'} />
+        {status ? (status.available ? 'LabelWriter 5XL connected (USB + network)' : 'Not detected') : 'Checking…'}
+      </div>
+      <input placeholder="Label title (optional)" value={title} onChange={(event) => setTitle(event.target.value)} />
+      <textarea placeholder="Label text — one line per row" value={body} onChange={(event) => setBody(event.target.value)} rows={3} />
+      <div className="toybox-dymo-actions">
+        <button
+          className="apply-button icon-text-button"
+          disabled={busy || (!title.trim() && !body.trim())}
+          onClick={() => void run(() => edisonApi.printDymoLabel({ title: title.trim(), lines: body.split('\n').map((l) => l.trim()).filter(Boolean) }))}
+          type="button"
+        >
+          <Printer size={14} /> Print label
+        </button>
+        <button className="secondary-button" disabled={busy} onClick={() => void run(() => edisonApi.printDymoTest())} type="button">
+          Print test label
+        </button>
+      </div>
+      {note && <div className="toybox-file-note">{note}</div>}
+    </section>
   );
 }
 
@@ -7283,6 +7354,8 @@ function ToyBoxView() {
               {queue.length === 0 && <div className="empty-line">Queue is empty. Routed orders will appear here.</div>}
             </div>
           </section>
+
+          <ToyBoxDymoPanel />
         </div>
       </div>
     </section>

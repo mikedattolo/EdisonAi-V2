@@ -1193,9 +1193,10 @@ class ToyBoxPrintResult(BaseModel):
 
 
 class ToyBoxControlRequest(BaseModel):
-    action: Literal["pause", "resume", "stop", "light_on", "light_off", "home", "jog"]
+    action: Literal["pause", "resume", "stop", "light_on", "light_off", "home", "jog", "speed"]
     axis: str | None = None
     distance: float | None = None
+    percent: int | None = None
 
 
 class ToyBoxControlResult(BaseModel):
@@ -1203,6 +1204,12 @@ class ToyBoxControlResult(BaseModel):
     printer_id: str
     action: str
     detail: str = ""
+
+
+class ToyBoxLabelRequest(BaseModel):
+    title: str = ""
+    lines: list[str] = Field(default_factory=list)
+    copies: int = Field(default=1, ge=1, le=20)
 
 
 class ToyBoxAmsSlot(BaseModel):

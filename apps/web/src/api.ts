@@ -432,13 +432,17 @@ export const edisonApi = {
     }),
   controlToyBoxPrinter: (
     printerId: string,
-    action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog',
-    extra?: { axis?: string; distance?: number },
+    action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog' | 'speed',
+    extra?: { axis?: string; distance?: number; percent?: number },
   ) =>
     request<ToyBoxControlResult>(`/api/v1/toybox/printers/${printerId}/control`, {
       method: 'POST',
       body: JSON.stringify({ action, ...(extra ?? {}) }),
     }),
+  getDymoStatus: () => request<{ queue: string; available: boolean; detail: string }>('/api/v1/toybox/dymo/status'),
+  printDymoTest: () => request<{ ok: boolean; detail: string }>('/api/v1/toybox/dymo/test', { method: 'POST' }),
+  printDymoLabel: (payload: { title?: string; lines?: string[]; copies?: number }) =>
+    request<{ ok: boolean; detail: string }>('/api/v1/toybox/dymo/print', { method: 'POST', body: JSON.stringify(payload) }),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
   updateRuntimeSettings: (payload: Partial<Pick<RuntimeSettingsRecord, 'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'>>) =>
     request<RuntimeSettingsRecord>('/api/v1/settings/runtime', {

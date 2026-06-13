@@ -481,6 +481,19 @@ class BambuPrinter:
     def stop(self) -> dict:
         return self._publish({"print": {"sequence_id": "0", "command": "stop"}})
 
+    def set_speed(self, percent: int) -> dict:
+        # Bambu has 4 speed levels: 1 silent(~50%), 2 standard(100%), 3 sport(~125%), 4 ludicrous(~150%+)
+        percent = int(percent)
+        if percent <= 60:
+            level = "1"
+        elif percent <= 110:
+            level = "2"
+        elif percent <= 135:
+            level = "3"
+        else:
+            level = "4"
+        return self._publish({"print": {"sequence_id": "0", "command": "print_speed", "param": level}})
+
     def set_light(self, on: bool) -> dict:
         return self._publish(
             {

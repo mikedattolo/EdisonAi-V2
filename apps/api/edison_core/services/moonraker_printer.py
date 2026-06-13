@@ -87,6 +87,9 @@ class MoonrakerPrinter:
     def stop(self) -> dict:
         return self._job_action("cancel")
 
+    def set_speed(self, percent: int) -> dict:
+        return self.run_gcode(f"M220 S{int(percent)}")
+
     def run_gcode(self, script: str) -> dict:
         try:
             response = httpx.post(f"{self.base}/printer/gcode/script", params={"script": script}, timeout=12.0)

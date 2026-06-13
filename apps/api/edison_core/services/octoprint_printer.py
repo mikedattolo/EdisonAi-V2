@@ -88,6 +88,9 @@ class OctoPrintPrinter:
     def stop(self) -> dict:
         return self._job_command("cancel")
 
+    def set_speed(self, percent: int) -> dict:
+        return self._command([f"M220 S{int(percent)}"])
+
     def _command(self, commands: list[str]) -> dict:
         try:
             response = httpx.post(

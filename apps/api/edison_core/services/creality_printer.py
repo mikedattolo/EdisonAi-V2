@@ -9,12 +9,16 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
+
 try:
     import websockets
 
     HAVE_WS = True
 except ImportError:  # pragma: no cover
     HAVE_WS = False
+
+GCODE_DIR = "/usr/data/printer_data/gcodes"
 
 
 _STATE = {0: "idle", 1: "printing", 2: "complete", 3: "failed", 4: "paused", 5: "paused"}
@@ -125,3 +129,23 @@ class CrealityPrinter:
 
     def stop(self) -> dict:
         return self._send({"stop": 1})
+
+    def set_speed(self, percent: int) -> dict:
+        return self._send({"setFeedratePct": int(percent)})
+
+    def upload_file(self, local_path: str, filename: str, timeout: float = 180.0) -> dict:
+        """Upload a .gcode to the K1 over its stock HTTP endpoint (POST /upload/<name>)."""
+        try:
+            with open(local_path, "rb") as handle:
+                response = httpx.post(
+                    f"http://{self.host}/upload/{filename}",
+                    files={"file": (filename, handle, "application/octet-stream")},
+                    timeout=timeout,
+                )
+            response.raise_for_status()
+        except (httpx.HTTPError, OSError) as error:
+            return {"ok": False, "detail": f"K1 upload failed: {error.__class__.__name__}"}
+        return {"ok": True, "remote_name": filename}
+
+    def start_print(self, filename: str) -> dict:
+        return self._send({"opGcodeFile": f"printprt:{GCODE_DIR}/{filename}"})
