@@ -50,6 +50,8 @@ from edison_core.schemas import (
     ToyBoxRouteResult,
     ToyBoxRouteCandidate,
     ToyBoxFileRecord,
+    ToyBoxFilament,
+    ToyBoxPrintRequest,
     ToyBoxPrintResult,
     ToyBoxControlRequest,
     ToyBoxControlResult,
@@ -431,6 +433,9 @@ def printer_live_status(
         job_name=status.get("job_name"),
         loaded_color=status.get("loaded_color") or meta.get("loaded_color"),
         loaded_material=status.get("loaded_material") or meta.get("loaded_material"),
+        sdcard=bool(status.get("sdcard")),
+        ams=status.get("ams") or [],
+        light_on=status.get("light_on"),
         detail=status.get("detail"),
     )
 
@@ -531,8 +536,24 @@ def delete_printer_file(file_id: str, store: ToyBoxStore = Depends(get_toybox_st
     return {"status": "deleted", "id": file_id}
 
 
+@router.get("/files/{file_id}/filaments", response_model=list[ToyBoxFilament])
+def get_file_filaments(file_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> list[ToyBoxFilament]:
+    """Read the filament colors a sliced .3mf expects (for AMS color mapping)."""
+    try:
+        record, stored_path = store.get_file(file_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="File not found") from error
+    if record.kind != "3mf" or not Path(stored_path).exists():
+        return []
+    return [ToyBoxFilament(**item) for item in bambu_camera.parse_3mf_filaments(stored_path)]
+
+
 @router.post("/files/{file_id}/print", response_model=ToyBoxPrintResult)
-def print_printer_file(file_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> ToyBoxPrintResult:
+def print_printer_file(
+    file_id: str,
+    payload: ToyBoxPrintRequest | None = None,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxPrintResult:
     try:
         record, stored_path = store.get_file(file_id)
         printer = store.get_printer(record.printer_id)
@@ -541,7 +562,16 @@ def print_printer_file(file_id: str, store: ToyBoxStore = Depends(get_toybox_sto
     if not Path(stored_path).exists():
         raise HTTPException(status_code=410, detail="The stored file is missing on the server.")
 
-    result = _send_to_printer(printer, stored_path, record.filename, record.kind)
+    options = payload or ToyBoxPrintRequest()
+    result = _send_to_printer(
+        printer,
+        stored_path,
+        record.filename,
+        record.kind,
+        ams_mapping=options.ams_mapping,
+        plate=options.plate,
+        use_ams=options.use_ams,
+    )
     queue_item_id: str | None = None
     if result.get("ok"):
         queue_item = store.create_queue_item(
@@ -727,18 +757,36 @@ def _printer_conn(printer: ToyBoxPrinterProfileRecord) -> dict:
     }
 
 
-def _send_to_printer(printer: ToyBoxPrinterProfileRecord, local_path: str, filename: str, kind: str) -> dict:
+def _send_to_printer(
+    printer: ToyBoxPrinterProfileRecord,
+    local_path: str,
+    filename: str,
+    kind: str,
+    ams_mapping: list[int] | None = None,
+    plate: int = 1,
+    use_ams: bool = True,
+) -> dict:
     conn = _printer_conn(printer)
     if printer.kind == "bambu":
         if not (conn["ip"] and conn["serial"] and conn["access"]):
             return {"ok": False, "detail": "Bambu needs IP, serial, and access code first."}
         bambu = BambuPrinter(conn["ip"], conn["serial"], conn["access"])
+        model = str((printer.metadata or {}).get("model") or "").lower()
+        # X1 stores sent files on the microSD card; warn early if it's missing.
+        if "x1" in model:
+            status = bambu.get_status(timeout=8)
+            if status.get("online") and status.get("sdcard") is False:
+                return {"ok": False, "detail": "No microSD card detected in the X1 — insert one so it can store and print the file."}
         uploaded = bambu.upload_file(local_path, filename)
         if not uploaded.get("ok"):
             return uploaded
-        meta = printer.metadata or {}
-        use_ams = bool(meta.get("use_ams", False))
-        started = bambu.start_print(filename, use_ams=use_ams)
+        has_mapping = bool(ams_mapping)
+        started = bambu.start_print(
+            filename,
+            plate=plate,
+            use_ams=use_ams or has_mapping,
+            ams_mapping=ams_mapping if has_mapping else None,
+        )
         if not started.get("ok"):
             return {"ok": False, "detail": f"Uploaded, but print start failed: {started.get('detail')}"}
         return {"ok": True, "detail": f"Uploaded {filename} and started the print."}

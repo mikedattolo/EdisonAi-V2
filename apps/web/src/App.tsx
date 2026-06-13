@@ -117,6 +117,8 @@ import type {
   ToyBoxRouteResult,
   ToyBoxQueueItemRecord,
   ToyBoxFileRecord,
+  ToyBoxFilament,
+  ToyBoxAmsSlot,
   UserProfile,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
@@ -6586,6 +6588,15 @@ function MemoryProfileDrawer() {
   );
 }
 
+function hexColorDistance(a?: string | null, b?: string | null): number {
+  const pa = (a ?? '').replace('#', '');
+  const pb = (b ?? '').replace('#', '');
+  if (pa.length < 6 || pb.length < 6) return Number.POSITIVE_INFINITY;
+  const ar = parseInt(pa.slice(0, 2), 16), ag = parseInt(pa.slice(2, 4), 16), ab = parseInt(pa.slice(4, 6), 16);
+  const br = parseInt(pb.slice(0, 2), 16), bg = parseInt(pb.slice(2, 4), 16), bb = parseInt(pb.slice(4, 6), 16);
+  return (ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2;
+}
+
 function ToyBoxPrinterCard({
   printer,
   status,
@@ -6609,7 +6620,10 @@ function ToyBoxPrinterCard({
   const [lightOn, setLightOn] = useState(true);
   const [jogStep, setJogStep] = useState(10);
   const [showMove, setShowMove] = useState(false);
+  const [mapPanel, setMapPanel] = useState<{ file: ToyBoxFileRecord; filaments: ToyBoxFilament[]; mapping: number[] } | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const amsSlots = (status?.ams ?? []).filter((slot) => !slot.empty && slot.id !== null);
 
   const meta = (printer.metadata ?? {}) as Record<string, unknown>;
   const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
@@ -6645,11 +6659,12 @@ function ToyBoxPrinterCard({
     }
   }
 
-  async function sendFile(fileId: string) {
+  async function doSend(fileId: string, amsMapping?: number[]) {
     setFileBusy(true);
     setNote(null);
+    setMapPanel(null);
     try {
-      const result = await edisonApi.printToyBoxFile(fileId);
+      const result = await edisonApi.printToyBoxFile(fileId, amsMapping ? { ams_mapping: amsMapping } : undefined);
       setNote(result.detail);
       onPrinted();
     } catch (err) {
@@ -6657,6 +6672,35 @@ function ToyBoxPrinterCard({
     } finally {
       setFileBusy(false);
     }
+  }
+
+  async function sendFile(file: ToyBoxFileRecord) {
+    // For a multi-color .3mf on an AMS printer, let the user map colors to slots first.
+    if (file.kind === '3mf' && amsSlots.length > 0) {
+      setFileBusy(true);
+      setNote(null);
+      try {
+        const filaments = await edisonApi.getToyBoxFileFilaments(file.id);
+        if (filaments.length > 1) {
+          const mapping = filaments.map((filament) => {
+            let best = amsSlots[0].id ?? 0;
+            let bestDist = Number.POSITIVE_INFINITY;
+            for (const slot of amsSlots) {
+              const dist = hexColorDistance(filament.color_hex, slot.color_hex);
+              if (dist < bestDist) { bestDist = dist; best = slot.id ?? 0; }
+            }
+            return best;
+          });
+          setMapPanel({ file, filaments, mapping });
+          setFileBusy(false);
+          return;
+        }
+      } catch {
+        /* fall through to a plain send */
+      }
+      setFileBusy(false);
+    }
+    await doSend(file.id);
   }
 
   async function removeFile(fileId: string) {
@@ -6707,6 +6751,19 @@ function ToyBoxPrinterCard({
             <div className="toybox-progress"><span style={{ width: `${status.progress}%` }} /><em>{status.progress}%</em></div>
           )}
           <div className="toybox-temps">nozzle {Math.round(status?.nozzle_temp ?? 0)}° · bed {Math.round(status?.bed_temp ?? 0)}°{status?.remaining_min ? ` · ${status.remaining_min}m left` : ''}</div>
+          {amsSlots.length > 0 && (
+            <div className="toybox-ams" title="AMS filaments loaded">
+              {amsSlots.map((slot) => (
+                <span className="toybox-ams-slot" key={slot.id}>
+                  <span className="toybox-swatch" style={{ background: slot.color_hex ?? '#888' }} />
+                  A{(slot.id ?? 0) + 1}{slot.material ? ` ${slot.material}` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+          {status?.sdcard === false && /x1/i.test(model) && (
+            <div className="toybox-sd-warn">⚠ No microSD card in the X1 — insert one to send &amp; print files.</div>
+          )}
           <div className="toybox-controls">
             <button className="toybox-ctrl" onClick={() => void control('pause')} title="Pause" type="button"><Pause size={13} /> Pause</button>
             <button className="toybox-ctrl" onClick={() => void control('resume')} title="Resume" type="button"><Play size={13} /> Resume</button>
@@ -6797,11 +6854,41 @@ function ToyBoxPrinterCard({
                 <strong>{file.name}</strong>
                 <span>{(file.size / 1024).toFixed(0)} KB</span>
               </div>
-              <button className="toybox-iconbtn send" disabled={fileBusy} onClick={() => void sendFile(file.id)} title="Send to printer & start print" type="button"><Printer size={13} /></button>
+              <button className="toybox-iconbtn send" disabled={fileBusy} onClick={() => void sendFile(file)} title="Send to printer & start print" type="button"><Printer size={13} /></button>
               <button className="toybox-iconbtn" onClick={() => void removeFile(file.id)} title="Delete file" type="button"><Trash2 size={12} /></button>
             </div>
           ))}
           {files.length === 0 && <div className="toybox-files-empty">No files yet. Add a .gcode or .3mf, name it, then hit the printer icon to send &amp; print.</div>}
+        </div>
+      )}
+      {mapPanel && (
+        <div className="toybox-ams-map">
+          <div className="toybox-ams-map-title">Assign colors → AMS · {mapPanel.file.name}</div>
+          {mapPanel.filaments.map((filament, index) => (
+            <div className="toybox-ams-map-row" key={filament.index}>
+              <span className="toybox-swatch" style={{ background: filament.color_hex ?? '#888' }} />
+              <span className="toybox-ams-map-label">Color {index + 1}{filament.type ? ` (${filament.type})` : ''}</span>
+              <span className="toybox-ams-map-arrow">→</span>
+              <select
+                value={mapPanel.mapping[index]}
+                onChange={(event) => {
+                  const next = [...mapPanel.mapping];
+                  next[index] = Number(event.target.value);
+                  setMapPanel({ ...mapPanel, mapping: next });
+                }}
+              >
+                {amsSlots.map((slot) => (
+                  <option key={slot.id} value={slot.id ?? 0}>
+                    AMS A{(slot.id ?? 0) + 1}{slot.material ? ` · ${slot.material}` : ''}{slot.color ? ` · ${slot.color}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+          <div className="toybox-ams-map-actions">
+            <button className="apply-button" disabled={fileBusy} onClick={() => void doSend(mapPanel.file.id, mapPanel.mapping)} type="button">Print with these colors</button>
+            <button className="secondary-button" onClick={() => setMapPanel(null)} type="button">Cancel</button>
+          </div>
         </div>
       )}
       {note && <div className="toybox-file-note">{note}</div>}

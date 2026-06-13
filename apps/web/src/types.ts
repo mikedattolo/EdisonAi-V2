@@ -592,6 +592,21 @@ export interface ToyBoxControlResult {
   detail: string;
 }
 
+export interface ToyBoxAmsSlot {
+  id: number | null;
+  color_hex?: string | null;
+  color?: string | null;
+  material?: string | null;
+  empty: boolean;
+}
+
+export interface ToyBoxFilament {
+  index: number;
+  color_hex?: string | null;
+  type: string;
+  used_g: string;
+}
+
 export interface ToyBoxPrinterLiveStatus {
   printer_id: string;
   online: boolean;
@@ -603,6 +618,9 @@ export interface ToyBoxPrinterLiveStatus {
   job_name?: string | null;
   loaded_color?: string | null;
   loaded_material?: string | null;
+  sdcard?: boolean;
+  ams?: ToyBoxAmsSlot[];
+  light_on?: boolean | null;
   detail?: string | null;
 }
 

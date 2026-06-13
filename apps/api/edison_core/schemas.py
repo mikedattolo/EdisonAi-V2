@@ -1170,6 +1170,20 @@ class ToyBoxFileRecord(BaseModel):
     created_at: datetime
 
 
+class ToyBoxFilament(BaseModel):
+    index: int
+    color_hex: str | None = None
+    type: str = ""
+    used_g: str = ""
+
+
+class ToyBoxPrintRequest(BaseModel):
+    # ams_mapping[i] = AMS slot id to use for the model's i-th filament (-1 = leave as sliced)
+    ams_mapping: list[int] | None = None
+    plate: int = Field(default=1, ge=1, le=64)
+    use_ams: bool = True
+
+
 class ToyBoxPrintResult(BaseModel):
     ok: bool
     printer_id: str
@@ -1191,6 +1205,14 @@ class ToyBoxControlResult(BaseModel):
     detail: str = ""
 
 
+class ToyBoxAmsSlot(BaseModel):
+    id: int | None = None
+    color_hex: str | None = None
+    color: str | None = None
+    material: str | None = None
+    empty: bool = True
+
+
 class ToyBoxPrinterLiveStatus(BaseModel):
     printer_id: str
     online: bool = False
@@ -1202,6 +1224,9 @@ class ToyBoxPrinterLiveStatus(BaseModel):
     job_name: str | None = None
     loaded_color: str | None = None
     loaded_material: str | None = None
+    sdcard: bool = False
+    ams: list[ToyBoxAmsSlot] = Field(default_factory=list)
+    light_on: bool | None = None
     detail: str | None = None
 
 

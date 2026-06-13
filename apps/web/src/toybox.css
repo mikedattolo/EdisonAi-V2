@@ -593,6 +593,50 @@
   font-size: 12px;
 }
 
+/* AMS slots + SD warning + color mapping */
+.toybox-ams { display: flex; flex-wrap: wrap; gap: 6px; }
+.toybox-ams-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.05);
+  text-transform: capitalize;
+}
+.toybox-sd-warn {
+  font-size: 11.5px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(255, 184, 76, 0.14);
+  border: 1px solid rgba(255, 184, 76, 0.4);
+  color: #ffd79a;
+}
+.toybox-ams-map {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(79, 140, 255, 0.07);
+  border: 1px solid rgba(79, 140, 255, 0.32);
+}
+.toybox-ams-map-title { font-size: 12px; font-weight: 600; }
+.toybox-ams-map-row { display: flex; align-items: center; gap: 8px; }
+.toybox-ams-map-label { font-size: 12px; flex: 1; min-width: 0; }
+.toybox-ams-map-arrow { opacity: 0.5; }
+.toybox-ams-map-row select {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  color: inherit;
+  padding: 5px 7px;
+  font: inherit;
+  font-size: 12px;
+}
+.toybox-ams-map-actions { display: flex; gap: 8px; margin-top: 2px; }
+
 /* live camera tile */
 .toybox-cam {
   border-radius: 10px;

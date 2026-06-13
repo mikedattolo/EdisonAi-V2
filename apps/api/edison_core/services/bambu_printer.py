@@ -14,6 +14,8 @@ import ssl
 import struct
 import threading
 import time
+import zipfile
+import xml.etree.ElementTree as ET
 
 try:
     import paho.mqtt.client as mqtt
@@ -46,6 +48,53 @@ def hex_to_name(value: str | None) -> str | None:
         if dist < best_dist:
             best, best_dist = name, dist
     return best
+
+
+def _safe_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_hex(value: str | None) -> str | None:
+    """Return a #RRGGBB string from Bambu's RRGGBBAA tray_color, or None."""
+    if not value:
+        return None
+    raw = value.lstrip("#")
+    if len(raw) < 6:
+        return None
+    return "#" + raw[:6].upper()
+
+
+def parse_3mf_filaments(path: str) -> list[dict]:
+    """Read the filament list (index, color, type) from a Bambu-sliced .3mf.
+
+    Bambu stores this in Metadata/slice_info.config (one <filament> per used slot)."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            target = next((n for n in archive.namelist() if n.lower().endswith("slice_info.config")), None)
+            if not target:
+                return []
+            data = archive.read(target)
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return []
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return []
+    by_index: dict[int, dict] = {}
+    for filament in root.iter("filament"):
+        index = _safe_int(filament.get("id"))
+        if index is None:
+            continue
+        by_index[index] = {
+            "index": index,
+            "color_hex": _normalize_hex(filament.get("color")),
+            "type": filament.get("type") or "",
+            "used_g": filament.get("used_g") or "",
+        }
+    return [by_index[key] for key in sorted(by_index)]
 
 
 # Internal Bambu model codes (broadcast over SSDP) -> friendly names.
@@ -259,14 +308,25 @@ class BambuPrinter:
     def _parse(self, report: dict) -> dict:
         color_hex = None
         material = None
+        ams_slots: list[dict] = []
         try:
             ams_root = report.get("ams", {}) or {}
             tray_now = str(ams_root.get("tray_now", "255"))
             for unit in ams_root.get("ams", []) or []:
                 for tray in unit.get("tray", []) or []:
+                    tray_color = tray.get("tray_color")
+                    tray_type = tray.get("tray_type")
+                    has_filament = bool(tray_type) and tray_color not in (None, "", "00000000")
+                    ams_slots.append({
+                        "id": _safe_int(tray.get("id")),
+                        "color_hex": _normalize_hex(tray_color),
+                        "color": hex_to_name(tray_color) if has_filament else None,
+                        "material": tray_type or None,
+                        "empty": not has_filament,
+                    })
                     if str(tray.get("id")) == tray_now:
-                        color_hex = tray.get("tray_color")
-                        material = tray.get("tray_type")
+                        color_hex = tray_color
+                        material = tray_type
             if color_hex is None:
                 vt = report.get("vt_tray", {}) or {}
                 color_hex = vt.get("tray_color")
@@ -283,6 +343,8 @@ class BambuPrinter:
             "job_name": report.get("subtask_name") or report.get("gcode_file"),
             "loaded_color": hex_to_name(color_hex),
             "loaded_material": material,
+            "sdcard": bool(report.get("sdcard", False)),
+            "ams": ams_slots,
         }
 
     # --- file upload (FTPS) + print control (MQTT) ---
@@ -305,8 +367,16 @@ class BambuPrinter:
             ftp.prot_p()
             with open(local_path, "rb") as handle:
                 ftp.storbinary(f"STOR {remote_name}", handle)
-        except (ftplib.all_errors, ssl.SSLError, OSError) as error:  # noqa: BLE001
-            return {"ok": False, "detail": f"FTP upload failed: {error}"}
+        except (ftplib.error_perm,) as error:
+            detail = str(error)
+            if "553" in detail:
+                detail = (
+                    "Printer refused to store the file (553). On X1 printers this means there's no "
+                    "microSD card inserted (or it's full/locked) — insert a microSD card and try again."
+                )
+            return {"ok": False, "detail": detail}
+        except (ftplib.Error, ssl.SSLError, OSError, EOFError) as error:  # noqa: BLE001
+            return {"ok": False, "detail": f"FTP upload failed: {error.__class__.__name__}: {error}"}
         finally:
             try:
                 ftp.quit()

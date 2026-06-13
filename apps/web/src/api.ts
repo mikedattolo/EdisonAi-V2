@@ -57,6 +57,7 @@ import type {
   ToyBoxRouteResult,
   ToyBoxQueueItemRecord,
   ToyBoxFileRecord,
+  ToyBoxFilament,
   ToyBoxPrintResult,
   ToyBoxControlResult,
   WorkspaceCommandRunResult,
@@ -422,8 +423,13 @@ export const edisonApi = {
     }
     return response.json();
   },
-  printToyBoxFile: (fileId: string) =>
-    request<ToyBoxPrintResult>(`/api/v1/toybox/files/${fileId}/print`, { method: 'POST' }),
+  getToyBoxFileFilaments: (fileId: string) =>
+    request<ToyBoxFilament[]>(`/api/v1/toybox/files/${fileId}/filaments`),
+  printToyBoxFile: (fileId: string, body?: { ams_mapping?: number[]; plate?: number; use_ams?: boolean }) =>
+    request<ToyBoxPrintResult>(`/api/v1/toybox/files/${fileId}/print`, {
+      method: 'POST',
+      body: body ? JSON.stringify(body) : undefined,
+    }),
   controlToyBoxPrinter: (
     printerId: string,
     action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog',
