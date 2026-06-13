@@ -438,9 +438,13 @@ class BambuPrinter:
         ams_mapping: list[int] | None = None,
         bed_leveling: bool = True,
         flow_cali: bool = False,
+        vibration_cali: bool = False,
         timelapse: bool = False,
     ) -> dict:
-        """Start a print of a file already uploaded to the printer."""
+        """Start a print of a file already uploaded to the printer.
+
+        vibration_cali defaults False: with it on, the X1 runs a multi-minute resonance
+        calibration after heating (no extrusion), which looks like the print has stalled."""
         lowered = remote_name.lower()
         if lowered.endswith((".gcode", ".gco", ".g")):
             payload = {"print": {"sequence_id": "0", "command": "gcode_file", "param": f"/{remote_name}"}}
@@ -456,7 +460,7 @@ class BambuPrinter:
             "timelapse": bool(timelapse),
             "bed_leveling": bool(bed_leveling),
             "flow_cali": bool(flow_cali),
-            "vibration_cali": True,
+            "vibration_cali": bool(vibration_cali),
             "layer_inspect": False,
             "use_ams": bool(use_ams),
             "profile_id": "0",

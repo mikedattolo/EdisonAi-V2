@@ -786,20 +786,23 @@ def _send_to_printer(
             return {"ok": False, "detail": "Bambu needs IP, serial, and access code first."}
         bambu = BambuPrinter(conn["ip"], conn["serial"], conn["access"])
         model = str((printer.metadata or {}).get("model") or "").lower()
+        status = bambu.get_status(timeout=8)
         # X1 stores sent files on the microSD card; warn early if it's missing.
-        if "x1" in model:
-            status = bambu.get_status(timeout=8)
-            if status.get("online") and status.get("sdcard") is False:
-                return {"ok": False, "detail": "No microSD card detected in the X1 — insert one so it can store and print the file."}
+        if "x1" in model and status.get("online") and status.get("sdcard") is False:
+            return {"ok": False, "detail": "No microSD card detected in the X1 — insert one so it can store and print the file."}
+        # Only drive the AMS if the printer actually has loaded AMS slots; a single-spool
+        # printer (e.g. A1 mini without AMS) must print with use_ams off or it waits forever.
+        has_ams = any(not slot.get("empty") for slot in (status.get("ams") or []))
+        has_mapping = bool(ams_mapping)
         uploaded = bambu.upload_file(local_path, filename)
         if not uploaded.get("ok"):
             return uploaded
-        has_mapping = bool(ams_mapping)
+        effective_use_ams = has_ams and (use_ams or has_mapping)
         started = bambu.start_print(
             filename,
             plate=plate,
-            use_ams=use_ams or has_mapping,
-            ams_mapping=ams_mapping if has_mapping else None,
+            use_ams=effective_use_ams,
+            ams_mapping=ams_mapping if (has_mapping and effective_use_ams) else None,
         )
         if not started.get("ok"):
             return {"ok": False, "detail": f"Uploaded, but print start failed: {started.get('detail')}"}
