@@ -655,15 +655,30 @@ class KnowledgeStore:
         return "\n".join(parts).strip()
 
     _PROFILE_PROBES = (
-        "my name is", "I am a", "I work as a", "my job is", "my profession is",
-        "I am a product designer", "I design products", "I live in", "I'm based in",
-        "my company", "my business", "I run a", "I'm building", "my goals are",
-        "my background is", "I studied", "my work experience", "my family",
-        "my hobbies", "about me", "who I am", "my day job", "I have a degree in",
+        "my name is", "I am a", "I work as a", "my profession is",
+        "I am a product designer", "I design products", "my design work",
+        "I live in", "where I grew up",
+        "my business", "my nonprofit", "my portfolio", "my robotics project", "my fabrication project",
+        "my career goal", "what I want to do after school",
+        "I studied", "my degree in", "my university", "my major",
+        "my work experience", "my internship",
+        "my family", "my friends", "my hobbies", "my interests", "sports I play",
+        "sustainability and the environment", "about me personally", "who I am as a person",
     )
 
-    def _retrieve_personal_chunks(self, max_total: int = 60, per_probe: int = 4) -> list[str]:
-        """Use semantic search to pull the chunks most likely to describe the user."""
+    # Signals (need 2+) that a chunk is raw code rather than the user's words.
+    _CODE_SIGNALS = (
+        "edison_core", "apps/api", "apps/web", "routes_", "workspace_agent", "```",
+        "def ", "import ", "uvicorn", "systemctl", ".tsx", ".py", "const ", "=>",
+    )
+
+    def _looks_like_code(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        return sum(1 for signal in self._CODE_SIGNALS if signal in lowered) >= 2
+
+    def _retrieve_personal_chunks(self, max_total: int = 22, per_probe: int = 3) -> list[str]:
+        """Use semantic search to pull the chunks most likely to describe the user as a person,
+        skipping EDISON code/dev chunks that would otherwise dominate the profile."""
         if not HAVE_NUMPY:
             return []
         try:
@@ -689,17 +704,33 @@ class KnowledgeStore:
                     picked[chunk_id] = score
         if not picked:
             return []
-        top_ids = [cid for cid, _ in sorted(picked.items(), key=lambda kv: -kv[1])][:max_total]
-        placeholders = ",".join("?" for _ in top_ids)
+        ordered_ids = [cid for cid, _ in sorted(picked.items(), key=lambda kv: -kv[1])]
+        placeholders = ",".join("?" for _ in ordered_ids)
         with self.database.connect() as connection:
+            # The user's imported ChatGPT/Claude data is kind 'chat_export' (and 'conversation'
+            # for remembered chats). Exclude ingested project docs/prompts (local_file/text/url)
+            # that frame everything as "EDISON".
             rows = connection.execute(
-                f"SELECT id, text FROM knowledge_chunks WHERE id IN ({placeholders})",
-                top_ids,
+                f"""
+                SELECT chunks.id AS id, chunks.text AS text
+                FROM knowledge_chunks AS chunks
+                JOIN knowledge_sources AS sources ON sources.id = chunks.source_id
+                WHERE chunks.id IN ({placeholders})
+                  AND sources.kind IN ('chat_export', 'conversation')
+                """,
+                ordered_ids,
             ).fetchall()
         by_id = {row["id"]: row["text"] for row in rows}
-        return [by_id[cid] for cid in top_ids if by_id.get(cid)]
+        texts: list[str] = []
+        for cid in ordered_ids:
+            text = by_id.get(cid)
+            if text and not self._looks_like_code(text):
+                texts.append(text)
+            if len(texts) >= max_total:
+                break
+        return texts
 
-    def build_user_profile(self, max_chunks: int = 60, model: str | None = None) -> dict:
+    def build_user_profile(self, max_chunks: int = 22, model: str | None = None) -> dict:
         """Extract a durable profile of the user from imported conversations via the local LLM.
 
         Personal-fact chunks are retrieved semantically first (so the profile captures who the
@@ -726,15 +757,24 @@ class KnowledgeStore:
             texts = [(row["text"] or "") for row in rows]
         if not texts:
             raise KnowledgeIngestError("No conversation memory to build a profile from yet.")
-        corpus = "\n\n---\n\n".join((text or "")[:1500] for text in texts)[:90000]
+        corpus = "\n\n---\n\n".join((text or "")[:1500] for text in texts)[:110000]
         system = (
-            "You are building a durable profile of the USER (the human) from excerpts of their own past "
-            "chat conversations. State concrete facts about them directly and confidently: full name, "
-            "where they live, their profession / role / employer, their side projects and businesses, the "
-            "tools and hardware they own, their skills, and clear goals or preferences. Write 6-15 short "
-            "bullet points grouped sensibly. Use only what the excerpts support and omit anything "
-            "uncertain. Do NOT mention 'system prompt', 'excerpts', 'conversations', or how you know "
-            "these things — just state the facts about the user."
+            "You are building a rich, durable profile of the USER (the human) from excerpts of their own "
+            "past chat conversations. Be comprehensive and specific — capture everything stable and useful "
+            "about them. Organize the profile under these markdown headings (omit a heading only if you "
+            "truly have nothing for it):\n"
+            "**Identity** (full name, location, age/stage),\n"
+            "**Work & Education** (profession, role, employer, school, degree, experience),\n"
+            "**Projects & Ventures** (businesses, nonprofits, named projects, portfolio pieces),\n"
+            "**Skills & Tools** (software, hardware, printers, techniques),\n"
+            "**Interests & Values** (hobbies, sports, design philosophy, causes),\n"
+            "**Goals** (what they're working toward).\n"
+            "Under each heading write concise bullet points with concrete details and names. Aim for 15-30 "
+            "bullets total. Use only what the excerpts support; omit anything uncertain. Do NOT mention "
+            "'system prompt', 'excerpts', 'conversations', or how you know these things — just state the facts.\n"
+            "IMPORTANT: profile the PERSON — their real life, studies, career, and physical/design projects. "
+            "Do NOT center the profile on any AI assistant, chatbot, or software platform they are building "
+            "together with you; mention such a project at most as a single bullet, not the focus."
         )
         try:
             response = httpx.post(
@@ -743,12 +783,12 @@ class KnowledgeStore:
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system},
-                        {"role": "user", "content": f"Excerpts from the user's past chats:\n\n{corpus}\n\nProfile of the user:"},
+                        {"role": "user", "content": f"Excerpts from the user's past chats:\n\n{corpus}\n\nComprehensive profile of the user:"},
                     ],
                     "stream": False,
-                    "options": {"temperature": 0.2},
+                    "options": {"temperature": 0.2, "num_ctx": 12288},
                 },
-                timeout=240.0,
+                timeout=300.0,
             )
             response.raise_for_status()
             content = response.json().get("message", {}).get("content", "").strip()

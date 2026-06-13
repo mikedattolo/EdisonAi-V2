@@ -346,7 +346,7 @@ export default function App() {
     useState<boolean>(() => readStoredBoolean(CHAT_KNOWLEDGE_ENABLED_STORAGE_KEY, true));
   const [chatKnowledgeQuery, setChatKnowledgeQuery] = useState('');
   const [chatKnowledgeMatches, setChatKnowledgeMatches] =
-    useState<number>(() => readStoredInt(CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY, 5, 1, 20));
+    useState<number>(() => readStoredInt(CHAT_KNOWLEDGE_MATCHES_STORAGE_KEY, 8, 1, 30));
   const [qwenChatModelEnabled, setQwenChatModelEnabled] =
     useState<boolean>(() => readStoredBoolean(CHAT_QWEN_MODEL_STORAGE_KEY, false));
   const [chatContextPreviewUpdatedAt, setChatContextPreviewUpdatedAt] = useState<string | null>(null);
@@ -2408,12 +2408,12 @@ function ChatView({
               id="chat-knowledge-matches"
               type="number"
               min={1}
-              max={20}
+              max={30}
               value={chatKnowledgeMatches}
               onChange={(event) => {
                 const parsed = Number.parseInt(event.target.value, 10);
                 if (!Number.isNaN(parsed)) {
-                  setChatKnowledgeMatches(Math.max(1, Math.min(20, parsed)));
+                  setChatKnowledgeMatches(Math.max(1, Math.min(30, parsed)));
                 }
               }}
             />
