@@ -637,6 +637,41 @@
 }
 .toybox-ams-map-actions { display: flex; gap: 8px; margin-top: 2px; }
 
+/* clickable loaded-color swatch + palette popover */
+.toybox-swatch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  text-transform: capitalize;
+}
+.toybox-swatch-btn:hover { opacity: 0.85; }
+.toybox-color-pop {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 7px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.toybox-color-opt {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.toybox-color-opt.active { border-color: #fff; }
+.toybox-color-opt:hover { transform: scale(1.12); }
+
 /* live camera tile */
 .toybox-cam {
   border-radius: 10px;

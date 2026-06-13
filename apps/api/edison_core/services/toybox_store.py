@@ -159,6 +159,23 @@ class ToyBoxStore:
             raise ToyBoxNotFoundError(printer_id)
         return self._printer_from_row(row)
 
+    def update_printer_metadata(self, printer_id: str, patch: dict) -> None:
+        """Merge keys into a printer's metadata (only writes if something changed)."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT metadata_json FROM toybox_printers WHERE id = ?", (printer_id,)
+            ).fetchone()
+            if row is None:
+                return
+            meta = _json_load(row["metadata_json"], {})
+            if all(meta.get(key) == value for key, value in patch.items()):
+                return
+            meta.update(patch)
+            connection.execute(
+                "UPDATE toybox_printers SET metadata_json = ?, updated_at = ? WHERE id = ?",
+                (_json_dump(meta), utc_now().isoformat(), printer_id),
+            )
+
     # --- per-printer file library (gcode / 3mf) ---
 
     def add_file(self, printer_id: str, name: str, filename: str, kind: str, size: int, stored_path: str) -> ToyBoxFileRecord:

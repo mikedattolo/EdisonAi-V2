@@ -422,6 +422,20 @@ def printer_live_status(
             loaded_material=meta.get("loaded_material"),
             detail=_missing_connection_detail(printer.kind, ip, serial, access, host),
         )
+    # Persist detected colors so order routing knows what's loaded/available without
+    # opening a live connection per route (only writes when something changed).
+    if status.get("online"):
+        ams_colors = sorted({slot.get("color") for slot in (status.get("ams") or []) if slot.get("color")})
+        patch: dict = {"ams_colors": ams_colors}
+        if status.get("loaded_color"):
+            patch["loaded_color"] = status["loaded_color"]
+        if status.get("loaded_material"):
+            patch["loaded_material"] = status["loaded_material"]
+        try:
+            store.update_printer_metadata(printer_id, patch)
+        except Exception:  # noqa: BLE001
+            pass
+
     return ToyBoxPrinterLiveStatus(
         printer_id=printer_id,
         online=bool(status.get("online")),
@@ -880,6 +894,8 @@ def route_order(payload: ToyBoxRouteRequest, store: ToyBoxStore = Depends(get_to
     for printer in printers:
         meta = printer.metadata or {}
         loaded = str(meta.get("loaded_color") or "").strip().lower()
+        ams_colors = [str(item).strip().lower() for item in (meta.get("ams_colors") or []) if item]
+        available = {item for item in ([loaded] + ams_colors) if item}
         assigned = meta.get("assigned_files") if isinstance(meta.get("assigned_files"), dict) else {}
         file_match = None
         for key, path in (assigned or {}).items():
@@ -887,18 +903,19 @@ def route_order(payload: ToyBoxRouteRequest, store: ToyBoxStore = Depends(get_to
             if keyword and keyword in product_low and path:
                 file_match = str(path)
                 break
-        color_ok = (not color) or (loaded == color)
-        if color and loaded != color:
-            note = f"has {loaded or 'no'} filament, needs {color}"
+        color_ok = (not color) or (color in available)
+        available_str = ", ".join(sorted(available)) or "unknown"
+        if color and color_ok:
+            note = f"has {color} ({available_str})"
         elif color:
-            note = f"{loaded} loaded — match"
+            note = f"has {available_str}, needs {color}"
         else:
-            note = f"{loaded or 'unknown'} loaded"
+            note = f"loaded: {available_str}"
         candidates.append(
             ToyBoxRouteCandidate(
                 printer_id=printer.id,
                 printer_name=printer.name,
-                loaded_color=loaded or None,
+                loaded_color=(color if (color and color_ok) else (loaded or (sorted(available)[0] if available else None))),
                 loaded_material=meta.get("loaded_material"),
                 has_file=bool(file_match),
                 eligible=color_ok,

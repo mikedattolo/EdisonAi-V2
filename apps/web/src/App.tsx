@@ -6603,12 +6603,14 @@ function ToyBoxPrinterCard({
   onEdit,
   onDelete,
   onPrinted,
+  onUpdated,
 }: {
   printer: ToyBoxPrinterProfileRecord;
   status?: ToyBoxPrinterLiveStatus;
   onEdit: () => void;
   onDelete: () => void;
   onPrinted: () => void;
+  onUpdated: () => void;
 }) {
   const [files, setFiles] = useState<ToyBoxFileRecord[]>([]);
   const [showFiles, setShowFiles] = useState(false);
@@ -6621,9 +6623,26 @@ function ToyBoxPrinterCard({
   const [jogStep, setJogStep] = useState(10);
   const [showMove, setShowMove] = useState(false);
   const [mapPanel, setMapPanel] = useState<{ file: ToyBoxFileRecord; filaments: ToyBoxFilament[]; mapping: number[] } | null>(null);
+  const [showColor, setShowColor] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const amsSlots = (status?.ams ?? []).filter((slot) => !slot.empty && slot.id !== null);
+
+  async function setLoadedColor(colorName: string) {
+    setShowColor(false);
+    try {
+      await edisonApi.upsertToyBoxPrinter({
+        name: printer.name,
+        kind: printer.kind,
+        role: printer.role,
+        status: printer.status,
+        metadata: { ...(printer.metadata as Record<string, unknown>), loaded_color: colorName.toLowerCase() },
+      });
+      onUpdated();
+    } catch {
+      /* ignore */
+    }
+  }
 
   const meta = (printer.metadata ?? {}) as Record<string, unknown>;
   const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
@@ -6681,7 +6700,7 @@ function ToyBoxPrinterCard({
       setNote(null);
       try {
         const filaments = await edisonApi.getToyBoxFileFilaments(file.id);
-        if (filaments.length > 1) {
+        if (filaments.length >= 1) {
           const mapping = filaments.map((filament) => {
             let best = amsSlots[0].id ?? 0;
             let bestDist = Number.POSITIVE_INFINITY;
@@ -6738,11 +6757,37 @@ function ToyBoxPrinterCard({
         </div>
       </div>
       <div className="toybox-printer-meta">{label} · {address}</div>
-      {color && (
+      {amsSlots.length === 0 ? (
         <div className="toybox-filament">
-          <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
-          {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')}
+          <button className="toybox-swatch-btn" onClick={() => setShowColor((value) => !value)} title="Set the loaded filament color" type="button">
+            <span
+              className="toybox-swatch"
+              style={{ background: color ? (TOYBOX_COLOR_HEX[color] ?? color) : 'transparent', borderStyle: color ? 'solid' : 'dashed' }}
+            />
+            {color ? `${color} ${String(status?.loaded_material ?? meta?.loaded_material ?? '')}` : 'Set color'}
+          </button>
+          {showColor && (
+            <div className="toybox-color-pop">
+              {Object.entries(TOYBOX_COLOR_HEX).map(([name, hex]) => (
+                <button
+                  key={name}
+                  className={`toybox-color-opt${color === name ? ' active' : ''}`}
+                  style={{ background: hex }}
+                  title={name}
+                  onClick={() => void setLoadedColor(name)}
+                  type="button"
+                />
+              ))}
+            </div>
+          )}
         </div>
+      ) : (
+        color && (
+          <div className="toybox-filament">
+            <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
+            {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')} <small style={{ opacity: 0.5 }}>active</small>
+          </div>
+        )
       )}
       {online ? (
         <>
@@ -7179,6 +7224,7 @@ function ToyBoxView() {
                 onEdit={() => editPrinter(printer)}
                 onDelete={() => void deletePrinter(printer.id)}
                 onPrinted={() => void loadQueue()}
+                onUpdated={() => void loadPrinters()}
               />
             ))}
             {bambuPrinters.length === 0 && <div className="empty-line">No printers yet — click “Add printer” above, or Scan to find them.</div>}
