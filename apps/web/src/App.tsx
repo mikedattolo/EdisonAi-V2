@@ -18,10 +18,13 @@ import {
   Folder,
   GalleryHorizontalEnd,
   Globe2,
+  Home,
   Image,
+  Lightbulb,
   Link2,
   MessageSquare,
   Mic,
+  Move,
   Network,
   Pause,
   Play,
@@ -6602,7 +6605,10 @@ function ToyBoxPrinterCard({
   const [pending, setPending] = useState<File | null>(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [showCam, setShowCam] = useState(false);
+  const [showCam, setShowCam] = useState(true);
+  const [lightOn, setLightOn] = useState(true);
+  const [jogStep, setJogStep] = useState(10);
+  const [showMove, setShowMove] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const meta = (printer.metadata ?? {}) as Record<string, unknown>;
@@ -6658,14 +6664,23 @@ function ToyBoxPrinterCard({
     await loadFiles();
   }
 
-  async function control(action: 'pause' | 'resume' | 'stop') {
+  async function control(
+    action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog',
+    extra?: { axis?: string; distance?: number },
+  ) {
     setNote(null);
     try {
-      const result = await edisonApi.controlToyBoxPrinter(printer.id, action);
+      const result = await edisonApi.controlToyBoxPrinter(printer.id, action, extra);
       setNote(result.detail);
     } catch (err) {
       setNote(err instanceof Error ? err.message : 'Command failed.');
     }
+  }
+
+  function toggleLight() {
+    const next = !lightOn;
+    setLightOn(next);
+    void control(next ? 'light_on' : 'light_off');
   }
 
   return (
@@ -6697,6 +6712,38 @@ function ToyBoxPrinterCard({
             <button className="toybox-ctrl" onClick={() => void control('resume')} title="Resume" type="button"><Play size={13} /> Resume</button>
             <button className="toybox-ctrl danger" onClick={() => void control('stop')} title="Stop" type="button"><Square size={11} /> Stop</button>
           </div>
+          <div className="toybox-controls">
+            <button className={lightOn ? 'toybox-ctrl on' : 'toybox-ctrl'} onClick={toggleLight} title="Toggle chamber light" type="button"><Lightbulb size={13} /> {lightOn ? 'Light off' : 'Light on'}</button>
+            <button className="toybox-ctrl" onClick={() => void control('home')} title="Home all axes" type="button"><Home size={12} /> Home</button>
+            <button className={showMove ? 'toybox-ctrl on' : 'toybox-ctrl'} onClick={() => setShowMove((value) => !value)} title="Jog controls" type="button"><Move size={12} /> Move</button>
+          </div>
+          {showMove && (
+            <div className="toybox-jog">
+              <div className="toybox-jog-pad">
+                <button className="toybox-jog-btn yp" onClick={() => void control('jog', { axis: 'Y', distance: jogStep })} type="button">Y+</button>
+                <button className="toybox-jog-btn xm" onClick={() => void control('jog', { axis: 'X', distance: -jogStep })} type="button">X−</button>
+                <button className="toybox-jog-btn ho" onClick={() => void control('home')} title="Home" type="button"><Home size={12} /></button>
+                <button className="toybox-jog-btn xp" onClick={() => void control('jog', { axis: 'X', distance: jogStep })} type="button">X+</button>
+                <button className="toybox-jog-btn ym" onClick={() => void control('jog', { axis: 'Y', distance: -jogStep })} type="button">Y−</button>
+              </div>
+              <div className="toybox-jog-z">
+                <button className="toybox-jog-btn" onClick={() => void control('jog', { axis: 'Z', distance: jogStep })} type="button">Z+</button>
+                <button className="toybox-jog-btn" onClick={() => void control('jog', { axis: 'Z', distance: -jogStep })} type="button">Z−</button>
+              </div>
+              <div className="toybox-jog-step">
+                {[1, 10, 50].map((step) => (
+                  <button
+                    key={step}
+                    className={jogStep === step ? 'active' : ''}
+                    onClick={() => setJogStep(step)}
+                    type="button"
+                  >
+                    {step}mm
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
@@ -6704,9 +6751,6 @@ function ToyBoxPrinterCard({
 
       {hasCamera && (
         <>
-          <button className="toybox-files-toggle" onClick={() => setShowCam((value) => !value)} type="button">
-            <Camera size={13} /> {showCam ? 'Hide camera' : 'Live camera'}
-          </button>
           {showCam && (
             <div className="toybox-cam">
               <img
@@ -6717,6 +6761,9 @@ function ToyBoxPrinterCard({
               />
             </div>
           )}
+          <button className="toybox-files-toggle" onClick={() => setShowCam((value) => !value)} type="button">
+            <Camera size={13} /> {showCam ? 'Hide camera' : 'Show camera'}
+          </button>
         </>
       )}
 

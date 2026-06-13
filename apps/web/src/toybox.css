@@ -410,6 +410,66 @@
   border-color: rgba(244, 135, 113, 0.35);
 }
 .toybox-ctrl.danger:hover { background: rgba(244, 135, 113, 0.16); }
+.toybox-ctrl.on {
+  color: #ffe08a;
+  border-color: rgba(255, 200, 80, 0.4);
+  background: rgba(255, 200, 80, 0.12);
+}
+
+/* jog / motion pad */
+.toybox-jog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.toybox-jog-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 36px);
+  grid-auto-rows: 32px;
+  gap: 4px;
+}
+.toybox-jog-pad .yp { grid-column: 2; grid-row: 1; }
+.toybox-jog-pad .xm { grid-column: 1; grid-row: 2; }
+.toybox-jog-pad .ho { grid-column: 2; grid-row: 2; }
+.toybox-jog-pad .xp { grid-column: 3; grid-row: 2; }
+.toybox-jog-pad .ym { grid-column: 2; grid-row: 3; }
+.toybox-jog-z { display: flex; gap: 4px; }
+.toybox-jog-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  min-width: 36px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+.toybox-jog-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.toybox-jog-btn.ho { color: #8ab4f8; }
+.toybox-jog-step { display: flex; gap: 4px; }
+.toybox-jog-step button {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+}
+.toybox-jog-step button.active {
+  background: rgba(79, 140, 255, 0.2);
+  border-color: rgba(79, 140, 255, 0.45);
+  color: #b9d2ff;
+}
 
 /* per-printer file manager */
 .toybox-files-toggle {

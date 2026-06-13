@@ -424,10 +424,14 @@ export const edisonApi = {
   },
   printToyBoxFile: (fileId: string) =>
     request<ToyBoxPrintResult>(`/api/v1/toybox/files/${fileId}/print`, { method: 'POST' }),
-  controlToyBoxPrinter: (printerId: string, action: 'pause' | 'resume' | 'stop') =>
+  controlToyBoxPrinter: (
+    printerId: string,
+    action: 'pause' | 'resume' | 'stop' | 'light_on' | 'light_off' | 'home' | 'jog',
+    extra?: { axis?: string; distance?: number },
+  ) =>
     request<ToyBoxControlResult>(`/api/v1/toybox/printers/${printerId}/control`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, ...(extra ?? {}) }),
     }),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
   updateRuntimeSettings: (payload: Partial<Pick<RuntimeSettingsRecord, 'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'>>) =>

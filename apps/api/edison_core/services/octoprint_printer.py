@@ -87,3 +87,41 @@ class OctoPrintPrinter:
 
     def stop(self) -> dict:
         return self._job_command("cancel")
+
+    def _command(self, commands: list[str]) -> dict:
+        try:
+            response = httpx.post(
+                f"{self.base}/api/printer/command",
+                headers={"X-Api-Key": self.api_key, "Content-Type": "application/json"},
+                json={"commands": commands},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+        except (httpx.HTTPError, ValueError) as error:
+            return {"ok": False, "detail": f"OctoPrint command failed: {error.__class__.__name__}"}
+        return {"ok": True}
+
+    def _printhead(self, body: dict) -> dict:
+        try:
+            response = httpx.post(
+                f"{self.base}/api/printer/printhead",
+                headers={"X-Api-Key": self.api_key, "Content-Type": "application/json"},
+                json=body,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+        except (httpx.HTTPError, ValueError) as error:
+            return {"ok": False, "detail": f"OctoPrint move failed: {error.__class__.__name__}"}
+        return {"ok": True}
+
+    def set_light(self, on: bool) -> dict:
+        return self._command([f"M355 S{1 if on else 0}"])
+
+    def home(self) -> dict:
+        return self._printhead({"command": "home", "axes": ["x", "y", "z"]})
+
+    def jog(self, axis: str, distance: float, feedrate: int = 3000) -> dict:
+        axis = (axis or "").lower()
+        if axis not in ("x", "y", "z"):
+            return {"ok": False, "detail": f"Invalid axis '{axis}'."}
+        return self._printhead({"command": "jog", axis: distance})

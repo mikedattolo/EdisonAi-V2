@@ -86,3 +86,24 @@ class MoonrakerPrinter:
 
     def stop(self) -> dict:
         return self._job_action("cancel")
+
+    def run_gcode(self, script: str) -> dict:
+        try:
+            response = httpx.post(f"{self.base}/printer/gcode/script", params={"script": script}, timeout=12.0)
+            response.raise_for_status()
+        except (httpx.HTTPError, ValueError) as error:
+            return {"ok": False, "detail": f"Moonraker gcode failed: {error.__class__.__name__}"}
+        return {"ok": True}
+
+    def set_light(self, on: bool) -> dict:
+        return self.run_gcode("LIGHTS_ON" if on else "LIGHTS_OFF")
+
+    def home(self) -> dict:
+        return self.run_gcode("G28")
+
+    def jog(self, axis: str, distance: float, feedrate: int = 3000) -> dict:
+        axis = (axis or "").upper()
+        if axis not in ("X", "Y", "Z"):
+            return {"ok": False, "detail": f"Invalid axis '{axis}'."}
+        rate = 600 if axis == "Z" else feedrate
+        return self.run_gcode(f"G91\nG1 {axis}{distance} F{rate}\nG90")

@@ -1179,7 +1179,9 @@ class ToyBoxPrintResult(BaseModel):
 
 
 class ToyBoxControlRequest(BaseModel):
-    action: Literal["pause", "resume", "stop"]
+    action: Literal["pause", "resume", "stop", "light_on", "light_off", "home", "jog"]
+    axis: str | None = None
+    distance: float | None = None
 
 
 class ToyBoxControlResult(BaseModel):

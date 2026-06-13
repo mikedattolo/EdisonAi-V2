@@ -341,3 +341,32 @@ class BambuPrinter:
 
     def stop(self) -> dict:
         return self._publish({"print": {"sequence_id": "0", "command": "stop"}})
+
+    def set_light(self, on: bool) -> dict:
+        return self._publish(
+            {
+                "system": {
+                    "sequence_id": "0",
+                    "command": "ledctrl",
+                    "led_node": "chamber_light",
+                    "led_mode": "on" if on else "off",
+                    "led_on_time": 500,
+                    "led_off_time": 500,
+                    "loop_times": 0,
+                    "interval_time": 0,
+                }
+            }
+        )
+
+    def send_gcode(self, lines: str) -> dict:
+        return self._publish({"print": {"sequence_id": "0", "command": "gcode_line", "param": lines}})
+
+    def home(self) -> dict:
+        return self.send_gcode("G28\n")
+
+    def jog(self, axis: str, distance: float, feedrate: int = 3000) -> dict:
+        axis = (axis or "").upper()
+        if axis not in ("X", "Y", "Z"):
+            return {"ok": False, "detail": f"Invalid axis '{axis}'."}
+        rate = 600 if axis == "Z" else feedrate
+        return self.send_gcode(f"G91\nG1 {axis}{distance} F{rate}\nG90\n")

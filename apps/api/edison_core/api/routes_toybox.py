@@ -569,7 +569,7 @@ def control_printer(
         printer = store.get_printer(printer_id)
     except ToyBoxNotFoundError as error:
         raise HTTPException(status_code=404, detail="Printer not found") from error
-    result = _control_printer(printer, payload.action)
+    result = _control_printer(printer, payload.action, payload.axis, payload.distance)
     return ToyBoxControlResult(
         ok=bool(result.get("ok")),
         printer_id=printer_id,
@@ -702,7 +702,12 @@ def _send_to_printer(printer: ToyBoxPrinterProfileRecord, local_path: str, filen
     return {"ok": False, "detail": f"Sending isn't supported for '{printer.kind}' printers."}
 
 
-def _control_printer(printer: ToyBoxPrinterProfileRecord, action: str) -> dict:
+def _control_printer(
+    printer: ToyBoxPrinterProfileRecord,
+    action: str,
+    axis: str | None = None,
+    distance: float | None = None,
+) -> dict:
     conn = _printer_conn(printer)
     if printer.kind == "bambu":
         if not (conn["ip"] and conn["serial"] and conn["access"]):
@@ -718,7 +723,18 @@ def _control_printer(printer: ToyBoxPrinterProfileRecord, action: str) -> dict:
         adapter = OctoPrintPrinter(conn["host"], conn["api_key"])
     else:
         return {"ok": False, "detail": f"Control isn't supported for '{printer.kind}' printers."}
-    method = {"pause": adapter.pause, "resume": adapter.resume, "stop": adapter.stop}.get(action)
+    if action == "jog":
+        if not axis or distance is None:
+            return {"ok": False, "detail": "Jog needs an axis and distance."}
+        return adapter.jog(axis, distance)
+    method = {
+        "pause": adapter.pause,
+        "resume": adapter.resume,
+        "stop": adapter.stop,
+        "light_on": lambda: adapter.set_light(True),
+        "light_off": lambda: adapter.set_light(False),
+        "home": adapter.home,
+    }.get(action)
     if method is None:
         return {"ok": False, "detail": f"Unknown action '{action}'."}
     return method()
