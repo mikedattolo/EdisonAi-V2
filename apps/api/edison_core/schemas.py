@@ -1156,6 +1156,37 @@ class ToyBoxDiscoveredPrinter(BaseModel):
     label: str = ""
     ports: list[int] = Field(default_factory=list)
     already_added: bool = False
+    serial: str = ""
+    model: str = ""
+
+
+class ToyBoxFileRecord(BaseModel):
+    id: str
+    printer_id: str
+    name: str
+    filename: str
+    kind: str = "gcode"  # gcode / 3mf
+    size: int = 0
+    created_at: datetime
+
+
+class ToyBoxPrintResult(BaseModel):
+    ok: bool
+    printer_id: str
+    file_id: str | None = None
+    detail: str = ""
+    queue_item_id: str | None = None
+
+
+class ToyBoxControlRequest(BaseModel):
+    action: Literal["pause", "resume", "stop"]
+
+
+class ToyBoxControlResult(BaseModel):
+    ok: bool
+    printer_id: str
+    action: str
+    detail: str = ""
 
 
 class ToyBoxPrinterLiveStatus(BaseModel):

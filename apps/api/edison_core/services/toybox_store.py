@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from edison_core.database import SQLiteDatabase
 from edison_core.schemas import (
+    ToyBoxFileRecord,
     ToyBoxOrderCreate,
     ToyBoxOrderRecord,
     ToyBoxPrinterProfileCreate,
@@ -107,6 +108,20 @@ class ToyBoxStore:
                     received_at TEXT NOT NULL,
                     UNIQUE(provider, event_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS toybox_files (
+                    id TEXT PRIMARY KEY,
+                    printer_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'gcode',
+                    size INTEGER NOT NULL DEFAULT 0,
+                    stored_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_toybox_files_printer
+                    ON toybox_files(printer_id, created_at DESC);
                 """
             )
 
@@ -136,6 +151,70 @@ class ToyBoxStore:
     def delete_printer(self, printer_id: str) -> None:
         with self.database.connect() as connection:
             connection.execute("DELETE FROM toybox_printers WHERE id = ?", (printer_id,))
+
+    def get_printer(self, printer_id: str) -> ToyBoxPrinterProfileRecord:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM toybox_printers WHERE id = ?", (printer_id,)).fetchone()
+        if row is None:
+            raise ToyBoxNotFoundError(printer_id)
+        return self._printer_from_row(row)
+
+    # --- per-printer file library (gcode / 3mf) ---
+
+    def add_file(self, printer_id: str, name: str, filename: str, kind: str, size: int, stored_path: str) -> ToyBoxFileRecord:
+        now = utc_now()
+        record = ToyBoxFileRecord(
+            id=f"tbf_{uuid4().hex}",
+            printer_id=printer_id,
+            name=name,
+            filename=filename,
+            kind=kind,
+            size=size,
+            created_at=now,
+        )
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO toybox_files (id, printer_id, name, filename, kind, size, stored_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (record.id, printer_id, name, filename, kind, size, stored_path, now.isoformat()),
+            )
+        return record
+
+    def list_files(self, printer_id: str) -> list[ToyBoxFileRecord]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM toybox_files WHERE printer_id = ? ORDER BY created_at DESC",
+                (printer_id,),
+            ).fetchall()
+        return [self._file_from_row(row) for row in rows]
+
+    def get_file(self, file_id: str) -> tuple[ToyBoxFileRecord, str]:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM toybox_files WHERE id = ?", (file_id,)).fetchone()
+        if row is None:
+            raise ToyBoxNotFoundError(file_id)
+        return self._file_from_row(row), row["stored_path"]
+
+    def delete_file(self, file_id: str) -> str:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT stored_path FROM toybox_files WHERE id = ?", (file_id,)).fetchone()
+            if row is None:
+                raise ToyBoxNotFoundError(file_id)
+            connection.execute("DELETE FROM toybox_files WHERE id = ?", (file_id,))
+        return row["stored_path"]
+
+    def _file_from_row(self, row: sqlite3.Row) -> ToyBoxFileRecord:
+        return ToyBoxFileRecord(
+            id=row["id"],
+            printer_id=row["printer_id"],
+            name=row["name"],
+            filename=row["filename"],
+            kind=row["kind"],
+            size=int(row["size"] or 0),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
 
     def upsert_printer(self, payload: ToyBoxPrinterProfileCreate) -> ToyBoxPrinterProfileRecord:
         now = utc_now()

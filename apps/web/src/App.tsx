@@ -23,6 +23,9 @@ import {
   MessageSquare,
   Mic,
   Network,
+  Pause,
+  Play,
+  Printer,
   RefreshCw,
   Search,
   Send,
@@ -31,6 +34,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Trash2,
   Upload,
   Video,
@@ -109,6 +113,7 @@ import type {
   ToyBoxPrinterLiveStatus,
   ToyBoxRouteResult,
   ToyBoxQueueItemRecord,
+  ToyBoxFileRecord,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
   WorkspaceEntry,
@@ -6464,6 +6469,164 @@ function ModelViewer({ onColorChosen }: { onColorChosen?: (hex: string) => void 
   );
 }
 
+function ToyBoxPrinterCard({
+  printer,
+  status,
+  onEdit,
+  onDelete,
+  onPrinted,
+}: {
+  printer: ToyBoxPrinterProfileRecord;
+  status?: ToyBoxPrinterLiveStatus;
+  onEdit: () => void;
+  onDelete: () => void;
+  onPrinted: () => void;
+}) {
+  const [files, setFiles] = useState<ToyBoxFileRecord[]>([]);
+  const [showFiles, setShowFiles] = useState(false);
+  const [uploadName, setUploadName] = useState('');
+  const [pending, setPending] = useState<File | null>(null);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const meta = (printer.metadata ?? {}) as Record<string, unknown>;
+  const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
+  const address = String(meta?.ip ?? meta?.host ?? '');
+  const label = printer.kind === 'bambu' ? String(meta?.model ?? 'bambu').toUpperCase() : printer.kind.toUpperCase();
+  const online = Boolean(status?.online);
+  const canPrint = ['bambu', 'moonraker', 'octoprint'].includes(printer.kind);
+
+  const loadFiles = useCallback(async () => {
+    setFiles(await edisonApi.listToyBoxFiles(printer.id).catch(() => []));
+  }, [printer.id]);
+
+  useEffect(() => {
+    if (showFiles) void loadFiles();
+  }, [showFiles, loadFiles]);
+
+  async function doUpload() {
+    if (!pending) return;
+    setFileBusy(true);
+    setNote(null);
+    try {
+      await edisonApi.uploadToyBoxFile(printer.id, pending, uploadName.trim() || pending.name);
+      setUploadName('');
+      setPending(null);
+      if (inputRef.current) inputRef.current.value = '';
+      await loadFiles();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      setFileBusy(false);
+    }
+  }
+
+  async function sendFile(fileId: string) {
+    setFileBusy(true);
+    setNote(null);
+    try {
+      const result = await edisonApi.printToyBoxFile(fileId);
+      setNote(result.detail);
+      onPrinted();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Send failed.');
+    } finally {
+      setFileBusy(false);
+    }
+  }
+
+  async function removeFile(fileId: string) {
+    await edisonApi.deleteToyBoxFile(fileId).catch(() => undefined);
+    await loadFiles();
+  }
+
+  async function control(action: 'pause' | 'resume' | 'stop') {
+    setNote(null);
+    try {
+      const result = await edisonApi.controlToyBoxPrinter(printer.id, action);
+      setNote(result.detail);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Command failed.');
+    }
+  }
+
+  return (
+    <article className={online ? 'toybox-printer online' : 'toybox-printer'}>
+      <div className="toybox-printer-head">
+        <strong>{printer.name}</strong>
+        <div className="toybox-printer-head-right">
+          <span className={online ? 'toybox-dot on' : 'toybox-dot off'} />
+          <button className="toybox-iconbtn" onClick={onEdit} title="Edit settings" type="button"><Settings size={13} /></button>
+          <button className="toybox-iconbtn" onClick={onDelete} title="Remove printer" type="button"><Trash2 size={13} /></button>
+        </div>
+      </div>
+      <div className="toybox-printer-meta">{label} · {address}</div>
+      {color && (
+        <div className="toybox-filament">
+          <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
+          {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')}
+        </div>
+      )}
+      {online ? (
+        <>
+          <div className="toybox-state">{status?.state ?? 'idle'}{status?.job_name ? ` · ${status.job_name}` : ''}</div>
+          {typeof status?.progress === 'number' && status.progress > 0 && (
+            <div className="toybox-progress"><span style={{ width: `${status.progress}%` }} /><em>{status.progress}%</em></div>
+          )}
+          <div className="toybox-temps">nozzle {Math.round(status?.nozzle_temp ?? 0)}° · bed {Math.round(status?.bed_temp ?? 0)}°{status?.remaining_min ? ` · ${status.remaining_min}m left` : ''}</div>
+          <div className="toybox-controls">
+            <button className="toybox-ctrl" onClick={() => void control('pause')} title="Pause" type="button"><Pause size={13} /> Pause</button>
+            <button className="toybox-ctrl" onClick={() => void control('resume')} title="Resume" type="button"><Play size={13} /> Resume</button>
+            <button className="toybox-ctrl danger" onClick={() => void control('stop')} title="Stop" type="button"><Square size={11} /> Stop</button>
+          </div>
+        </>
+      ) : (
+        <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
+      )}
+
+      {canPrint && (
+        <button className="toybox-files-toggle" onClick={() => setShowFiles((value) => !value)} type="button">
+          <FileText size={13} /> Files{files.length ? ` (${files.length})` : ''}
+        </button>
+      )}
+      {canPrint && showFiles && (
+        <div className="toybox-files">
+          <div className="toybox-file-upload">
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".gcode,.gco,.g,.3mf"
+              onChange={(event) => {
+                const chosen = event.target.files?.[0] ?? null;
+                setPending(chosen);
+                if (chosen && !uploadName) setUploadName(chosen.name);
+              }}
+            />
+            <input placeholder="Name (optional)" value={uploadName} onChange={(event) => setUploadName(event.target.value)} />
+            <button className="secondary-button icon-text-button" disabled={!pending || fileBusy} onClick={() => void doUpload()} type="button">
+              <Upload size={13} /> Add
+            </button>
+          </div>
+          {files.map((file) => (
+            <div className="toybox-file-row" key={file.id}>
+              <span className="toybox-file-kind">{file.kind}</span>
+              <div className="toybox-file-info">
+                <strong>{file.name}</strong>
+                <span>{(file.size / 1024).toFixed(0)} KB</span>
+              </div>
+              <button className="toybox-iconbtn send" disabled={fileBusy} onClick={() => void sendFile(file.id)} title="Send to printer & start print" type="button"><Printer size={13} /></button>
+              <button className="toybox-iconbtn" onClick={() => void removeFile(file.id)} title="Delete file" type="button"><Trash2 size={12} /></button>
+            </div>
+          ))}
+          {files.length === 0 && <div className="toybox-files-empty">No files yet. Add a .gcode or .3mf, name it, then hit the printer icon to send &amp; print.</div>}
+        </div>
+      )}
+      {note && <div className="toybox-file-note">{note}</div>}
+    </article>
+  );
+}
+
 function ToyBoxView() {
   const [printers, setPrinters] = useState<ToyBoxPrinterProfileRecord[]>([]);
   const [discovered, setDiscovered] = useState<ToyBoxDiscoveredPrinter[]>([]);
@@ -6684,24 +6847,46 @@ function ToyBoxView() {
         <section className="toybox-discovered">
           <div className="section-heading"><Search size={18} /><h3>Found on your network</h3></div>
           <div className="toybox-found-grid">
-            {discovered.map((item) => (
-              <article className="toybox-found-card" key={item.ip}>
-                <strong>{item.label}</strong>
-                <span>{item.ip}</span>
-                <span className="toybox-kind">{item.kind}</span>
-                {item.already_added ? (
-                  <span className="toybox-added">added</span>
-                ) : (
-                  <button
-                    className="secondary-button"
-                    onClick={() => { setShowAdd(true); setForm((current) => ({ ...current, ip: item.ip, name: current.name || `${item.kind} ${item.ip.split('.').pop()}` })); }}
-                    type="button"
-                  >
-                    Use ↑
-                  </button>
-                )}
-              </article>
-            ))}
+            {discovered.map((item) => {
+              const kind = ['bambu', 'moonraker', 'octoprint'].includes(item.kind) ? item.kind : 'bambu';
+              const modelValue = (() => {
+                const lowered = (item.model || '').toLowerCase();
+                if (lowered.includes('mini')) return 'a1mini';
+                if (lowered.includes('a1')) return 'a1';
+                if (lowered.includes('p1')) return 'p1s';
+                return 'x1c';
+              })();
+              return (
+                <article className="toybox-found-card" key={item.ip}>
+                  <strong>{item.model || item.label}</strong>
+                  <span>{item.ip}</span>
+                  {item.serial ? <span>SN {item.serial}</span> : null}
+                  <span className="toybox-kind">{item.kind}</span>
+                  {item.already_added ? (
+                    <span className="toybox-added">added</span>
+                  ) : (
+                    <button
+                      className="secondary-button"
+                      onClick={() => {
+                        setShowAdd(true);
+                        setForm((current) => ({
+                          ...current,
+                          connection: kind,
+                          ip: kind === 'bambu' ? item.ip : current.ip,
+                          host: kind !== 'bambu' ? item.ip : current.host,
+                          serial: item.serial || current.serial,
+                          model: item.model ? modelValue : current.model,
+                          name: current.name || item.model || `${item.kind} ${item.ip.split('.').pop()}`,
+                        }));
+                      }}
+                      type="button"
+                    >
+                      Use ↑
+                    </button>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </section>
       )}
@@ -6709,43 +6894,16 @@ function ToyBoxView() {
       <div className="toybox-dashboard">
         <div className="toybox-dash-main">
           <div className="toybox-printer-grid">
-            {bambuPrinters.map((printer) => {
-              const status = live[printer.id];
-              const meta = printer.metadata as Record<string, unknown>;
-              const color = String(status?.loaded_color ?? meta?.loaded_color ?? '');
-              const address = String(meta?.ip ?? meta?.host ?? '');
-              const label = printer.kind === 'bambu' ? String(meta?.model ?? 'bambu').toUpperCase() : printer.kind.toUpperCase();
-              return (
-                <article className={status?.online ? 'toybox-printer online' : 'toybox-printer'} key={printer.id}>
-                  <div className="toybox-printer-head">
-                    <strong>{printer.name}</strong>
-                    <div className="toybox-printer-head-right">
-                      <span className={status?.online ? 'toybox-dot on' : 'toybox-dot off'} />
-                      <button className="toybox-iconbtn" onClick={() => editPrinter(printer)} title="Edit settings" type="button"><Settings size={13} /></button>
-                      <button className="toybox-iconbtn" onClick={() => void deletePrinter(printer.id)} title="Remove printer" type="button"><Trash2 size={13} /></button>
-                    </div>
-                  </div>
-                  <div className="toybox-printer-meta">{label} · {address}</div>
-                  {color && (
-                    <div className="toybox-filament">
-                      <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[color] ?? color }} />
-                      {color} {String(status?.loaded_material ?? meta?.loaded_material ?? '')}
-                    </div>
-                  )}
-                  {status?.online ? (
-                    <>
-                      <div className="toybox-state">{status.state ?? 'idle'}{status.job_name ? ` · ${status.job_name}` : ''}</div>
-                      {typeof status.progress === 'number' && status.progress > 0 && (
-                        <div className="toybox-progress"><span style={{ width: `${status.progress}%` }} /><em>{status.progress}%</em></div>
-                      )}
-                      <div className="toybox-temps">nozzle {Math.round(status.nozzle_temp ?? 0)}° · bed {Math.round(status.bed_temp ?? 0)}°{status.remaining_min ? ` · ${status.remaining_min}m left` : ''}</div>
-                    </>
-                  ) : (
-                    <div className="toybox-offline">{status?.detail ?? 'Connecting…'}</div>
-                  )}
-                </article>
-              );
-            })}
+            {bambuPrinters.map((printer) => (
+              <ToyBoxPrinterCard
+                key={printer.id}
+                printer={printer}
+                status={live[printer.id]}
+                onEdit={() => editPrinter(printer)}
+                onDelete={() => void deletePrinter(printer.id)}
+                onPrinted={() => void loadQueue()}
+              />
+            ))}
             {bambuPrinters.length === 0 && <div className="empty-line">No printers yet — click “Add printer” above, or Scan to find them.</div>}
           </div>
           <ModelViewer onColorChosen={(hex) => { const name = reverseColorName(hex); if (name) setRouteColor(name); }} />

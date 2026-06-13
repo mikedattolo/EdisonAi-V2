@@ -4,11 +4,15 @@ import base64
 import hashlib
 import hmac
 import os
+import re
+import shutil
+from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
+from edison_core.config import load_settings
 from edison_core.api.dependencies import (
     get_desktop_bridge_client,
     get_integration_discovery_service,
@@ -43,6 +47,10 @@ from edison_core.schemas import (
     ToyBoxRouteRequest,
     ToyBoxRouteResult,
     ToyBoxRouteCandidate,
+    ToyBoxFileRecord,
+    ToyBoxPrintResult,
+    ToyBoxControlRequest,
+    ToyBoxControlResult,
 )
 from edison_core.services import printer_discovery
 from edison_core.services.bambu_printer import BambuPrinter
@@ -366,8 +374,10 @@ def discover_printers(store: ToyBoxStore = Depends(get_toybox_store)) -> list[To
             ip=item["ip"],
             kind=item["kind"],
             label=item["label"],
-            ports=item["ports"],
+            ports=item.get("ports", []),
             already_added=item["ip"] in known_ips,
+            serial=item.get("serial", ""),
+            model=item.get("model", ""),
         )
         for item in printer_discovery.discover()
     ]
@@ -402,7 +412,7 @@ def printer_live_status(
             online=False,
             loaded_color=meta.get("loaded_color"),
             loaded_material=meta.get("loaded_material"),
-            detail="Live control isn't configured for this printer yet (add its connection details).",
+            detail=_missing_connection_detail(printer.kind, ip, serial, access, host),
         )
     return ToyBoxPrinterLiveStatus(
         printer_id=printer_id,
@@ -417,6 +427,212 @@ def printer_live_status(
         loaded_material=status.get("loaded_material") or meta.get("loaded_material"),
         detail=status.get("detail"),
     )
+
+
+def _missing_connection_detail(kind: str, ip: str, serial: str, access: str, host: str) -> str:
+    if kind == "bambu":
+        missing = [label for value, label in ((ip, "IP"), (serial, "serial number"), (access, "access code")) if not value]
+        if missing:
+            return (
+                f"Bambu live control needs the {', '.join(missing)}. Open the printer's Edit panel and add it "
+                "(serial auto-fills when you Scan; enable LAN Only Mode for the access code)."
+            )
+        return "Bambu connection details are present but incomplete."
+    if kind == "moonraker":
+        return "Add the printer's host/IP. Creality K1/K1 SE also needs LAN Moonraker enabled (port 7125)."
+    if kind == "octoprint":
+        return "Add the OctoPrint host and API key in the Edit panel."
+    return "This printer type doesn't support live control yet."
+
+
+# --- per-printer file library + real print send/control -------------------
+
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _toybox_files_root() -> Path:
+    root = Path(load_settings().artifact_root) / "toybox_files"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _file_kind(filename: str) -> str:
+    lowered = filename.lower()
+    if lowered.endswith(".3mf"):
+        return "3mf"
+    if lowered.endswith((".gcode", ".gco", ".g")):
+        return "gcode"
+    return "other"
+
+
+def _safe_filename(name: str, fallback: str) -> str:
+    cleaned = _SAFE_NAME.sub("_", (name or "").strip()).strip("._")
+    return cleaned or fallback
+
+
+@router.get("/printers/{printer_id}/files", response_model=list[ToyBoxFileRecord])
+def list_printer_files(printer_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> list[ToyBoxFileRecord]:
+    return store.list_files(printer_id)
+
+
+@router.post("/printers/{printer_id}/files", response_model=ToyBoxFileRecord)
+async def upload_printer_file(
+    printer_id: str,
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxFileRecord:
+    try:
+        store.get_printer(printer_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Printer not found") from error
+
+    original = file.filename or "upload.gcode"
+    kind = _file_kind(original)
+    if kind == "other":
+        raise HTTPException(status_code=400, detail="Only .gcode and .3mf files can be sent to a printer.")
+
+    file_id = f"tbf_{os.urandom(8).hex()}"
+    safe = _safe_filename(original, f"{file_id}.{kind}")
+    target_dir = _toybox_files_root() / printer_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored_path = target_dir / f"{file_id}__{safe}"
+
+    size = 0
+    with stored_path.open("wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            out.write(chunk)
+    await file.close()
+
+    display_name = (name or "").strip() or original
+    return store.add_file(printer_id, display_name, safe, kind, size, str(stored_path))
+
+
+@router.delete("/files/{file_id}")
+def delete_printer_file(file_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> dict:
+    try:
+        stored_path = store.delete_file(file_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="File not found") from error
+    try:
+        Path(stored_path).unlink(missing_ok=True)
+    except OSError:
+        pass
+    return {"status": "deleted", "id": file_id}
+
+
+@router.post("/files/{file_id}/print", response_model=ToyBoxPrintResult)
+def print_printer_file(file_id: str, store: ToyBoxStore = Depends(get_toybox_store)) -> ToyBoxPrintResult:
+    try:
+        record, stored_path = store.get_file(file_id)
+        printer = store.get_printer(record.printer_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="File or printer not found") from error
+    if not Path(stored_path).exists():
+        raise HTTPException(status_code=410, detail="The stored file is missing on the server.")
+
+    result = _send_to_printer(printer, stored_path, record.filename, record.kind)
+    queue_item_id: str | None = None
+    if result.get("ok"):
+        queue_item = store.create_queue_item(
+            ToyBoxQueueItemCreate(
+                printer_id=printer.id,
+                title=record.name,
+                status="printing",
+                gcode_path=record.filename,
+                metadata={"file_id": file_id, "sent_via": printer.kind},
+            )
+        )
+        queue_item_id = queue_item.id
+    return ToyBoxPrintResult(
+        ok=bool(result.get("ok")),
+        printer_id=printer.id,
+        file_id=file_id,
+        detail=result.get("detail") or ("Sent to printer and print started." if result.get("ok") else "Send failed."),
+        queue_item_id=queue_item_id,
+    )
+
+
+@router.post("/printers/{printer_id}/control", response_model=ToyBoxControlResult)
+def control_printer(
+    printer_id: str,
+    payload: ToyBoxControlRequest,
+    store: ToyBoxStore = Depends(get_toybox_store),
+) -> ToyBoxControlResult:
+    try:
+        printer = store.get_printer(printer_id)
+    except ToyBoxNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Printer not found") from error
+    result = _control_printer(printer, payload.action)
+    return ToyBoxControlResult(
+        ok=bool(result.get("ok")),
+        printer_id=printer_id,
+        action=payload.action,
+        detail=result.get("detail") or ("Done." if result.get("ok") else "Control command failed."),
+    )
+
+
+def _printer_conn(printer: ToyBoxPrinterProfileRecord) -> dict:
+    meta = printer.metadata or {}
+    return {
+        "ip": str(meta.get("ip") or "").strip(),
+        "serial": str(meta.get("serial") or "").strip(),
+        "access": str(meta.get("access_code") or "").strip(),
+        "host": str(meta.get("host") or meta.get("ip") or "").strip(),
+        "api_key": str(meta.get("api_key") or "").strip(),
+    }
+
+
+def _send_to_printer(printer: ToyBoxPrinterProfileRecord, local_path: str, filename: str, kind: str) -> dict:
+    conn = _printer_conn(printer)
+    if printer.kind == "bambu":
+        if not (conn["ip"] and conn["serial"] and conn["access"]):
+            return {"ok": False, "detail": "Bambu needs IP, serial, and access code first."}
+        bambu = BambuPrinter(conn["ip"], conn["serial"], conn["access"])
+        uploaded = bambu.upload_file(local_path, filename)
+        if not uploaded.get("ok"):
+            return uploaded
+        meta = printer.metadata or {}
+        use_ams = bool(meta.get("use_ams", False))
+        started = bambu.start_print(filename, use_ams=use_ams)
+        if not started.get("ok"):
+            return {"ok": False, "detail": f"Uploaded, but print start failed: {started.get('detail')}"}
+        return {"ok": True, "detail": f"Uploaded {filename} and started the print."}
+    if printer.kind == "moonraker":
+        if not conn["host"]:
+            return {"ok": False, "detail": "Moonraker host/IP is required."}
+        return MoonrakerPrinter(conn["host"]).upload_and_print(local_path, filename, start=True)
+    if printer.kind == "octoprint":
+        if not conn["host"]:
+            return {"ok": False, "detail": "OctoPrint host is required."}
+        return OctoPrintPrinter(conn["host"], conn["api_key"]).upload_and_print(local_path, filename, start=True)
+    return {"ok": False, "detail": f"Sending isn't supported for '{printer.kind}' printers."}
+
+
+def _control_printer(printer: ToyBoxPrinterProfileRecord, action: str) -> dict:
+    conn = _printer_conn(printer)
+    if printer.kind == "bambu":
+        if not (conn["ip"] and conn["serial"] and conn["access"]):
+            return {"ok": False, "detail": "Bambu needs IP, serial, and access code first."}
+        adapter = BambuPrinter(conn["ip"], conn["serial"], conn["access"])
+    elif printer.kind == "moonraker":
+        if not conn["host"]:
+            return {"ok": False, "detail": "Moonraker host/IP is required."}
+        adapter = MoonrakerPrinter(conn["host"])
+    elif printer.kind == "octoprint":
+        if not conn["host"]:
+            return {"ok": False, "detail": "OctoPrint host is required."}
+        adapter = OctoPrintPrinter(conn["host"], conn["api_key"])
+    else:
+        return {"ok": False, "detail": f"Control isn't supported for '{printer.kind}' printers."}
+    method = {"pause": adapter.pause, "resume": adapter.resume, "stop": adapter.stop}.get(action)
+    if method is None:
+        return {"ok": False, "detail": f"Unknown action '{action}'."}
+    return method()
 
 
 _COLOR_WORDS = {

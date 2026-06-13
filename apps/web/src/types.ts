@@ -563,6 +563,33 @@ export interface ToyBoxDiscoveredPrinter {
   label: string;
   ports: number[];
   already_added: boolean;
+  serial?: string;
+  model?: string;
+}
+
+export interface ToyBoxFileRecord {
+  id: string;
+  printer_id: string;
+  name: string;
+  filename: string;
+  kind: string;
+  size: number;
+  created_at: string;
+}
+
+export interface ToyBoxPrintResult {
+  ok: boolean;
+  printer_id: string;
+  file_id?: string | null;
+  detail: string;
+  queue_item_id?: string | null;
+}
+
+export interface ToyBoxControlResult {
+  ok: boolean;
+  printer_id: string;
+  action: string;
+  detail: string;
 }
 
 export interface ToyBoxPrinterLiveStatus {

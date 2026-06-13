@@ -5,7 +5,9 @@ from __future__ import annotations
 import concurrent.futures
 import socket
 
-PROBE_PORTS = [80, 5000, 7125, 8883, 990, 4409, 8080]
+from edison_core.services import bambu_printer
+
+PROBE_PORTS = [80, 5000, 7125, 8883, 990, 4409, 9999, 8080]
 
 
 def local_subnet() -> str:
@@ -41,10 +43,14 @@ def _classify(ports: list[int]) -> tuple[str, str]:
         return "moonraker", "Klipper / Moonraker printer"
     if 5000 in ports:
         return "octoprint", "OctoPrint host"
+    if 9999 in ports:
+        # Creality K1/K1 SE stock firmware: proprietary LAN port 9999, Moonraker
+        # locked to localhost. Still surface it so the user can add + enable it.
+        return "moonraker", "Creality printer (enable LAN Moonraker on :7125 to control)"
     return "unknown", "Device"
 
 
-def discover(subnet: str | None = None) -> list[dict]:
+def discover(subnet: str | None = None, ssdp_timeout: float = 4.0) -> list[dict]:
     subnet = subnet or local_subnet()
     hosts = [f"{subnet}.{octet}" for octet in range(1, 255)]
     found: list[dict] = []
@@ -56,4 +62,30 @@ def discover(subnet: str | None = None) -> list[dict]:
             if kind == "unknown":
                 continue
             found.append({"ip": ip, "kind": kind, "label": label, "ports": ports})
+
+    # Enrich Bambu printers with their serial + model from SSDP announcements so
+    # the user never has to find the serial by hand. SSDP can also reveal Bambu
+    # printers whose probe ports were briefly closed.
+    try:
+        announced = bambu_printer.discover_ssdp(ssdp_timeout)
+    except OSError:
+        announced = {}
+    seen = {entry["ip"] for entry in found}
+    for entry in found:
+        info = announced.get(entry["ip"])
+        if info:
+            entry["serial"] = info.get("serial") or ""
+            entry["model"] = bambu_printer.bambu_model_name(info.get("model"))
+            entry["kind"] = "bambu"
+    for ip, info in announced.items():
+        if ip in seen:
+            continue
+        found.append({
+            "ip": ip,
+            "kind": "bambu",
+            "label": "Bambu Lab printer",
+            "ports": [],
+            "serial": info.get("serial") or "",
+            "model": bambu_printer.bambu_model_name(info.get("model")),
+        })
     return found

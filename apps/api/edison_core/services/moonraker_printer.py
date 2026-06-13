@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import httpx
 
 
@@ -27,8 +29,15 @@ class MoonrakerPrinter:
             )
             response.raise_for_status()
             status = response.json().get("result", {}).get("status", {})
-        except (httpx.HTTPError, ValueError) as error:
-            return {"online": False, "detail": f"Moonraker unreachable: {error.__class__.__name__}"}
+        except (httpx.HTTPError, ValueError):
+            return {
+                "online": False,
+                "detail": (
+                    f"Moonraker API not reachable at {self.base}. On a Creality K1/K1 SE the stock "
+                    "firmware keeps Moonraker on localhost only — root the printer and run the Creality "
+                    "Helper Script (installs Moonraker remote + Fluidd) so port 7125 opens, then Edison connects."
+                ),
+            }
         extruder = status.get("extruder", {})
         bed = status.get("heater_bed", {})
         print_stats = status.get("print_stats", {})
@@ -44,3 +53,36 @@ class MoonrakerPrinter:
             "job_name": print_stats.get("filename") or None,
             "remaining_min": None if not isinstance(remaining, (int, float)) else None,
         }
+
+    def upload_and_print(self, local_path: str, filename: str, start: bool = True, timeout: float = 120.0) -> dict:
+        if not os.path.exists(local_path):
+            return {"ok": False, "detail": "File not found on the server."}
+        try:
+            with open(local_path, "rb") as handle:
+                response = httpx.post(
+                    f"{self.base}/server/files/upload",
+                    files={"file": (filename, handle, "application/octet-stream")},
+                    data={"root": "gcodes", "print": "true" if start else "false"},
+                    timeout=timeout,
+                )
+            response.raise_for_status()
+        except (httpx.HTTPError, ValueError) as error:
+            return {"ok": False, "detail": f"Moonraker upload failed: {error.__class__.__name__}"}
+        return {"ok": True, "remote_name": filename, "detail": "Uploaded and print started." if start else "Uploaded."}
+
+    def _job_action(self, action: str) -> dict:
+        try:
+            response = httpx.post(f"{self.base}/printer/print/{action}", timeout=10.0)
+            response.raise_for_status()
+        except (httpx.HTTPError, ValueError) as error:
+            return {"ok": False, "detail": f"Moonraker {action} failed: {error.__class__.__name__}"}
+        return {"ok": True}
+
+    def pause(self) -> dict:
+        return self._job_action("pause")
+
+    def resume(self) -> dict:
+        return self._job_action("resume")
+
+    def stop(self) -> dict:
+        return self._job_action("cancel")

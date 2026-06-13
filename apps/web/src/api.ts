@@ -55,6 +55,9 @@ import type {
   ToyBoxPrinterLiveStatus,
   ToyBoxRouteResult,
   ToyBoxQueueItemRecord,
+  ToyBoxFileRecord,
+  ToyBoxPrintResult,
+  ToyBoxControlResult,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
   ScheduledTaskRecord,
@@ -398,6 +401,33 @@ export const edisonApi = {
   listToyBoxQueue: () => request<ToyBoxQueueItemRecord[]>('/api/v1/toybox/queue'),
   createToyBoxQueueItem: (payload: { title: string; printer_id?: string | null; status?: string; model_path?: string; metadata?: Record<string, unknown> }) =>
     request<ToyBoxQueueItemRecord>('/api/v1/toybox/queue', { method: 'POST', body: JSON.stringify(payload) }),
+  listToyBoxFiles: (printerId: string) =>
+    request<ToyBoxFileRecord[]>(`/api/v1/toybox/printers/${printerId}/files`),
+  uploadToyBoxFile: async (printerId: string, file: File, name: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('name', name);
+    const response = await fetch(`${API_BASE}/api/v1/toybox/printers/${printerId}/files`, { method: 'POST', body: form });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail?.detail || `Upload failed with ${response.status}`);
+    }
+    return response.json() as Promise<ToyBoxFileRecord>;
+  },
+  deleteToyBoxFile: async (fileId: string) => {
+    const response = await fetch(`${API_BASE}/api/v1/toybox/files/${fileId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      throw new Error(`Delete failed with ${response.status}`);
+    }
+    return response.json();
+  },
+  printToyBoxFile: (fileId: string) =>
+    request<ToyBoxPrintResult>(`/api/v1/toybox/files/${fileId}/print`, { method: 'POST' }),
+  controlToyBoxPrinter: (printerId: string, action: 'pause' | 'resume' | 'stop') =>
+    request<ToyBoxControlResult>(`/api/v1/toybox/printers/${printerId}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
   getRuntimeSettings: () => request<RuntimeSettingsRecord>('/api/v1/settings/runtime'),
   updateRuntimeSettings: (payload: Partial<Pick<RuntimeSettingsRecord, 'media' | 'integrations' | 'toybox' | 'notifications' | 'gallery' | 'hardware'>>) =>
     request<RuntimeSettingsRecord>('/api/v1/settings/runtime', {
