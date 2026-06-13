@@ -6618,6 +6618,7 @@ function ToyBoxPrinterCard({
   const [pending, setPending] = useState<File | null>(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [noteErr, setNoteErr] = useState(false);
   const [showCam, setShowCam] = useState(true);
   const [lightOn, setLightOn] = useState(true);
   const [jogStep, setJogStep] = useState(10);
@@ -6686,9 +6687,11 @@ function ToyBoxPrinterCard({
     try {
       const result = await edisonApi.printToyBoxFile(fileId, amsMapping ? { ams_mapping: amsMapping } : undefined);
       setNote(result.detail);
+      setNoteErr(!result.ok);
       onPrinted();
     } catch (err) {
       setNote(err instanceof Error ? err.message : 'Send failed.');
+      setNoteErr(true);
     } finally {
       setFileBusy(false);
     }
@@ -6720,6 +6723,11 @@ function ToyBoxPrinterCard({
       }
       setFileBusy(false);
     }
+    if (file.kind !== 'gcode' && printer.kind === 'creality') {
+      setNote('The K1 prints .gcode (Klipper) — slice this in Creality Print / OrcaSlicer and upload the .gcode, not a .3mf.');
+      setNoteErr(true);
+      return;
+    }
     await doSend(file.id);
   }
 
@@ -6736,8 +6744,10 @@ function ToyBoxPrinterCard({
     try {
       const result = await edisonApi.controlToyBoxPrinter(printer.id, action, extra);
       setNote(result.detail);
+      setNoteErr(!result.ok);
     } catch (err) {
       setNote(err instanceof Error ? err.message : 'Command failed.');
+      setNoteErr(true);
     }
   }
 
@@ -6896,6 +6906,9 @@ function ToyBoxPrinterCard({
       )}
       {canPrint && showFiles && (
         <div className="toybox-files">
+          {printer.kind === 'creality' && (
+            <div className="toybox-files-empty">K1 prints <strong>.gcode</strong> (Klipper) — slice in Creality Print/OrcaSlicer and upload the .gcode, not a .3mf.</div>
+          )}
           <div className="toybox-file-upload">
             <input
               ref={inputRef}
@@ -6956,7 +6969,7 @@ function ToyBoxPrinterCard({
           </div>
         </div>
       )}
-      {note && <div className="toybox-file-note">{note}</div>}
+      {note && <div className={noteErr ? 'toybox-file-note err' : 'toybox-file-note'}>{note}</div>}
     </article>
   );
 }
