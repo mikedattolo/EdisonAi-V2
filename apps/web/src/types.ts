@@ -546,7 +546,7 @@ export interface ToyBoxManagerStatus {
 export interface ToyBoxPrinterProfileRecord {
   id: string;
   name: string;
-  kind: 'bambu' | 'moonraker' | 'octoprint' | 'orca' | 'cura' | 'dymo' | 'generic';
+  kind: 'bambu' | 'creality' | 'moonraker' | 'octoprint' | 'orca' | 'cura' | 'dymo' | 'generic';
   role: 'printer' | 'slicer' | 'label_printer' | 'camera' | 'desktop_bridge';
   bridge_tool_id?: string | null;
   slicer_profile?: string | null;

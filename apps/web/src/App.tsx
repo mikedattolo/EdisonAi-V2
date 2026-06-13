@@ -6618,7 +6618,7 @@ function ToyBoxPrinterCard({
   const label = printer.kind === 'bambu' ? (model || 'bambu').toUpperCase() : printer.kind.toUpperCase();
   const online = Boolean(status?.online);
   const canPrint = ['bambu', 'moonraker', 'octoprint'].includes(printer.kind);
-  const hasCamera = (printer.kind === 'bambu' && /x1|p1s/i.test(model)) || Boolean(meta?.camera_url);
+  const hasCamera = (printer.kind === 'bambu' && /x1|a1|p1s/i.test(model)) || Boolean(meta?.camera_url);
 
   const loadFiles = useCallback(async () => {
     setFiles(await edisonApi.listToyBoxFiles(printer.id).catch(() => []));
@@ -6757,7 +6757,7 @@ function ToyBoxPrinterCard({
                 className="toybox-cam-img"
                 src={`/api/v1/toybox/printers/${printer.id}/camera`}
                 alt={`${printer.name} camera`}
-                onError={() => setNote('Camera stream unavailable — for the X1C, enable Settings → General → LAN Mode Liveview on the printer.')}
+                onError={() => setNote('Camera stream unavailable — for the X1C enable LAN Mode Liveview on the printer; the A1 mini camera needs LAN access on.')}
               />
             </div>
           )}
@@ -6862,7 +6862,7 @@ function ToyBoxView() {
     let timer: number | undefined;
     const bambu = printers.filter(
       (printer) =>
-        ['bambu', 'moonraker', 'octoprint'].includes(printer.kind) &&
+        ['bambu', 'creality', 'moonraker', 'octoprint'].includes(printer.kind) &&
         ((printer.metadata as Record<string, unknown>)?.ip || (printer.metadata as Record<string, unknown>)?.host),
     );
     async function poll() {
@@ -6927,7 +6927,7 @@ function ToyBoxView() {
 
   function editPrinter(printer: ToyBoxPrinterProfileRecord) {
     const meta = (printer.metadata ?? {}) as Record<string, unknown>;
-    const connection = ['bambu', 'moonraker', 'octoprint'].includes(printer.kind) ? printer.kind : 'bambu';
+    const connection = ['bambu', 'creality', 'moonraker', 'octoprint'].includes(printer.kind) ? printer.kind : 'bambu';
     setForm({
       name: printer.name,
       connection,
@@ -6949,7 +6949,7 @@ function ToyBoxView() {
     await loadPrinters();
   }
 
-  const bambuPrinters = printers.filter((printer) => ['bambu', 'moonraker', 'octoprint'].includes(printer.kind));
+  const bambuPrinters = printers.filter((printer) => ['bambu', 'creality', 'moonraker', 'octoprint'].includes(printer.kind));
 
   const reverseColorName = (hex: string) =>
     Object.entries(TOYBOX_COLOR_HEX).find(([, value]) => value.toLowerCase() === hex.toLowerCase())?.[0];
@@ -6985,7 +6985,8 @@ function ToyBoxView() {
           <div className="toybox-add-grid">
           <select onChange={(event) => setForm({ ...form, connection: event.target.value })} value={form.connection}>
             <option value="bambu">Bambu (LAN / MQTT)</option>
-            <option value="moonraker">Klipper / K1 SE (Moonraker)</option>
+            <option value="creality">Creality K1 / K1 SE (LAN)</option>
+            <option value="moonraker">Klipper (Moonraker)</option>
             <option value="octoprint">OctoPrint (CR10S)</option>
           </select>
           <input onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Name (e.g. X1C)" value={form.name} />
@@ -7037,7 +7038,7 @@ function ToyBoxView() {
           <div className="section-heading"><Search size={18} /><h3>Found on your network</h3></div>
           <div className="toybox-found-grid">
             {discovered.map((item) => {
-              const kind = ['bambu', 'moonraker', 'octoprint'].includes(item.kind) ? item.kind : 'bambu';
+              const kind = ['bambu', 'creality', 'moonraker', 'octoprint'].includes(item.kind) ? item.kind : 'bambu';
               const modelValue = (() => {
                 const lowered = (item.model || '').toLowerCase();
                 if (lowered.includes('mini')) return 'a1mini';

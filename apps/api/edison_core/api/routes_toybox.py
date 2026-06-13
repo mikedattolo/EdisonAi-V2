@@ -55,7 +55,9 @@ from edison_core.schemas import (
     ToyBoxControlResult,
 )
 from edison_core.services import printer_discovery
+from edison_core.services import bambu_printer as bambu_camera
 from edison_core.services.bambu_printer import BambuPrinter
+from edison_core.services.creality_printer import CrealityPrinter
 from edison_core.services.moonraker_printer import MoonrakerPrinter
 from edison_core.services.octoprint_printer import OctoPrintPrinter
 from edison_core.services.desktop_bridge import DesktopBridgeClient
@@ -403,6 +405,8 @@ def printer_live_status(
     status: dict | None = None
     if printer.kind == "bambu" and ip and serial and access:
         status = BambuPrinter(ip, serial, access).get_status()
+    elif printer.kind == "creality" and host:
+        status = CrealityPrinter(host).get_status()
     elif printer.kind == "moonraker" and host:
         status = MoonrakerPrinter(host).get_status()
     elif printer.kind == "octoprint" and host:
@@ -589,7 +593,7 @@ def _camera_source(printer: ToyBoxPrinterProfileRecord) -> tuple[list[str], str]
     access = str(meta.get("access_code") or "").strip()
     camera_url = str(meta.get("camera_url") or "").strip()
     model = str(meta.get("model") or "").lower()
-    if printer.kind == "bambu" and ip and access and ("x1" in model or "p1s" in model):
+    if printer.kind == "bambu" and ip and access and "x1" in model:
         return ["-rtsp_transport", "tcp"], f"rtsps://bblp:{access}@{ip}:322/streaming/live/1"
     if camera_url:
         if camera_url.startswith("/dev/"):
@@ -600,8 +604,23 @@ def _camera_source(printer: ToyBoxPrinterProfileRecord) -> tuple[list[str], str]
     return None
 
 
+def _is_chamber_model(model: str) -> bool:
+    """A1/A1 mini/P1S use the port-6000 chamber-image protocol (not RTSP)."""
+    model = (model or "").lower()
+    return ("a1" in model or "p1s" in model) and "x1" not in model
+
+
+def _bambu_chamber_conn(printer: ToyBoxPrinterProfileRecord) -> tuple[str, str] | None:
+    meta = printer.metadata or {}
+    ip = str(meta.get("ip") or "").strip()
+    access = str(meta.get("access_code") or "").strip()
+    if printer.kind == "bambu" and ip and access and _is_chamber_model(str(meta.get("model") or "")):
+        return ip, access
+    return None
+
+
 def printer_has_camera(printer: ToyBoxPrinterProfileRecord) -> bool:
-    return _camera_source(printer) is not None
+    return _camera_source(printer) is not None or _bambu_chamber_conn(printer) is not None
 
 
 @router.get("/printers/{printer_id}/camera")
@@ -610,6 +629,30 @@ def printer_camera_stream(printer_id: str, store: ToyBoxStore = Depends(get_toyb
         printer = store.get_printer(printer_id)
     except ToyBoxNotFoundError as error:
         raise HTTPException(status_code=404, detail="Printer not found") from error
+
+    chamber = _bambu_chamber_conn(printer)
+    if chamber is not None:
+        ip, access = chamber
+
+        def chamber_frames():
+            try:
+                for jpeg in bambu_camera.chamber_image_frames(ip, access):
+                    yield (
+                        b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + str(len(jpeg)).encode()
+                        + b"\r\n\r\n"
+                        + jpeg
+                        + b"\r\n"
+                    )
+            except (OSError, ConnectionError):
+                return
+
+        return StreamingResponse(
+            chamber_frames(),
+            media_type="multipart/x-mixed-replace;boundary=frame",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     source = _camera_source(printer)
     if source is None:
         raise HTTPException(status_code=404, detail="No camera configured for this printer.")
@@ -650,6 +693,14 @@ def printer_camera_snapshot(printer_id: str, store: ToyBoxStore = Depends(get_to
         printer = store.get_printer(printer_id)
     except ToyBoxNotFoundError as error:
         raise HTTPException(status_code=404, detail="Printer not found") from error
+
+    chamber = _bambu_chamber_conn(printer)
+    if chamber is not None:
+        jpeg = bambu_camera.chamber_image_snapshot(*chamber)
+        if not jpeg:
+            raise HTTPException(status_code=503, detail="Camera returned no image.")
+        return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
     source = _camera_source(printer)
     if source is None:
         raise HTTPException(status_code=404, detail="No camera configured for this printer.")
@@ -699,6 +750,14 @@ def _send_to_printer(printer: ToyBoxPrinterProfileRecord, local_path: str, filen
         if not conn["host"]:
             return {"ok": False, "detail": "OctoPrint host is required."}
         return OctoPrintPrinter(conn["host"], conn["api_key"]).upload_and_print(local_path, filename, start=True)
+    if printer.kind == "creality":
+        return {
+            "ok": False,
+            "detail": (
+                "The K1 is connected for live status and control, but stock firmware doesn't expose a "
+                "file-upload API — send prints from Creality Print/Slicer for now, or enable Moonraker."
+            ),
+        }
     return {"ok": False, "detail": f"Sending isn't supported for '{printer.kind}' printers."}
 
 
@@ -713,6 +772,10 @@ def _control_printer(
         if not (conn["ip"] and conn["serial"] and conn["access"]):
             return {"ok": False, "detail": "Bambu needs IP, serial, and access code first."}
         adapter = BambuPrinter(conn["ip"], conn["serial"], conn["access"])
+    elif printer.kind == "creality":
+        if not conn["host"]:
+            return {"ok": False, "detail": "Creality K1 host/IP is required."}
+        adapter = CrealityPrinter(conn["host"])
     elif printer.kind == "moonraker":
         if not conn["host"]:
             return {"ok": False, "detail": "Moonraker host/IP is required."}
@@ -761,7 +824,7 @@ def route_order(payload: ToyBoxRouteRequest, store: ToyBoxStore = Depends(get_to
     product = payload.product.strip()
     color = (payload.color or "").strip().lower() or _parse_color(product)
     product_low = product.lower()
-    printers = [item for item in store.list_printers() if item.kind in {"bambu", "moonraker", "octoprint"}]
+    printers = [item for item in store.list_printers() if item.kind in {"bambu", "creality", "moonraker", "octoprint"}]
 
     candidates: list[ToyBoxRouteCandidate] = []
     matched = None

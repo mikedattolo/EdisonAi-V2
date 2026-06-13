@@ -107,6 +107,71 @@ def discover_ssdp(timeout: float = 4.0) -> dict[str, dict]:
     return results
 
 
+def _chamber_socket(ip: str, access_code: str, timeout: float = 10.0):
+    """Open + authenticate an A1/P1 chamber-camera socket (TLS, port 6000)."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    raw = socket.create_connection((ip, 6000), timeout=timeout)
+    sock = context.wrap_socket(raw, server_hostname=ip)
+    auth = bytearray()
+    auth += struct.pack("<I", 0x40) + struct.pack("<I", 0x3000) + struct.pack("<I", 0) + struct.pack("<I", 0)
+    user = b"bblp"
+    auth += user + b"\x00" * (32 - len(user))
+    code = access_code.encode()
+    auth += code + b"\x00" * (32 - len(code))
+    sock.sendall(auth)
+    return sock
+
+
+def _chamber_read(sock, count: int) -> bytes:
+    buffer = b""
+    while len(buffer) < count:
+        chunk = sock.recv(count - len(buffer))
+        if not chunk:
+            raise ConnectionError("chamber stream closed")
+        buffer += chunk
+    return buffer
+
+
+def chamber_image_frames(ip: str, access_code: str):
+    """Yield JPEG frames from an A1/P1 series chamber camera (port 6000 protocol)."""
+    sock = _chamber_socket(ip, access_code)
+    try:
+        while True:
+            header = _chamber_read(sock, 16)
+            length = struct.unpack("<I", header[0:4])[0]
+            if length <= 0 or length > 12_000_000:
+                break
+            yield _chamber_read(sock, length)
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def chamber_image_snapshot(ip: str, access_code: str) -> bytes | None:
+    """Grab a single JPEG frame from an A1/P1 chamber camera, or None on failure."""
+    try:
+        sock = _chamber_socket(ip, access_code)
+    except OSError:
+        return None
+    try:
+        header = _chamber_read(sock, 16)
+        length = struct.unpack("<I", header[0:4])[0]
+        if length <= 0 or length > 12_000_000:
+            return None
+        return _chamber_read(sock, length)
+    except (OSError, ConnectionError, struct.error):
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 class _ImplicitFTPS(ftplib.FTP_TLS):
     """Implicit-TLS FTP (port 990) with data-connection session reuse.
 

@@ -44,9 +44,8 @@ def _classify(ports: list[int]) -> tuple[str, str]:
     if 5000 in ports:
         return "octoprint", "OctoPrint host"
     if 9999 in ports:
-        # Creality K1/K1 SE stock firmware: proprietary LAN port 9999, Moonraker
-        # locked to localhost. Still surface it so the user can add + enable it.
-        return "moonraker", "Creality printer (enable LAN Moonraker on :7125 to control)"
+        # Creality K1/K1 SE: controllable over the stock :9999 LAN websocket.
+        return "creality", "Creality K1 (LAN websocket)"
     return "unknown", "Device"
 
 

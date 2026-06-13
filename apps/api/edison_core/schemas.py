@@ -1104,7 +1104,7 @@ class ToyBoxProductionLane(BaseModel):
 class ToyBoxPrinterRecord(BaseModel):
     id: str
     name: str
-    kind: Literal["bambu", "moonraker", "octoprint", "orca", "cura", "dymo", "generic"]
+    kind: Literal["bambu", "creality", "moonraker", "octoprint", "orca", "cura", "dymo", "generic"]
     status: Literal["ready", "staged", "missing"]
     role: Literal["printer", "slicer", "label_printer", "camera", "desktop_bridge"]
     detail: str
@@ -1135,7 +1135,7 @@ class ToyBoxManagerStatus(BaseModel):
 
 class ToyBoxPrinterProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    kind: Literal["bambu", "moonraker", "octoprint", "orca", "cura", "dymo", "generic"] = "generic"
+    kind: Literal["bambu", "creality", "moonraker", "octoprint", "orca", "cura", "dymo", "generic"] = "generic"
     role: Literal["printer", "slicer", "label_printer", "camera", "desktop_bridge"] = "printer"
     bridge_tool_id: str | None = None
     slicer_profile: str | None = None
