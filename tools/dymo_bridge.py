@@ -1,113 +1,115 @@
 """Edison DYMO print bridge (runs on the Windows PC).
 
-Edison (on the Linux box) can't drive the LabelWriter 5XL (550-series, closed protocol),
-but DYMO Connect's local Web Service can. This tiny HTTP service listens for Edison's
-print requests and forwards them to DYMO Connect (DWS), and keeps the printer awake.
+Edison (on the Linux box) can't drive the LabelWriter 5XL (550-series, closed protocol).
+This service receives Edison's rendered label PNG and prints it through the installed
+Windows DYMO driver via GDI (System.Drawing.Printing), which is the only thing that
+reliably rasterizes the 550-series.
 
-It auto-selects the locally-attached, connected printer reported by DWS. DWS can list
-several entries for the same device (a local USB registration plus a network/shared one);
-the network/shared entry (IsLocal=False) accepts jobs but often never feeds paper, so we
-prefer IsLocal=True. Set EDISON_DYMO_PRINTER to force a specific name."""
+History: an earlier version forwarded to DYMO Connect's Web Service (DWS). DWS returns
+"true" but never feeds paper on this networked 5XL, so we switched to the Windows driver.
+The driver path reports real spooler status (PagesPrinted) and physically prints.
+
+Target = the installed Windows printer queue (default auto-picks the DYMO one; override
+with EDISON_DYMO_WINDOWS_PRINTER). The 4x6 shipping label is paper "1744907 4 in x 6 in".
+"""
 
 import base64
 import json
 import os
-import re
-import ssl
+import socket
+import subprocess
+import tempfile
 import threading
 import time
-import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-DWS_BASES = ["https://127.0.0.1:41951", "http://127.0.0.1:41951"]
-PRINTER_OVERRIDE = os.getenv("EDISON_DYMO_PRINTER", "").strip()  # empty = auto-pick
-PAPER = "1744907 4 in x 6 in"
+PRINTER_OVERRIDE = os.getenv("EDISON_DYMO_WINDOWS_PRINTER", "").strip()
+PRINTER_HOST = os.getenv("EDISON_DYMO_HOST", "192.168.1.182").strip()
 LISTEN_PORT = 8088
+CREATE_NO_WINDOW = 0x08000000
 
-_ctx = ssl.create_default_context()
-_ctx.check_hostname = False
-_ctx.verify_mode = ssl.CERT_NONE
+PRINT_PS1 = os.path.join(tempfile.gettempdir(), "edison_dymo_print.ps1")
+
+_PRINT_SCRIPT = r"""
+param([Parameter(Mandatory=$true)][string]$ImagePath,
+      [Parameter(Mandatory=$true)][string]$Printer,
+      [int]$Copies=1)
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Drawing
+$img=[System.Drawing.Image]::FromFile($ImagePath)
+try {
+  $doc=New-Object System.Drawing.Printing.PrintDocument
+  $doc.PrinterSettings.PrinterName=$Printer
+  if(-not $doc.PrinterSettings.IsValid){ throw "printer not found: $Printer" }
+  if($Copies -gt 1){ $doc.PrinterSettings.Copies=[int16]$Copies }
+  $target=$null
+  foreach($ps in $doc.PrinterSettings.PaperSizes){
+    if($ps.PaperName -match '1744907' -or ($ps.Width -ge 405 -and $ps.Width -le 415 -and $ps.Height -ge 620 -and $ps.Height -le 635)){ $target=$ps; break }
+  }
+  if($target){ $doc.DefaultPageSettings.PaperSize=$target }
+  $doc.DefaultPageSettings.Margins=New-Object System.Drawing.Printing.Margins(0,0,0,0)
+  $doc.add_PrintPage({ param($s,$e)
+    $e.Graphics.DrawImage($img,$e.PageBounds)
+    $e.HasMorePages=$false
+  })
+  $doc.Print()
+  if($target){ Write-Output ("OK:"+$target.PaperName) } else { Write-Output "OK:default-paper" }
+} finally { $img.Dispose() }
+"""
 
 
-def dws_get(path):
-    for base in DWS_BASES:
-        try:
-            with urllib.request.urlopen(urllib.request.Request(base + path), timeout=8, context=_ctx) as r:
-                return r.read().decode("utf-8", "replace")
-        except Exception:
-            continue
-    return None
+def _ps(args, timeout):
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass"] + args,
+        capture_output=True, text=True, timeout=timeout, creationflags=CREATE_NO_WINDOW,
+    )
 
 
-def list_printers():
-    """Parse DWS GetPrinters -> [{name, local, connected}]."""
-    xml = dws_get("/DYMO/DLS/Printing/GetPrinters") or ""
-    out = []
-    for block in re.findall(r"<LabelWriterPrinter>.*?</LabelWriterPrinter>", xml, re.S):
-        name = re.search(r"<Name>(.*?)</Name>", block, re.S)
-        if not name:
-            continue
-        out.append({
-            "name": name.group(1),
-            "local": "<IsLocal>True</IsLocal>" in block,
-            "connected": "<IsConnected>True</IsConnected>" in block,
-        })
-    return out
+def list_windows_dymo():
+    try:
+        proc = _ps(
+            ["-Command",
+             "Get-Printer | Where-Object { $_.DriverName -like '*DYMO*' -or $_.Name -like '*DYMO*' -or $_.Name -like '*label*' } | Select-Object -ExpandProperty Name"],
+            timeout=20,
+        )
+        return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    except Exception:
+        return []
 
 
 def pick_printer():
-    """Prefer override (if connected), then local+connected, then any connected, then any."""
-    printers = list_printers()
     if PRINTER_OVERRIDE:
-        for p in printers:
-            if p["name"] == PRINTER_OVERRIDE and p["connected"]:
-                return PRINTER_OVERRIDE
-    for p in printers:
-        if p["local"] and p["connected"]:
-            return p["name"]
-    for p in printers:
-        if p["connected"]:
-            return p["name"]
-    if printers:
-        return printers[0]["name"]
-    return PRINTER_OVERRIDE or "DYMO LabelWriter 5XL"
+        return PRINTER_OVERRIDE
+    printers = list_windows_dymo()
+    return printers[0] if printers else "DYMO LabelWriter 5XL"
 
 
-def dws_print(label_xml, printer_name):
-    body = urllib.parse.urlencode(
-        {"printerName": printer_name, "labelXml": label_xml, "labelSetXml": ""}
-    ).encode()
-    last = None
-    for base in DWS_BASES:
+def printer_reachable():
+    try:
+        with socket.create_connection((PRINTER_HOST, 9100), timeout=3):
+            return True
+    except OSError:
+        return False
+
+
+def gdi_print(image_b64, copies, printer):
+    raw = base64.b64decode(image_b64)
+    png = os.path.join(tempfile.gettempdir(), f"edison_label_{os.getpid()}_{int(time.time())}.png")
+    with open(png, "wb") as handle:
+        handle.write(raw)
+    try:
+        proc = _ps(
+            ["-File", PRINT_PS1, "-ImagePath", png, "-Printer", printer, "-Copies", str(copies)],
+            timeout=90,
+        )
+        ok = proc.returncode == 0 and "OK:" in (proc.stdout or "")
+        detail = (proc.stdout or proc.stderr or "").strip()[-400:]
+        return ok, detail
+    finally:
         try:
-            req = urllib.request.Request(
-                base + "/DYMO/DLS/Printing/PrintLabel",
-                data=body,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            with urllib.request.urlopen(req, timeout=30, context=_ctx) as r:
-                return r.read().decode("utf-8", "replace")
-        except Exception as error:
-            last = error
-            continue
-    raise last or RuntimeError("DWS unreachable")
-
-
-def image_label_xml(b64):
-    return (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<DieCutLabel Version="8.0" Units="twips"><PaperOrientation>Portrait</PaperOrientation>'
-        f"<Id>ExtraLarge</Id><PaperName>{PAPER}</PaperName>"
-        '<DrawCommands><RoundRectangle X="0" Y="0" Width="5760" Height="8640" Rx="180" Ry="180" /></DrawCommands>'
-        "<ObjectInfo><ImageObject><Name>Graphic</Name>"
-        '<ForeColor Alpha="255" Red="0" Green="0" Blue="0" /><BackColor Alpha="0" Red="255" Green="255" Blue="255" />'
-        "<Rotation>Rotation0</Rotation><IsMirrored>False</IsMirrored><IsVariable>False</IsVariable>"
-        f"<Image>{b64}</Image><ScaleMode>Uniform</ScaleMode><BorderWidth>0</BorderWidth>"
-        '<BorderColor Alpha="255" Red="0" Green="0" Blue="0" />'
-        "<HorizontalAlignment>Center</HorizontalAlignment><VerticalAlignment>Center</VerticalAlignment></ImageObject>"
-        '<Bounds X="120" Y="120" Width="5520" Height="8400" /></ObjectInfo></DieCutLabel>'
-    )
+            os.remove(png)
+        except OSError:
+            pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -122,17 +124,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/status"):
-            status = dws_get("/DYMO/DLS/Printing/StatusConnected")
-            available = status is not None and "true" in status.lower()
-            chosen = pick_printer() if available else ""
+            printer = pick_printer()
+            installed = printer in list_windows_dymo() or bool(PRINTER_OVERRIDE)
+            reachable = printer_reachable()
+            available = installed
             self._json(200, {
                 "available": available,
-                "printer": chosen,
-                "detail": (f"DYMO Connect ready; printing to '{chosen}'." if available
-                           else "DYMO Connect service not reachable"),
+                "printer": printer,
+                "reachable": reachable,
+                "detail": (f"Driver ready; printing to '{printer}'." + ("" if reachable else " (printer not answering on :9100 — may be asleep)"))
+                if available else "No DYMO printer installed on the bridge PC.",
             })
         elif self.path.startswith("/printers"):
-            self._json(200, {"printers": list_printers(), "chosen": pick_printer()})
+            self._json(200, {"printers": list_windows_dymo(), "chosen": pick_printer(), "reachable": printer_reachable()})
         else:
             self._json(404, {"error": "not found"})
 
@@ -151,16 +155,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "detail": "no image_base64 provided"})
             return
         copies = max(1, min(20, int(data.get("copies", 1))))
-        printer_name = (data.get("printer") or "").strip() or pick_printer()
+        printer = (data.get("printer") or "").strip() or pick_printer()
         try:
-            result = ""
-            for _ in range(copies):
-                result = dws_print(image_label_xml(image), printer_name)
-            ok = "true" in (result or "").lower()
+            ok, detail = gdi_print(image, copies, printer)
             self._json(200, {
                 "ok": ok,
-                "printer": printer_name,
-                "detail": f"Printed via DYMO Connect to '{printer_name}'." if ok else f"DWS replied: {result}",
+                "printer": printer,
+                "detail": f"Printed to '{printer}' ({detail})." if ok else f"Print failed: {detail}",
             })
         except Exception as error:
             self._json(200, {"ok": False, "detail": f"bridge error: {error.__class__.__name__}: {error}"})
@@ -170,14 +171,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def keepalive():
+    """Open a brief TCP session to the printer to keep its network session warm."""
     while True:
         try:
-            dws_get("/DYMO/DLS/Printing/GetPrinters")
-        except Exception:
+            with socket.create_connection((PRINTER_HOST, 9100), timeout=3):
+                pass
+        except OSError:
             pass
-        time.sleep(45)
+        time.sleep(60)
 
 
 if __name__ == "__main__":
+    with open(PRINT_PS1, "w", encoding="utf-8") as handle:
+        handle.write(_PRINT_SCRIPT)
     threading.Thread(target=keepalive, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
