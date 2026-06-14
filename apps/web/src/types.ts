@@ -605,6 +605,30 @@ export interface ToyBoxFulfillResult {
   summary: string;
 }
 
+export interface ShopifyConfig {
+  store_domain: string;
+  has_token: boolean;
+  mode: 'off' | 'notify' | 'auto';
+  interval_seconds: number;
+  last_poll: string;
+  last_result: string;
+  processed_count: number;
+}
+
+export interface ShopifyPollItem {
+  order: string;
+  dry_run: boolean;
+  summary: string;
+}
+
+export interface ShopifyPollResult {
+  checked: number;
+  new_orders: number;
+  mode: string;
+  detail: string;
+  results: ShopifyPollItem[];
+}
+
 export interface ToyBoxControlResult {
   ok: boolean;
   printer_id: string;

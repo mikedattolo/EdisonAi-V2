@@ -61,6 +61,8 @@ import type {
   ToyBoxPrintResult,
   ToyBoxControlResult,
   ToyBoxFulfillResult,
+  ShopifyConfig,
+  ShopifyPollResult,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
   ScheduledTaskRecord,
@@ -443,9 +445,16 @@ export const edisonApi = {
   fulfillToyBoxOrder: (payload: {
     order_name: string;
     dry_run: boolean;
+    print_label?: boolean;
+    start_prints?: boolean;
     shipping: { name: string; address1: string; address2?: string; city: string; state: string; zip: string; country?: string };
     items: Array<{ title: string; color?: string | null; quantity?: number; sku?: string }>;
   }) => request<ToyBoxFulfillResult>('/api/v1/toybox/orders/fulfill', { method: 'POST', body: JSON.stringify(payload) }),
+  getShopifyConfig: () => request<ShopifyConfig>('/api/v1/toybox/shopify'),
+  saveShopifyConfig: (payload: { store_domain?: string; access_token?: string; mode?: 'off' | 'notify' | 'auto'; interval_seconds?: number }) =>
+    request<ShopifyConfig>('/api/v1/toybox/shopify', { method: 'POST', body: JSON.stringify(payload) }),
+  testShopifyConnection: () => request<{ ok: boolean; detail: string }>('/api/v1/toybox/shopify/test', { method: 'POST' }),
+  pollShopifyOrders: () => request<ShopifyPollResult>('/api/v1/toybox/shopify/poll', { method: 'POST' }),
   getDymoStatus: () => request<{ queue: string; available: boolean; detail: string }>('/api/v1/toybox/dymo/status'),
   printDymoTest: () => request<{ ok: boolean; detail: string }>('/api/v1/toybox/dymo/test', { method: 'POST' }),
   printDymoLabel: (payload: { title?: string; lines?: string[]; copies?: number }) =>

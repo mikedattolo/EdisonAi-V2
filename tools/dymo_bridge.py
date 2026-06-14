@@ -2,10 +2,17 @@
 
 Edison (on the Linux box) can't drive the LabelWriter 5XL (550-series, closed protocol),
 but DYMO Connect's local Web Service can. This tiny HTTP service listens for Edison's
-print requests and forwards them to DYMO Connect (DWS), and keeps the printer awake."""
+print requests and forwards them to DYMO Connect (DWS), and keeps the printer awake.
+
+It auto-selects the locally-attached, connected printer reported by DWS. DWS can list
+several entries for the same device (a local USB registration plus a network/shared one);
+the network/shared entry (IsLocal=False) accepts jobs but often never feeds paper, so we
+prefer IsLocal=True. Set EDISON_DYMO_PRINTER to force a specific name."""
 
 import base64
 import json
+import os
+import re
 import ssl
 import threading
 import time
@@ -14,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DWS_BASES = ["https://127.0.0.1:41951", "http://127.0.0.1:41951"]
-PRINTER = "Mike's shipping label printer"
+PRINTER_OVERRIDE = os.getenv("EDISON_DYMO_PRINTER", "").strip()  # empty = auto-pick
 PAPER = "1744907 4 in x 6 in"
 LISTEN_PORT = 8088
 
@@ -33,8 +40,44 @@ def dws_get(path):
     return None
 
 
-def dws_print(label_xml):
-    body = urllib.parse.urlencode({"printerName": PRINTER, "labelXml": label_xml, "labelSetXml": ""}).encode()
+def list_printers():
+    """Parse DWS GetPrinters -> [{name, local, connected}]."""
+    xml = dws_get("/DYMO/DLS/Printing/GetPrinters") or ""
+    out = []
+    for block in re.findall(r"<LabelWriterPrinter>.*?</LabelWriterPrinter>", xml, re.S):
+        name = re.search(r"<Name>(.*?)</Name>", block, re.S)
+        if not name:
+            continue
+        out.append({
+            "name": name.group(1),
+            "local": "<IsLocal>True</IsLocal>" in block,
+            "connected": "<IsConnected>True</IsConnected>" in block,
+        })
+    return out
+
+
+def pick_printer():
+    """Prefer override (if connected), then local+connected, then any connected, then any."""
+    printers = list_printers()
+    if PRINTER_OVERRIDE:
+        for p in printers:
+            if p["name"] == PRINTER_OVERRIDE and p["connected"]:
+                return PRINTER_OVERRIDE
+    for p in printers:
+        if p["local"] and p["connected"]:
+            return p["name"]
+    for p in printers:
+        if p["connected"]:
+            return p["name"]
+    if printers:
+        return printers[0]["name"]
+    return PRINTER_OVERRIDE or "DYMO LabelWriter 5XL"
+
+
+def dws_print(label_xml, printer_name):
+    body = urllib.parse.urlencode(
+        {"printerName": printer_name, "labelXml": label_xml, "labelSetXml": ""}
+    ).encode()
     last = None
     for base in DWS_BASES:
         try:
@@ -81,7 +124,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/status"):
             status = dws_get("/DYMO/DLS/Printing/StatusConnected")
             available = status is not None and "true" in status.lower()
-            self._json(200, {"available": available, "detail": (status or "DYMO Connect service not reachable").strip()})
+            chosen = pick_printer() if available else ""
+            self._json(200, {
+                "available": available,
+                "printer": chosen,
+                "detail": (f"DYMO Connect ready; printing to '{chosen}'." if available
+                           else "DYMO Connect service not reachable"),
+            })
+        elif self.path.startswith("/printers"):
+            self._json(200, {"printers": list_printers(), "chosen": pick_printer()})
         else:
             self._json(404, {"error": "not found"})
 
@@ -100,12 +151,17 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "detail": "no image_base64 provided"})
             return
         copies = max(1, min(20, int(data.get("copies", 1))))
+        printer_name = (data.get("printer") or "").strip() or pick_printer()
         try:
             result = ""
             for _ in range(copies):
-                result = dws_print(image_label_xml(image))
+                result = dws_print(image_label_xml(image), printer_name)
             ok = "true" in (result or "").lower()
-            self._json(200, {"ok": ok, "detail": "Printed via DYMO Connect." if ok else f"DWS replied: {result}"})
+            self._json(200, {
+                "ok": ok,
+                "printer": printer_name,
+                "detail": f"Printed via DYMO Connect to '{printer_name}'." if ok else f"DWS replied: {result}",
+            })
         except Exception as error:
             self._json(200, {"ok": False, "detail": f"bridge error: {error.__class__.__name__}: {error}"})
 

@@ -1234,6 +1234,8 @@ class ToyBoxFulfillRequest(BaseModel):
     items: list[ToyBoxFulfillItem] = Field(default_factory=list)
     shipping: ToyBoxFulfillShipping = Field(default_factory=ToyBoxFulfillShipping)
     dry_run: bool = True
+    print_label: bool = True  # when not dry_run: actually print the shipping label
+    start_prints: bool = True  # when not dry_run: actually start the 3D print(s)
 
 
 class ToyBoxFulfillStep(BaseModel):
@@ -1254,6 +1256,37 @@ class ToyBoxFulfillResult(BaseModel):
     shipping_label: dict[str, Any] = Field(default_factory=dict)
     items: list[ToyBoxFulfillStep] = Field(default_factory=list)
     summary: str = ""
+
+
+class ShopifyConfigPublic(BaseModel):
+    store_domain: str = ""
+    has_token: bool = False
+    mode: Literal["off", "notify", "auto"] = "off"
+    interval_seconds: int = 120
+    last_poll: str = ""
+    last_result: str = ""
+    processed_count: int = 0
+
+
+class ShopifyConfigUpdate(BaseModel):
+    store_domain: str | None = None
+    access_token: str | None = None  # empty/None keeps the stored token
+    mode: Literal["off", "notify", "auto"] | None = None
+    interval_seconds: int | None = None
+
+
+class ShopifyPollItem(BaseModel):
+    order: str
+    dry_run: bool
+    summary: str = ""
+
+
+class ShopifyPollResult(BaseModel):
+    checked: int = 0
+    new_orders: int = 0
+    mode: str = "off"
+    detail: str = ""
+    results: list[ShopifyPollItem] = Field(default_factory=list)
 
 
 class ToyBoxAmsSlot(BaseModel):

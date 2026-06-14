@@ -54,10 +54,12 @@ from edison_core.services.wan22_client import Wan22Client
 from edison_core.services.realtime import RealtimeService
 from edison_core.services.scheduled_task_store import ScheduledTaskStore
 from edison_core.services.scheduler_service import SchedulerService
+from edison_core.services.shopify_orders import ShopifyConfigStore, ShopifyPoller
 from edison_core.services.voice_bridge import VoiceBridgeService
 from edison_core.services.workspace_agent import AgentRunCoordinator, WorkspaceAgent
 from edison_core.services.workspace_projects import WorkspaceProjectManager
 from edison_core.services.workspace_tools import WorkspaceTools
+from edison_core.api.routes_toybox import run_fulfillment
 
 
 def create_app(settings: EdisonSettings | None = None) -> FastAPI:
@@ -122,6 +124,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     scheduled_task_store = ScheduledTaskStore(database)
     scheduled_task_store.initialize()
     scheduler_service = SchedulerService(scheduled_task_store, model_gateway, realtime_service)
+    shopify_config_store = ShopifyConfigStore(resolved_settings.runtime_settings_path.parent / "shopify.json")
+    shopify_poller = ShopifyPoller(shopify_config_store, toybox_store, run_fulfillment)
     voice_bridge_service = VoiceBridgeService(conversation_store, model_gateway)
     capability_registry = CapabilityRegistry(
         resolved_settings,
@@ -178,6 +182,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.realtime_service = realtime_service
     app.state.scheduled_task_store = scheduled_task_store
     app.state.scheduler_service = scheduler_service
+    app.state.shopify_config_store = shopify_config_store
+    app.state.shopify_poller = shopify_poller
     app.state.voice_bridge_service = voice_bridge_service
     app.state.capability_registry = capability_registry
 
@@ -206,5 +212,6 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     @app.on_event("startup")
     async def _start_scheduler() -> None:  # pragma: no cover - background loop
         scheduler_service.start()
+        shopify_poller.start()
 
     return app

@@ -19,6 +19,8 @@ from edison_core.api.dependencies import (
     get_desktop_bridge_client,
     get_integration_discovery_service,
     get_runtime_settings_store,
+    get_shopify_config_store,
+    get_shopify_poller,
     get_toybox_store,
 )
 from edison_core.schemas import (
@@ -59,6 +61,9 @@ from edison_core.schemas import (
     ToyBoxFulfillRequest,
     ToyBoxFulfillResult,
     ToyBoxFulfillStep,
+    ShopifyConfigPublic,
+    ShopifyConfigUpdate,
+    ShopifyPollResult,
 )
 from edison_core.services import printer_discovery
 from edison_core.services import bambu_printer as bambu_camera
@@ -992,8 +997,13 @@ def _printer_available_colors(printer: ToyBoxPrinterProfileRecord) -> set[str]:
 
 @router.post("/orders/fulfill", response_model=ToyBoxFulfillResult)
 def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(get_toybox_store)) -> ToyBoxFulfillResult:
+    return run_fulfillment(payload, store)
+
+
+def run_fulfillment(payload: ToyBoxFulfillRequest, store: ToyBoxStore) -> ToyBoxFulfillResult:
     """Orchestrate an order: route each item to a printer by color, prep the shipping label,
-    and start the prints. With dry_run=True nothing is sent to a printer or the label maker."""
+    and start the prints. With dry_run=True nothing is sent to a printer or the label maker.
+    Reusable by both the HTTP endpoint and the Shopify poller."""
     printers = [p for p in store.list_printers() if p.kind in {"bambu", "creality", "moonraker", "octoprint"}]
     files_by_printer: dict[str, list] = {}
 
@@ -1043,9 +1053,10 @@ def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(ge
             action = "needs file"
             detail = f"Routed to {match.name} ({color or 'any'} ok) — assign/upload a print file named for '{item.title}'."
             eligible = True
-        elif payload.dry_run:
+        elif payload.dry_run or not payload.start_prints:
             action = "would print"
-            detail = f"Would print '{resolved_file}' on {match.name}" + (f" in {color}" if color else "") + "."
+            why = "Dry run" if payload.dry_run else "Label-only run"
+            detail = f"{why}: would print '{resolved_file}' on {match.name}" + (f" in {color}" if color else "") + "."
             eligible = True
         else:
             # Real fulfillment: actually upload + start the print on the matched printer.
@@ -1080,17 +1091,18 @@ def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(ge
     label_lines += [f"{i.quantity}x {i.title}" for i in payload.items]
     label_lines = [line for line in label_lines if line is not None]
 
-    if payload.dry_run:
+    if payload.dry_run or not payload.print_label:
         shipping_label = {
             "would_print": True, "printer": label_printer.DYMO_BRIDGE, "to": ship.name,
-            "lines": label_lines, "detail": "Dry run — label rendered/planned but not printed.",
+            "lines": label_lines, "detail": "Label rendered/planned but not printed.",
         }
     else:
         result = label_printer.print_label(title="TheToyBox3D", lines=label_lines)
         shipping_label = {"printed": bool(result.get("ok")), "detail": result.get("detail", ""), "lines": label_lines}
 
     printable = sum(1 for s in steps if s.action in ("would print", "printing"))
-    verb = "would" if payload.dry_run else "did"
+    label_done = (not payload.dry_run) and payload.print_label
+    verb = "did" if label_done else "would"
     summary = (
         f"Order {payload.order_name}: {printable}/{len(steps)} item(s) routed to a printer; "
         f"shipping label {verb} print to the DYMO for {ship.name or 'the customer'}."
@@ -1100,6 +1112,44 @@ def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(ge
         order_name=payload.order_name, dry_run=payload.dry_run,
         shipping_label=shipping_label, items=steps, summary=summary,
     )
+
+
+# --- Shopify order ingestion (polling; box is behind NAT so no webhook needed) -------------
+
+@router.get("/shopify", response_model=ShopifyConfigPublic)
+def get_shopify_config(config=Depends(get_shopify_config_store)) -> ShopifyConfigPublic:
+    return ShopifyConfigPublic(**config.public())
+
+
+@router.post("/shopify", response_model=ShopifyConfigPublic)
+def set_shopify_config(payload: ShopifyConfigUpdate, config=Depends(get_shopify_config_store)) -> ShopifyConfigPublic:
+    return ShopifyConfigPublic(
+        **config.update(
+            store_domain=payload.store_domain,
+            access_token=payload.access_token,
+            mode=payload.mode,
+            interval_seconds=payload.interval_seconds,
+        )
+    )
+
+
+@router.post("/shopify/test")
+def test_shopify_connection(config=Depends(get_shopify_config_store)) -> dict:
+    from edison_core.services.shopify_orders import ShopifyClient
+
+    cfg = config.full()
+    if not cfg.get("store_domain") or not cfg.get("access_token"):
+        return {"ok": False, "detail": "Set the store domain and Admin API access token first."}
+    try:
+        name = ShopifyClient(cfg["store_domain"], cfg["access_token"]).shop_name()
+    except Exception as error:  # noqa: BLE001
+        return {"ok": False, "detail": f"Connection failed: {error.__class__.__name__}: {str(error)[:200]}"}
+    return {"ok": bool(name), "detail": f"Connected to {name}." if name else "Connected, but the token may lack read_orders."}
+
+
+@router.post("/shopify/poll", response_model=ShopifyPollResult)
+def poll_shopify(poller=Depends(get_shopify_poller)) -> ShopifyPollResult:
+    return ShopifyPollResult(**poller.poll_now())
 
 
 @router.post("/notifications/test", response_model=ToyBoxNotificationResult)

@@ -24,6 +24,7 @@ from edison_core.services.runtime_settings import RuntimeSettingsStore
 from edison_core.services.scheduled_task_store import ScheduledTaskStore
 from edison_core.services.scheduler_service import SchedulerService
 from edison_core.services.session_state import SessionStateStore
+from edison_core.services.shopify_orders import ShopifyConfigStore, ShopifyPoller
 from edison_core.services.voice_bridge import VoiceBridgeService
 from edison_core.services.system_status import GPUFanControlService, SystemStatusService
 from edison_core.services.toybox_store import ToyBoxStore
@@ -60,6 +61,14 @@ def get_desktop_bridge_client(request: Request) -> DesktopBridgeClient:
 
 def get_toybox_store(request: Request) -> ToyBoxStore:
     return request.app.state.toybox_store
+
+
+def get_shopify_config_store(request: Request) -> ShopifyConfigStore:
+    return request.app.state.shopify_config_store
+
+
+def get_shopify_poller(request: Request) -> ShopifyPoller:
+    return request.app.state.shopify_poller
 
 
 def get_generation_store(request: Request) -> GenerationStore:

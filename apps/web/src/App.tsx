@@ -120,6 +120,8 @@ import type {
   ToyBoxFilament,
   ToyBoxAmsSlot,
   ToyBoxFulfillResult,
+  ShopifyConfig,
+  ShopifyPollResult,
   UserProfile,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
@@ -7034,6 +7036,7 @@ function ToyBoxFulfillPanel() {
   const [itemColor, setItemColor] = useState('black');
   const [qty, setQty] = useState(1);
   const [live, setLive] = useState(false);
+  const [startPrint, setStartPrint] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ToyBoxFulfillResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -7045,6 +7048,8 @@ function ToyBoxFulfillPanel() {
       const payload = {
         order_name: orderName.trim() || 'TEST',
         dry_run: !live,
+        print_label: live,
+        start_prints: live && startPrint,
         shipping: FULFILL_SHIPPING,
         items: [{ title: itemTitle.trim(), color: itemColor.trim() || null, quantity: Math.max(1, qty) }],
       };
@@ -7076,10 +7081,14 @@ function ToyBoxFulfillPanel() {
       <div className="toybox-fulfill-actions">
         <label className={live ? 'toybox-fulfill-live armed' : 'toybox-fulfill-live'}>
           <input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} />
-          Actually print (label + 3D print)
+          Actually print the label
+        </label>
+        <label className={live ? 'toybox-fulfill-live' : 'toybox-fulfill-live disabled'}>
+          <input type="checkbox" checked={startPrint} disabled={!live} onChange={(event) => setStartPrint(event.target.checked)} />
+          + start the 3D print
         </label>
         <button className="apply-button icon-text-button" disabled={busy || !itemTitle.trim()} onClick={() => void run()} type="button">
-          <Send size={14} /> {busy ? 'Running…' : live ? 'Fulfill & print' : 'Run test order (dry run)'}
+          <Send size={14} /> {busy ? 'Running…' : live ? (startPrint ? 'Fulfill & print' : 'Print label') : 'Run test order (dry run)'}
         </button>
       </div>
       {err && <div className="toybox-file-note err">{err}</div>}
@@ -7106,6 +7115,140 @@ function ToyBoxFulfillPanel() {
               <Printer size={13} /> {result.dry_run ? 'Label preview' : 'Label sent'}: {labelLines.join(' · ')}
             </div>
           )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const SHOPIFY_MODE_LABEL: Record<string, string> = {
+  off: 'Off — not watching for orders',
+  notify: 'Notify — plan each order (dry run, prints nothing)',
+  auto: 'Auto — print label + start the 3D print',
+};
+
+function ShopifyConnectionPanel() {
+  const [config, setConfig] = useState<ShopifyConfig | null>(null);
+  const [domain, setDomain] = useState('');
+  const [token, setToken] = useState('');
+  const [mode, setMode] = useState<'off' | 'notify' | 'auto'>('off');
+  const [interval, setIntervalSeconds] = useState(120);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [poll, setPoll] = useState<ShopifyPollResult | null>(null);
+
+  const load = useCallback(async () => {
+    const cfg = await edisonApi.getShopifyConfig().catch(() => null);
+    if (cfg) {
+      setConfig(cfg);
+      setDomain(cfg.store_domain);
+      setMode(cfg.mode);
+      setIntervalSeconds(cfg.interval_seconds);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function save() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const cfg = await edisonApi.saveShopifyConfig({
+        store_domain: domain.trim(),
+        access_token: token.trim() || undefined,
+        mode,
+        interval_seconds: interval,
+      });
+      setConfig(cfg);
+      setToken('');
+      setNote('Saved.');
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'Save failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function test() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const result = await edisonApi.testShopifyConnection();
+      setNote(result.detail);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'Test failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pollNow() {
+    setBusy(true);
+    setNote(null);
+    try {
+      setPoll(await edisonApi.pollShopifyOrders());
+      await load();
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'Poll failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="toybox-shopify">
+      <div className="section-heading"><Globe2 size={18} /><h3>Shopify connection</h3></div>
+      <p className="toybox-fulfill-intro">
+        Edison polls your store for new unfulfilled orders (no public URL needed). Paste an Admin API access token from a
+        custom app with <code>read_orders</code>. Mode <strong>Notify</strong> only plans orders; <strong>Auto</strong> prints
+        the label and starts the print.
+      </p>
+      <div className={config?.has_token ? 'toybox-shopify-status ok' : 'toybox-shopify-status'}>
+        <span className={config?.has_token ? 'toybox-dot on' : 'toybox-dot off'} />
+        {config?.has_token ? `Token saved · ${SHOPIFY_MODE_LABEL[config.mode] ?? config.mode}` : 'No token yet — ingestion idle'}
+        {config?.last_result ? ` · ${config.last_result}` : ''}
+      </div>
+      <div className="toybox-shopify-form">
+        <input value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="store.myshopify.com" />
+        <input
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+          placeholder={config?.has_token ? 'Admin API token (leave blank to keep)' : 'Admin API access token (shpat_…)'}
+          type="password"
+          autoComplete="off"
+        />
+      </div>
+      <div className="toybox-shopify-form">
+        <select value={mode} onChange={(event) => setMode(event.target.value as 'off' | 'notify' | 'auto')}>
+          <option value="off">Off</option>
+          <option value="notify">Notify (dry run)</option>
+          <option value="auto">Auto (print + 3D)</option>
+        </select>
+        <label className="toybox-shopify-interval">
+          every
+          <input type="number" min={30} max={3600} value={interval} onChange={(event) => setIntervalSeconds(Number(event.target.value) || 120)} />
+          s
+        </label>
+      </div>
+      <div className="toybox-fulfill-actions">
+        <button className="apply-button icon-text-button" disabled={busy} onClick={() => void save()} type="button">Save</button>
+        <button className="secondary-button" disabled={busy} onClick={() => void test()} type="button">Test connection</button>
+        <button className="secondary-button" disabled={busy} onClick={() => void pollNow()} type="button">Poll now</button>
+      </div>
+      {note && <div className="toybox-file-note">{note}</div>}
+      {poll && (
+        <div className="toybox-fulfill-result">
+          <strong>{poll.detail}</strong>
+          {poll.results.map((entry, index) => (
+            <div className="toybox-fulfill-step ok" key={index}>
+              <span className="toybox-q-status">{entry.dry_run ? 'planned' : 'fulfilled'}</span>
+              <div className="toybox-fulfill-step-body">
+                <strong>{entry.order}</strong>
+                <span className="toybox-fulfill-detail">{entry.summary}</span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </section>
@@ -7456,6 +7599,8 @@ function ToyBoxView() {
           </section>
 
           <ToyBoxFulfillPanel />
+
+          <ShopifyConnectionPanel />
 
           <ToyBoxDymoPanel />
         </div>
