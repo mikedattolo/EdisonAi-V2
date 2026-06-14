@@ -60,6 +60,7 @@ import type {
   ToyBoxFilament,
   ToyBoxPrintResult,
   ToyBoxControlResult,
+  ToyBoxFulfillResult,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
   ScheduledTaskRecord,
@@ -439,6 +440,12 @@ export const edisonApi = {
       method: 'POST',
       body: JSON.stringify({ action, ...(extra ?? {}) }),
     }),
+  fulfillToyBoxOrder: (payload: {
+    order_name: string;
+    dry_run: boolean;
+    shipping: { name: string; address1: string; address2?: string; city: string; state: string; zip: string; country?: string };
+    items: Array<{ title: string; color?: string | null; quantity?: number; sku?: string }>;
+  }) => request<ToyBoxFulfillResult>('/api/v1/toybox/orders/fulfill', { method: 'POST', body: JSON.stringify(payload) }),
   getDymoStatus: () => request<{ queue: string; available: boolean; detail: string }>('/api/v1/toybox/dymo/status'),
   printDymoTest: () => request<{ ok: boolean; detail: string }>('/api/v1/toybox/dymo/test', { method: 'POST' }),
   printDymoLabel: (payload: { title?: string; lines?: string[]; copies?: number }) =>

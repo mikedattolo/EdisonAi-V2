@@ -1212,6 +1212,50 @@ class ToyBoxLabelRequest(BaseModel):
     copies: int = Field(default=1, ge=1, le=20)
 
 
+class ToyBoxFulfillItem(BaseModel):
+    title: str
+    sku: str = ""
+    color: str | None = None
+    quantity: int = Field(default=1, ge=1, le=999)
+
+
+class ToyBoxFulfillShipping(BaseModel):
+    name: str = ""
+    address1: str = ""
+    address2: str = ""
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+    country: str = "US"
+
+
+class ToyBoxFulfillRequest(BaseModel):
+    order_name: str = "TEST"
+    items: list[ToyBoxFulfillItem] = Field(default_factory=list)
+    shipping: ToyBoxFulfillShipping = Field(default_factory=ToyBoxFulfillShipping)
+    dry_run: bool = True
+
+
+class ToyBoxFulfillStep(BaseModel):
+    title: str
+    quantity: int = 1
+    color: str | None = None
+    printer_id: str | None = None
+    printer_name: str | None = None
+    eligible: bool = False
+    file: str | None = None
+    action: str = ""
+    detail: str = ""
+
+
+class ToyBoxFulfillResult(BaseModel):
+    order_name: str
+    dry_run: bool
+    shipping_label: dict[str, Any] = Field(default_factory=dict)
+    items: list[ToyBoxFulfillStep] = Field(default_factory=list)
+    summary: str = ""
+
+
 class ToyBoxAmsSlot(BaseModel):
     id: int | None = None
     color_hex: str | None = None

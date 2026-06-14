@@ -585,6 +585,26 @@ export interface ToyBoxPrintResult {
   queue_item_id?: string | null;
 }
 
+export interface ToyBoxFulfillStep {
+  title: string;
+  quantity: number;
+  color?: string | null;
+  printer_id?: string | null;
+  printer_name?: string | null;
+  eligible: boolean;
+  file?: string | null;
+  action: string;
+  detail: string;
+}
+
+export interface ToyBoxFulfillResult {
+  order_name: string;
+  dry_run: boolean;
+  shipping_label: Record<string, unknown>;
+  items: ToyBoxFulfillStep[];
+  summary: string;
+}
+
 export interface ToyBoxControlResult {
   ok: boolean;
   printer_id: string;

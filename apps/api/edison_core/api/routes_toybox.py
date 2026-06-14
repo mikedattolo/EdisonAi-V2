@@ -56,6 +56,9 @@ from edison_core.schemas import (
     ToyBoxControlRequest,
     ToyBoxControlResult,
     ToyBoxLabelRequest,
+    ToyBoxFulfillRequest,
+    ToyBoxFulfillResult,
+    ToyBoxFulfillStep,
 )
 from edison_core.services import printer_discovery
 from edison_core.services import bambu_printer as bambu_camera
@@ -978,6 +981,106 @@ def route_order(payload: ToyBoxRouteRequest, store: ToyBoxStore = Depends(get_to
     else:
         reason = "Couldn't detect a color in the product name — include a color (e.g. 'blue keychain') or set one."
     return ToyBoxRouteResult(product=product, color=color, reason=reason, candidates=candidates)
+
+
+def _printer_available_colors(printer: ToyBoxPrinterProfileRecord) -> set[str]:
+    meta = printer.metadata or {}
+    loaded = str(meta.get("loaded_color") or "").strip().lower()
+    ams = [str(item).strip().lower() for item in (meta.get("ams_colors") or []) if item]
+    return {color for color in ([loaded] + ams) if color}
+
+
+@router.post("/orders/fulfill", response_model=ToyBoxFulfillResult)
+def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(get_toybox_store)) -> ToyBoxFulfillResult:
+    """Orchestrate an order: route each item to a printer by color, prep the shipping label,
+    and start the prints. With dry_run=True nothing is sent to a printer or the label maker."""
+    printers = [p for p in store.list_printers() if p.kind in {"bambu", "creality", "moonraker", "octoprint"}]
+    files_by_printer: dict[str, list] = {}
+
+    steps: list[ToyBoxFulfillStep] = []
+    for item in payload.items:
+        color = (item.color or _parse_color(item.title) or "").strip().lower()
+        title_low = item.title.lower()
+        match = None
+        for printer in printers:
+            if not color or color in _printer_available_colors(printer):
+                match = printer
+                break
+
+        resolved_file = None
+        if match is not None:
+            meta = match.metadata or {}
+            assigned = meta.get("assigned_files") if isinstance(meta.get("assigned_files"), dict) else {}
+            for keyword, path in (assigned or {}).items():
+                if str(keyword).strip().lower() in title_low and path:
+                    resolved_file = str(path)
+                    break
+            if resolved_file is None:
+                if match.id not in files_by_printer:
+                    files_by_printer[match.id] = store.list_files(match.id)
+                title_norm = re.sub(r"[^a-z0-9]", "", title_low)
+                for record in files_by_printer[match.id]:
+                    stem_norm = re.sub(r"[^a-z0-9]", "", record.name.lower().split(".")[0])
+                    if stem_norm and title_norm and (stem_norm in title_norm or title_norm in stem_norm):
+                        resolved_file = record.filename
+                        break
+
+        if match is None:
+            action, detail, eligible = "blocked", f"No printer has {color or 'a matching'} filament loaded.", False
+        elif resolved_file is None:
+            action = "needs file"
+            detail = f"Routed to {match.name} ({color or 'any'} ok) — assign/upload a print file named for '{item.title}'."
+            eligible = True
+        elif payload.dry_run:
+            action = "would print"
+            detail = f"Would print '{resolved_file}' on {match.name}" + (f" in {color}" if color else "") + "."
+            eligible = True
+        else:
+            action = "queued"
+            detail = f"Sent '{resolved_file}' to {match.name}."
+            eligible = True
+            store.create_queue_item(
+                ToyBoxQueueItemCreate(
+                    printer_id=match.id, title=item.title, status="printing",
+                    gcode_path=resolved_file, metadata={"order": payload.order_name, "color": color},
+                )
+            )
+        steps.append(ToyBoxFulfillStep(
+            title=item.title, quantity=item.quantity, color=color or None,
+            printer_id=match.id if match else None, printer_name=match.name if match else None,
+            eligible=eligible, file=resolved_file, action=action, detail=detail,
+        ))
+
+    ship = payload.shipping
+    addr_line = ", ".join(part for part in [ship.city, ship.state, ship.zip] if part).strip()
+    label_lines = [f"Order {payload.order_name}", ""]
+    label_lines += [ship.name, ship.address1]
+    if ship.address2:
+        label_lines.append(ship.address2)
+    label_lines += [addr_line, ""]
+    label_lines += [f"{i.quantity}x {i.title}" for i in payload.items]
+    label_lines = [line for line in label_lines if line is not None]
+
+    if payload.dry_run:
+        shipping_label = {
+            "would_print": True, "printer": label_printer.DYMO_BRIDGE, "to": ship.name,
+            "lines": label_lines, "detail": "Dry run — label rendered/planned but not printed.",
+        }
+    else:
+        result = label_printer.print_label(title="TheToyBox3D", lines=label_lines)
+        shipping_label = {"printed": bool(result.get("ok")), "detail": result.get("detail", ""), "lines": label_lines}
+
+    printable = sum(1 for s in steps if s.action in ("would print", "queued"))
+    verb = "would" if payload.dry_run else "did"
+    summary = (
+        f"Order {payload.order_name}: {printable}/{len(steps)} item(s) routed to a printer; "
+        f"shipping label {verb} print to the DYMO for {ship.name or 'the customer'}."
+        + (" (DRY RUN — nothing was actually printed.)" if payload.dry_run else "")
+    )
+    return ToyBoxFulfillResult(
+        order_name=payload.order_name, dry_run=payload.dry_run,
+        shipping_label=shipping_label, items=steps, summary=summary,
+    )
 
 
 @router.post("/notifications/test", response_model=ToyBoxNotificationResult)

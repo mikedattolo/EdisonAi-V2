@@ -119,6 +119,7 @@ import type {
   ToyBoxFileRecord,
   ToyBoxFilament,
   ToyBoxAmsSlot,
+  ToyBoxFulfillResult,
   UserProfile,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
@@ -7025,6 +7026,92 @@ function ToyBoxDymoPanel() {
   );
 }
 
+const FULFILL_SHIPPING = { name: 'Mike Dattolo', address1: '58 Bald Eagle Rd', city: 'Hackettstown', state: 'NJ', zip: '07840', country: 'US' };
+
+function ToyBoxFulfillPanel() {
+  const [orderName, setOrderName] = useState('TEST-1001');
+  const [itemTitle, setItemTitle] = useState('Fidget Switch');
+  const [itemColor, setItemColor] = useState('black');
+  const [qty, setQty] = useState(1);
+  const [live, setLive] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<ToyBoxFulfillResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const payload = {
+        order_name: orderName.trim() || 'TEST',
+        dry_run: !live,
+        shipping: FULFILL_SHIPPING,
+        items: [{ title: itemTitle.trim(), color: itemColor.trim() || null, quantity: Math.max(1, qty) }],
+      };
+      setResult(await edisonApi.fulfillToyBoxOrder(payload));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Fulfillment failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = (result?.shipping_label ?? {}) as Record<string, unknown>;
+  const labelLines = Array.isArray(label.lines) ? (label.lines as unknown[]).map(String).filter(Boolean) : [];
+
+  return (
+    <section className="toybox-fulfill">
+      <div className="section-heading"><Box size={18} /><h3>Order Fulfillment · Shopify</h3></div>
+      <p className="toybox-fulfill-intro">
+        Receives an order, routes each item to a printer by available color, preps the 4×6 shipping label, and starts the print.
+        Dry run prints nothing — it just shows the plan.
+      </p>
+      <div className="toybox-fulfill-form">
+        <input value={orderName} onChange={(event) => setOrderName(event.target.value)} placeholder="Order #" />
+        <input value={itemTitle} onChange={(event) => setItemTitle(event.target.value)} placeholder="Item (e.g. Blue Keychain)" />
+        <input className="toybox-fulfill-color" value={itemColor} onChange={(event) => setItemColor(event.target.value)} placeholder="color" />
+        <input className="toybox-fulfill-qty" type="number" min={1} value={qty} onChange={(event) => setQty(Number(event.target.value) || 1)} />
+      </div>
+      <div className="toybox-fulfill-ship">Ship to: {FULFILL_SHIPPING.name} · {FULFILL_SHIPPING.address1}, {FULFILL_SHIPPING.city} {FULFILL_SHIPPING.state} {FULFILL_SHIPPING.zip}</div>
+      <div className="toybox-fulfill-actions">
+        <label className={live ? 'toybox-fulfill-live armed' : 'toybox-fulfill-live'}>
+          <input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} />
+          Actually print (label + 3D print)
+        </label>
+        <button className="apply-button icon-text-button" disabled={busy || !itemTitle.trim()} onClick={() => void run()} type="button">
+          <Send size={14} /> {busy ? 'Running…' : live ? 'Fulfill & print' : 'Run test order (dry run)'}
+        </button>
+      </div>
+      {err && <div className="toybox-file-note err">{err}</div>}
+      {result && (
+        <div className={result.dry_run ? 'toybox-fulfill-result' : 'toybox-fulfill-result live'}>
+          <strong>{result.summary}</strong>
+          <div className="toybox-fulfill-steps">
+            {result.items.map((step, index) => (
+              <div className={step.eligible ? 'toybox-fulfill-step ok' : 'toybox-fulfill-step warn'} key={index}>
+                <span className="toybox-q-status">{step.action.replace(/_/g, ' ')}</span>
+                <div className="toybox-fulfill-step-body">
+                  <strong>
+                    {step.color && <span className="toybox-swatch" style={{ background: TOYBOX_COLOR_HEX[step.color] ?? step.color }} />}
+                    {step.quantity}× {step.title}
+                  </strong>
+                  <span>{step.printer_name ? `→ ${step.printer_name}` : ''} {step.file ? `· ${step.file}` : ''}</span>
+                  <span className="toybox-fulfill-detail">{step.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          {labelLines.length > 0 && (
+            <div className="toybox-fulfill-label">
+              <Printer size={13} /> {result.dry_run ? 'Label preview' : 'Label sent'}: {labelLines.join(' · ')}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ToyBoxView() {
   const [printers, setPrinters] = useState<ToyBoxPrinterProfileRecord[]>([]);
   const [discovered, setDiscovered] = useState<ToyBoxDiscoveredPrinter[]>([]);
@@ -7367,6 +7454,8 @@ function ToyBoxView() {
               {queue.length === 0 && <div className="empty-line">Queue is empty. Routed orders will appear here.</div>}
             </div>
           </section>
+
+          <ToyBoxFulfillPanel />
 
           <ToyBoxDymoPanel />
         </div>
