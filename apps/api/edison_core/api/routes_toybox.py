@@ -1007,27 +1007,39 @@ def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(ge
                 match = printer
                 break
 
-        resolved_file = None
+        resolved_record = None
         if match is not None:
+            if match.id not in files_by_printer:
+                files_by_printer[match.id] = store.list_files(match.id)
+            printer_files = files_by_printer[match.id]
             meta = match.metadata or {}
             assigned = meta.get("assigned_files") if isinstance(meta.get("assigned_files"), dict) else {}
+            assigned_name = None
             for keyword, path in (assigned or {}).items():
                 if str(keyword).strip().lower() in title_low and path:
-                    resolved_file = str(path)
+                    assigned_name = re.sub(r"[^a-z0-9]", "", str(path).lower())
                     break
-            if resolved_file is None:
-                if match.id not in files_by_printer:
-                    files_by_printer[match.id] = store.list_files(match.id)
+            if assigned_name:
+                for record in printer_files:
+                    if assigned_name in (
+                        re.sub(r"[^a-z0-9]", "", record.filename.lower()),
+                        re.sub(r"[^a-z0-9]", "", record.name.lower()),
+                    ):
+                        resolved_record = record
+                        break
+            if resolved_record is None:
                 title_norm = re.sub(r"[^a-z0-9]", "", title_low)
-                for record in files_by_printer[match.id]:
+                for record in printer_files:
                     stem_norm = re.sub(r"[^a-z0-9]", "", record.name.lower().split(".")[0])
                     if stem_norm and title_norm and (stem_norm in title_norm or title_norm in stem_norm):
-                        resolved_file = record.filename
+                        resolved_record = record
                         break
+
+        resolved_file = resolved_record.filename if resolved_record else None
 
         if match is None:
             action, detail, eligible = "blocked", f"No printer has {color or 'a matching'} filament loaded.", False
-        elif resolved_file is None:
+        elif resolved_record is None:
             action = "needs file"
             detail = f"Routed to {match.name} ({color or 'any'} ok) — assign/upload a print file named for '{item.title}'."
             eligible = True
@@ -1036,15 +1048,22 @@ def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(ge
             detail = f"Would print '{resolved_file}' on {match.name}" + (f" in {color}" if color else "") + "."
             eligible = True
         else:
-            action = "queued"
-            detail = f"Sent '{resolved_file}' to {match.name}."
-            eligible = True
-            store.create_queue_item(
-                ToyBoxQueueItemCreate(
-                    printer_id=match.id, title=item.title, status="printing",
-                    gcode_path=resolved_file, metadata={"order": payload.order_name, "color": color},
+            # Real fulfillment: actually upload + start the print on the matched printer.
+            try:
+                file_record, stored_path = store.get_file(resolved_record.id)
+                send = _send_to_printer(match, stored_path, file_record.filename, file_record.kind, use_ams=True)
+            except ToyBoxNotFoundError:
+                send = {"ok": False, "detail": "Matched file is no longer on the server."}
+            eligible = bool(send.get("ok"))
+            action = "printing" if eligible else "send failed"
+            detail = send.get("detail") or (f"Sent '{resolved_file}' to {match.name}." if eligible else "Send failed.")
+            if eligible:
+                store.create_queue_item(
+                    ToyBoxQueueItemCreate(
+                        printer_id=match.id, title=item.title, status="printing",
+                        gcode_path=resolved_file, metadata={"order": payload.order_name, "color": color},
+                    )
                 )
-            )
         steps.append(ToyBoxFulfillStep(
             title=item.title, quantity=item.quantity, color=color or None,
             printer_id=match.id if match else None, printer_name=match.name if match else None,
@@ -1070,7 +1089,7 @@ def fulfill_order(payload: ToyBoxFulfillRequest, store: ToyBoxStore = Depends(ge
         result = label_printer.print_label(title="TheToyBox3D", lines=label_lines)
         shipping_label = {"printed": bool(result.get("ok")), "detail": result.get("detail", ""), "lines": label_lines}
 
-    printable = sum(1 for s in steps if s.action in ("would print", "queued"))
+    printable = sum(1 for s in steps if s.action in ("would print", "printing"))
     verb = "would" if payload.dry_run else "did"
     summary = (
         f"Order {payload.order_name}: {printable}/{len(steps)} item(s) routed to a printer; "
