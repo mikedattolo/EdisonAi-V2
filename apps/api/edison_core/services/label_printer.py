@@ -65,15 +65,13 @@ def _render_png(title: str, lines: list[str]) -> bytes:
     return buffer.getvalue()
 
 
-def print_label(title: str = "", lines: list[str] | None = None, copies: int = 1) -> dict:
-    lines = lines or []
-    try:
-        png = _render_png(title, lines)
-    except ImportError:
-        return {"ok": False, "detail": "Pillow is not installed on the server."}
+def print_image_bytes(png: bytes, copies: int = 1) -> dict:
+    """Send an already-rendered label image (PNG bytes) to the DYMO bridge.
+
+    Used for real carrier labels (e.g. EasyPost) that arrive as a finished image."""
     payload = {"image_base64": base64.b64encode(png).decode(), "copies": max(1, int(copies))}
     try:
-        response = httpx.post(f"{DYMO_BRIDGE}/print", json=payload, timeout=45.0)
+        response = httpx.post(f"{DYMO_BRIDGE}/print", json=payload, timeout=60.0)
         data = response.json()
         return {"ok": bool(data.get("ok")), "detail": data.get("detail", "")}
     except (httpx.HTTPError, ValueError):
@@ -81,6 +79,15 @@ def print_label(title: str = "", lines: list[str] | None = None, copies: int = 1
             "ok": False,
             "detail": f"Couldn't reach the Windows DYMO bridge at {DYMO_BRIDGE} — make sure the PC is on and the bridge is running.",
         }
+
+
+def print_label(title: str = "", lines: list[str] | None = None, copies: int = 1) -> dict:
+    lines = lines or []
+    try:
+        png = _render_png(title, lines)
+    except ImportError:
+        return {"ok": False, "detail": "Pillow is not installed on the server."}
+    return print_image_bytes(png, copies)
 
 
 def print_test() -> dict:

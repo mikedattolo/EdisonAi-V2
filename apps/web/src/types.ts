@@ -629,6 +629,25 @@ export interface ShopifyPollResult {
   results: ShopifyPollItem[];
 }
 
+export interface EasyPostConfig {
+  has_key: boolean;
+  key_mode: 'none' | 'test' | 'live' | 'unknown';
+  from_address: Record<string, string>;
+  parcel: Record<string, number>;
+  preferred_service: string;
+  ready: boolean;
+}
+
+export interface EasyPostTestResult {
+  ok: boolean;
+  detail: string;
+  carrier?: string | null;
+  service?: string | null;
+  rate?: string | null;
+  tracking_code?: string | null;
+  label_printed: boolean;
+}
+
 export interface ToyBoxControlResult {
   ok: boolean;
   printer_id: string;

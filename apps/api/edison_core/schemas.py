@@ -1289,6 +1289,52 @@ class ShopifyPollResult(BaseModel):
     results: list[ShopifyPollItem] = Field(default_factory=list)
 
 
+class EasyPostAddress(BaseModel):
+    name: str = ""
+    company: str = ""
+    street1: str = ""
+    street2: str = ""
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+    country: str = "US"
+    phone: str = ""
+    email: str = ""
+
+
+class EasyPostParcel(BaseModel):
+    length: float = 6.0
+    width: float = 4.0
+    height: float = 2.0
+    weight: float = 6.0  # ounces
+
+
+class EasyPostConfigPublic(BaseModel):
+    has_key: bool = False
+    key_mode: str = "none"  # none | test | live | unknown
+    from_address: dict[str, Any] = Field(default_factory=dict)
+    parcel: dict[str, Any] = Field(default_factory=dict)
+    preferred_service: str = ""
+    ready: bool = False
+
+
+class EasyPostConfigUpdate(BaseModel):
+    api_key: str | None = None  # empty keeps the stored key
+    from_address: EasyPostAddress | None = None
+    parcel: EasyPostParcel | None = None
+    preferred_service: str | None = None
+
+
+class EasyPostTestResult(BaseModel):
+    ok: bool = False
+    detail: str = ""
+    carrier: str | None = None
+    service: str | None = None
+    rate: str | None = None
+    tracking_code: str | None = None
+    label_printed: bool = False
+
+
 class ToyBoxAmsSlot(BaseModel):
     id: int | None = None
     color_hex: str | None = None

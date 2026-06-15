@@ -39,6 +39,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Truck,
   Upload,
   Video,
   Waypoints,
@@ -122,6 +123,8 @@ import type {
   ToyBoxFulfillResult,
   ShopifyConfig,
   ShopifyPollResult,
+  EasyPostConfig,
+  EasyPostTestResult,
   UserProfile,
   VoiceStatus,
   WorkspaceCopilotTaskResult,
@@ -7255,6 +7258,127 @@ function ShopifyConnectionPanel() {
   );
 }
 
+function EasyPostPanel() {
+  const [config, setConfig] = useState<EasyPostConfig | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [from, setFrom] = useState<Record<string, string>>({});
+  const [parcel, setParcel] = useState<Record<string, string>>({});
+  const [service, setService] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [test, setTest] = useState<EasyPostTestResult | null>(null);
+
+  const load = useCallback(async () => {
+    const cfg = await edisonApi.getEasyPostConfig().catch(() => null);
+    if (cfg) {
+      setConfig(cfg);
+      setFrom({ ...cfg.from_address });
+      setParcel(Object.fromEntries(Object.entries(cfg.parcel).map(([k, v]) => [k, String(v)])));
+      setService(cfg.preferred_service || '');
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const setF = (key: string, value: string) => setFrom((prev) => ({ ...prev, [key]: value }));
+  const setP = (key: string, value: string) => setParcel((prev) => ({ ...prev, [key]: value }));
+
+  async function save() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const cfg = await edisonApi.saveEasyPostConfig({
+        api_key: apiKey.trim() || undefined,
+        from_address: from,
+        parcel: Object.fromEntries(Object.entries(parcel).map(([k, v]) => [k, Number(v) || 0])),
+        preferred_service: service.trim(),
+      });
+      setConfig(cfg);
+      setApiKey('');
+      setNote('Saved.');
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'Save failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function buyTest() {
+    setBusy(true);
+    setNote(null);
+    setTest(null);
+    try {
+      setTest(await edisonApi.testEasyPostLabel());
+      await load();
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'Test failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const mode = config?.key_mode;
+  const modeBadge =
+    mode === 'live' ? 'LIVE key — buys real postage' : mode === 'test' ? 'TEST key — free sample labels' : mode === 'unknown' ? 'key set' : 'no key yet';
+
+  return (
+    <section className="toybox-easypost">
+      <div className="section-heading"><Truck size={18} /><h3>Shipping labels · EasyPost</h3></div>
+      <p className="toybox-fulfill-intro">
+        Buys a real USPS label (barcode + tracking) and prints it on the DYMO. Use a <strong>TEST</strong> key (EZTK…) to print a
+        free sample in the real 4×6 format; switch to a <strong>LIVE</strong> key (EZAK…) to buy real postage. Get a key at easypost.com → API Keys.
+      </p>
+      <div className={config?.has_key ? 'toybox-shopify-status ok' : 'toybox-shopify-status'}>
+        <span className={config?.has_key ? 'toybox-dot on' : 'toybox-dot off'} />
+        {modeBadge}{config?.ready ? ' · ready' : ' · needs key + ship-from'}
+      </div>
+      <input
+        className="toybox-easypost-key"
+        type="password"
+        autoComplete="off"
+        placeholder={config?.has_key ? 'API key (leave blank to keep current)' : 'EasyPost API key (EZTK… test or EZAK… live)'}
+        value={apiKey}
+        onChange={(e) => setApiKey(e.target.value)}
+      />
+      <div className="toybox-easypost-grid">
+        <input placeholder="Ship-from name" value={from.name ?? ''} onChange={(e) => setF('name', e.target.value)} />
+        <input placeholder="Company" value={from.company ?? ''} onChange={(e) => setF('company', e.target.value)} />
+        <input placeholder="Street" value={from.street1 ?? ''} onChange={(e) => setF('street1', e.target.value)} />
+        <input placeholder="Street 2" value={from.street2 ?? ''} onChange={(e) => setF('street2', e.target.value)} />
+        <input placeholder="City" value={from.city ?? ''} onChange={(e) => setF('city', e.target.value)} />
+        <input placeholder="State" value={from.state ?? ''} onChange={(e) => setF('state', e.target.value)} />
+        <input placeholder="ZIP" value={from.zip ?? ''} onChange={(e) => setF('zip', e.target.value)} />
+        <input placeholder="Phone" value={from.phone ?? ''} onChange={(e) => setF('phone', e.target.value)} />
+      </div>
+      <div className="toybox-easypost-parcel">
+        <span>Parcel:</span>
+        <input placeholder="L in" value={parcel.length ?? ''} onChange={(e) => setP('length', e.target.value)} />
+        <input placeholder="W in" value={parcel.width ?? ''} onChange={(e) => setP('width', e.target.value)} />
+        <input placeholder="H in" value={parcel.height ?? ''} onChange={(e) => setP('height', e.target.value)} />
+        <input placeholder="oz" value={parcel.weight ?? ''} onChange={(e) => setP('weight', e.target.value)} />
+        <input className="toybox-easypost-service" placeholder="USPS service (blank = cheapest)" value={service} onChange={(e) => setService(e.target.value)} />
+      </div>
+      <div className="toybox-fulfill-actions">
+        <button className="apply-button icon-text-button" disabled={busy} onClick={() => void save()} type="button">Save</button>
+        <button className="secondary-button" disabled={busy || !config?.ready} onClick={() => void buyTest()} type="button">
+          {busy ? 'Working…' : 'Buy & print test label'}
+        </button>
+      </div>
+      {note && <div className="toybox-file-note">{note}</div>}
+      {test && (
+        <div className={test.ok ? 'toybox-fulfill-result live' : 'toybox-fulfill-result'}>
+          <strong>{test.ok ? 'Test label printed ✓' : 'Test label failed'}</strong>
+          {(test.carrier || test.rate) && (
+            <span className="toybox-fulfill-detail">{test.carrier} {test.service}{test.rate ? ` · $${test.rate}` : ''}{test.tracking_code ? ` · ${test.tracking_code}` : ''}</span>
+          )}
+          <span className="toybox-fulfill-detail">{test.detail}</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ToyBoxView() {
   const [printers, setPrinters] = useState<ToyBoxPrinterProfileRecord[]>([]);
   const [discovered, setDiscovered] = useState<ToyBoxDiscoveredPrinter[]>([]);
@@ -7599,6 +7723,8 @@ function ToyBoxView() {
           </section>
 
           <ToyBoxFulfillPanel />
+
+          <EasyPostPanel />
 
           <ShopifyConnectionPanel />
 

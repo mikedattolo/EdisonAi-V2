@@ -55,6 +55,7 @@ from edison_core.services.realtime import RealtimeService
 from edison_core.services.scheduled_task_store import ScheduledTaskStore
 from edison_core.services.scheduler_service import SchedulerService
 from edison_core.services.shopify_orders import ShopifyConfigStore, ShopifyPoller
+from edison_core.services.easypost_shipping import EasyPostConfigStore, set_config_store as set_easypost_config_store
 from edison_core.services.voice_bridge import VoiceBridgeService
 from edison_core.services.workspace_agent import AgentRunCoordinator, WorkspaceAgent
 from edison_core.services.workspace_projects import WorkspaceProjectManager
@@ -126,6 +127,8 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     scheduler_service = SchedulerService(scheduled_task_store, model_gateway, realtime_service)
     shopify_config_store = ShopifyConfigStore(resolved_settings.runtime_settings_path.parent / "shopify.json")
     shopify_poller = ShopifyPoller(shopify_config_store, toybox_store, run_fulfillment)
+    easypost_config_store = EasyPostConfigStore(resolved_settings.runtime_settings_path.parent / "easypost.json")
+    set_easypost_config_store(easypost_config_store)
     voice_bridge_service = VoiceBridgeService(conversation_store, model_gateway)
     capability_registry = CapabilityRegistry(
         resolved_settings,
@@ -184,6 +187,7 @@ def create_app(settings: EdisonSettings | None = None) -> FastAPI:
     app.state.scheduler_service = scheduler_service
     app.state.shopify_config_store = shopify_config_store
     app.state.shopify_poller = shopify_poller
+    app.state.easypost_config_store = easypost_config_store
     app.state.voice_bridge_service = voice_bridge_service
     app.state.capability_registry = capability_registry
 

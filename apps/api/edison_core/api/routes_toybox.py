@@ -17,6 +17,7 @@ from fastapi.responses import Response, StreamingResponse
 from edison_core.config import load_settings
 from edison_core.api.dependencies import (
     get_desktop_bridge_client,
+    get_easypost_config_store,
     get_integration_discovery_service,
     get_runtime_settings_store,
     get_shopify_config_store,
@@ -64,10 +65,15 @@ from edison_core.schemas import (
     ShopifyConfigPublic,
     ShopifyConfigUpdate,
     ShopifyPollResult,
+    EasyPostConfigPublic,
+    EasyPostConfigUpdate,
+    EasyPostTestResult,
 )
 from edison_core.services import printer_discovery
 from edison_core.services import bambu_printer as bambu_camera
 from edison_core.services import label_printer
+from edison_core.services import easypost_shipping
+from edison_core.services.easypost_shipping import EasyPostShipper
 from edison_core.services.bambu_printer import BambuPrinter
 from edison_core.services.creality_printer import CrealityPrinter
 from edison_core.services.moonraker_printer import MoonrakerPrinter
@@ -1091,14 +1097,45 @@ def run_fulfillment(payload: ToyBoxFulfillRequest, store: ToyBoxStore) -> ToyBox
     label_lines += [f"{i.quantity}x {i.title}" for i in payload.items]
     label_lines = [line for line in label_lines if line is not None]
 
+    ep = easypost_shipping.get_config_store()
+    ep_ready = bool(ep and ep.is_ready())
+    ship_dict = {
+        "name": ship.name, "address1": ship.address1, "address2": ship.address2,
+        "city": ship.city, "state": ship.state, "zip": ship.zip, "country": ship.country,
+    }
+
     if payload.dry_run or not payload.print_label:
         shipping_label = {
-            "would_print": True, "printer": label_printer.DYMO_BRIDGE, "to": ship.name,
-            "lines": label_lines, "detail": "Label rendered/planned but not printed.",
+            "would_print": True, "method": "easypost" if ep_ready else "address-label",
+            "to": ship.name, "lines": label_lines, "detail": "Label planned but not printed.",
         }
+        if ep_ready:
+            try:
+                quote = EasyPostShipper(ep).quote(ship_dict)
+                shipping_label.update({
+                    "carrier": quote.get("carrier"), "service": quote.get("service"), "rate": quote.get("rate"),
+                    "detail": f"Would buy {quote.get('carrier')} {quote.get('service')} @ ${quote.get('rate')} and print the real label.",
+                })
+            except Exception as error:  # noqa: BLE001
+                shipping_label["detail"] = f"EasyPost quote failed ({str(error)[:160]}); would fall back to an address label."
+    elif ep_ready:
+        try:
+            bought = EasyPostShipper(ep).buy_and_render(ship_dict)
+            if bought.get("ok") and bought.get("label_png"):
+                printed = label_printer.print_image_bytes(bought["label_png"])
+                shipping_label = {
+                    "printed": bool(printed.get("ok")), "method": "easypost",
+                    "carrier": bought.get("carrier"), "service": bought.get("service"), "rate": bought.get("rate"),
+                    "tracking_code": bought.get("tracking_code"),
+                    "detail": f"{bought.get('carrier')} {bought.get('service')} label — {printed.get('detail', '')}",
+                }
+            else:
+                shipping_label = {"printed": False, "method": "easypost", "detail": "EasyPost returned no label image."}
+        except Exception as error:  # noqa: BLE001
+            shipping_label = {"printed": False, "method": "easypost", "detail": f"EasyPost error: {str(error)[:200]}"}
     else:
         result = label_printer.print_label(title="TheToyBox3D", lines=label_lines)
-        shipping_label = {"printed": bool(result.get("ok")), "detail": result.get("detail", ""), "lines": label_lines}
+        shipping_label = {"printed": bool(result.get("ok")), "method": "address-label", "detail": result.get("detail", ""), "lines": label_lines}
 
     printable = sum(1 for s in steps if s.action in ("would print", "printing"))
     label_done = (not payload.dry_run) and payload.print_label
@@ -1150,6 +1187,61 @@ def test_shopify_connection(config=Depends(get_shopify_config_store)) -> dict:
 @router.post("/shopify/poll", response_model=ShopifyPollResult)
 def poll_shopify(poller=Depends(get_shopify_poller)) -> ShopifyPollResult:
     return ShopifyPollResult(**poller.poll_now())
+
+
+# --- EasyPost real USPS shipping labels -----------------------------------------------------
+
+@router.get("/easypost", response_model=EasyPostConfigPublic)
+def get_easypost_config(config=Depends(get_easypost_config_store)) -> EasyPostConfigPublic:
+    return EasyPostConfigPublic(**config.public())
+
+
+@router.post("/easypost", response_model=EasyPostConfigPublic)
+def set_easypost_config(payload: EasyPostConfigUpdate, config=Depends(get_easypost_config_store)) -> EasyPostConfigPublic:
+    return EasyPostConfigPublic(
+        **config.update(
+            api_key=payload.api_key,
+            from_address=payload.from_address.model_dump() if payload.from_address else None,
+            parcel=payload.parcel.model_dump() if payload.parcel else None,
+            preferred_service=payload.preferred_service,
+        )
+    )
+
+
+@router.post("/easypost/test", response_model=EasyPostTestResult)
+def test_easypost(config=Depends(get_easypost_config_store)) -> EasyPostTestResult:
+    """Buy a label to the shop's own address (a self-ship) and print it. With a TEST key
+    this is free and produces a sample USPS label in the real 4x6 format."""
+    if not config.is_ready():
+        return EasyPostTestResult(ok=False, detail="Add an EasyPost API key and a ship-from address first.")
+    cfg = config.full()
+    from_addr = cfg.get("from_address", {})
+    ship_dict = {
+        "name": from_addr.get("name", "Mike Dattolo"),
+        "address1": from_addr.get("street1", ""),
+        "address2": from_addr.get("street2", ""),
+        "city": from_addr.get("city", ""),
+        "state": from_addr.get("state", ""),
+        "zip": from_addr.get("zip", ""),
+        "country": from_addr.get("country", "US"),
+        "phone": from_addr.get("phone", ""),
+    }
+    try:
+        bought = EasyPostShipper(config).buy_and_render(ship_dict)
+    except Exception as error:  # noqa: BLE001
+        return EasyPostTestResult(ok=False, detail=f"EasyPost error: {str(error)[:300]}")
+    if not (bought.get("ok") and bought.get("label_png")):
+        return EasyPostTestResult(ok=False, detail="EasyPost returned no label image.")
+    printed = label_printer.print_image_bytes(bought["label_png"])
+    return EasyPostTestResult(
+        ok=bool(printed.get("ok")),
+        detail=printed.get("detail", ""),
+        carrier=bought.get("carrier"),
+        service=bought.get("service"),
+        rate=bought.get("rate"),
+        tracking_code=bought.get("tracking_code"),
+        label_printed=bool(printed.get("ok")),
+    )
 
 
 @router.post("/notifications/test", response_model=ToyBoxNotificationResult)

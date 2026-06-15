@@ -63,6 +63,8 @@ import type {
   ToyBoxFulfillResult,
   ShopifyConfig,
   ShopifyPollResult,
+  EasyPostConfig,
+  EasyPostTestResult,
   WorkspaceCommandRunResult,
   WorkspaceInstallResult,
   ScheduledTaskRecord,
@@ -455,6 +457,14 @@ export const edisonApi = {
     request<ShopifyConfig>('/api/v1/toybox/shopify', { method: 'POST', body: JSON.stringify(payload) }),
   testShopifyConnection: () => request<{ ok: boolean; detail: string }>('/api/v1/toybox/shopify/test', { method: 'POST' }),
   pollShopifyOrders: () => request<ShopifyPollResult>('/api/v1/toybox/shopify/poll', { method: 'POST' }),
+  getEasyPostConfig: () => request<EasyPostConfig>('/api/v1/toybox/easypost'),
+  saveEasyPostConfig: (payload: {
+    api_key?: string;
+    from_address?: Record<string, string>;
+    parcel?: Record<string, number>;
+    preferred_service?: string;
+  }) => request<EasyPostConfig>('/api/v1/toybox/easypost', { method: 'POST', body: JSON.stringify(payload) }),
+  testEasyPostLabel: () => request<EasyPostTestResult>('/api/v1/toybox/easypost/test', { method: 'POST' }),
   getDymoStatus: () => request<{ queue: string; available: boolean; detail: string }>('/api/v1/toybox/dymo/status'),
   printDymoTest: () => request<{ ok: boolean; detail: string }>('/api/v1/toybox/dymo/test', { method: 'POST' }),
   printDymoLabel: (payload: { title?: string; lines?: string[]; copies?: number }) =>

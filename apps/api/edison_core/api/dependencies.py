@@ -23,6 +23,7 @@ from edison_core.services.personal_workspace import PersonalWorkspaceStore
 from edison_core.services.runtime_settings import RuntimeSettingsStore
 from edison_core.services.scheduled_task_store import ScheduledTaskStore
 from edison_core.services.scheduler_service import SchedulerService
+from edison_core.services.easypost_shipping import EasyPostConfigStore
 from edison_core.services.session_state import SessionStateStore
 from edison_core.services.shopify_orders import ShopifyConfigStore, ShopifyPoller
 from edison_core.services.voice_bridge import VoiceBridgeService
@@ -69,6 +70,10 @@ def get_shopify_config_store(request: Request) -> ShopifyConfigStore:
 
 def get_shopify_poller(request: Request) -> ShopifyPoller:
     return request.app.state.shopify_poller
+
+
+def get_easypost_config_store(request: Request) -> EasyPostConfigStore:
+    return request.app.state.easypost_config_store
 
 
 def get_generation_store(request: Request) -> GenerationStore:
