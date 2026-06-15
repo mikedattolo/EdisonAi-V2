@@ -630,6 +630,7 @@ export interface ShopifyPollResult {
 }
 
 export interface EasyPostConfig {
+  provider: 'shippo' | 'easypost';
   has_key: boolean;
   key_mode: 'none' | 'test' | 'live' | 'unknown';
   from_address: Record<string, string>;

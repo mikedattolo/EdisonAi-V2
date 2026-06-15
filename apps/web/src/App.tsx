@@ -7318,26 +7318,28 @@ function EasyPostPanel() {
     }
   }
 
+  const providerName = config?.provider === 'easypost' ? 'EasyPost' : config?.provider === 'shippo' ? 'Shippo' : '';
   const mode = config?.key_mode;
   const modeBadge =
-    mode === 'live' ? 'LIVE key — buys real postage' : mode === 'test' ? 'TEST key — free sample labels' : mode === 'unknown' ? 'key set' : 'no key yet';
+    mode === 'live' ? 'LIVE — buys real postage' : mode === 'test' ? 'TEST — free sample labels' : mode === 'unknown' ? 'key set' : 'no key yet';
 
   return (
     <section className="toybox-easypost">
-      <div className="section-heading"><Truck size={18} /><h3>Shipping labels · EasyPost</h3></div>
+      <div className="section-heading"><Truck size={18} /><h3>Shipping labels</h3></div>
       <p className="toybox-fulfill-intro">
-        Buys a real USPS label (barcode + tracking) and prints it on the DYMO. Use a <strong>TEST</strong> key (EZTK…) to print a
-        free sample in the real 4×6 format; switch to a <strong>LIVE</strong> key (EZAK…) to buy real postage. Get a key at easypost.com → API Keys.
+        Buys a real USPS label (barcode + tracking) and prints it on the DYMO. Paste an <strong>EasyPost</strong> key
+        (EZTK… test / EZAK… live) or a <strong>Shippo</strong> token (shippo_test_… / shippo_live_…) — Edison detects which one
+        automatically. A test key prints a free sample in real 4×6 format; a live key buys real postage.
       </p>
       <div className={config?.has_key ? 'toybox-shopify-status ok' : 'toybox-shopify-status'}>
         <span className={config?.has_key ? 'toybox-dot on' : 'toybox-dot off'} />
-        {modeBadge}{config?.ready ? ' · ready' : ' · needs key + ship-from'}
+        {config?.has_key && providerName ? `${providerName} · ` : ''}{modeBadge}{config?.ready ? ' · ready' : ' · needs key + ship-from'}
       </div>
       <input
         className="toybox-easypost-key"
         type="password"
         autoComplete="off"
-        placeholder={config?.has_key ? 'API key (leave blank to keep current)' : 'EasyPost API key (EZTK… test or EZAK… live)'}
+        placeholder={config?.has_key ? 'API key (leave blank to keep current)' : 'EasyPost EZTK… / EZAK…  or  Shippo shippo_test_… token'}
         value={apiKey}
         onChange={(e) => setApiKey(e.target.value)}
       />

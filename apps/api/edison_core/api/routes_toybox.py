@@ -1200,6 +1200,7 @@ def get_easypost_config(config=Depends(get_easypost_config_store)) -> EasyPostCo
 def set_easypost_config(payload: EasyPostConfigUpdate, config=Depends(get_easypost_config_store)) -> EasyPostConfigPublic:
     return EasyPostConfigPublic(
         **config.update(
+            provider=payload.provider,
             api_key=payload.api_key,
             from_address=payload.from_address.model_dump() if payload.from_address else None,
             parcel=payload.parcel.model_dump() if payload.parcel else None,

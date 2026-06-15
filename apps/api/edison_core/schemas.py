@@ -1310,6 +1310,7 @@ class EasyPostParcel(BaseModel):
 
 
 class EasyPostConfigPublic(BaseModel):
+    provider: Literal["shippo", "easypost"] = "shippo"
     has_key: bool = False
     key_mode: str = "none"  # none | test | live | unknown
     from_address: dict[str, Any] = Field(default_factory=dict)
@@ -1319,6 +1320,7 @@ class EasyPostConfigPublic(BaseModel):
 
 
 class EasyPostConfigUpdate(BaseModel):
+    provider: Literal["shippo", "easypost"] | None = None
     api_key: str | None = None  # empty keeps the stored key
     from_address: EasyPostAddress | None = None
     parcel: EasyPostParcel | None = None
